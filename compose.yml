@@ -1,0 +1,26 @@
+services:
+  board:
+    build: .
+    image: vibepod-board:dev
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      HOST: "0.0.0.0"
+      DATA_DIR: /data
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_REPOSITORY: ${GITHUB_REPOSITORY:-}
+    volumes:
+      - vibepod-board-data:/data
+    networks:
+      vibepod:
+        aliases:
+          - vibepod-board
+
+volumes:
+  vibepod-board-data:
+
+networks:
+  vibepod:
+    name: ${VIBEPOD_NETWORK:-vibepod-network}
+    external: true
