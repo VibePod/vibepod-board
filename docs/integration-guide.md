@@ -183,7 +183,7 @@ Expected response:
 
 ## Optional GitHub Sync
 
-Without GitHub settings, `sync` runs in local mode and creates a board card without creating a GitHub issue.
+Ready tasks become board cards locally. Without GitHub settings, the optional API sync endpoint updates the local board card without creating a GitHub issue.
 
 To create real GitHub issues:
 
@@ -193,4 +193,4 @@ GITHUB_REPOSITORY=owner/repo
 docker compose up --build
 ```
 
-Ready ideas become GitHub issues first, then board cards.
+Ready tasks appear on the board first. The optional sync endpoint can then attach GitHub issue metadata.

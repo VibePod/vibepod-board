@@ -41,12 +41,38 @@ export const createMcpServer = (store: BoardStore) => {
   );
 
   server.registerTool(
+    "list_projects",
+    {
+      title: "List Projects",
+      description: "List projects that contain tasks, board cards, and notes."
+    },
+    async () => jsonContent({ items: store.listProjects() })
+  );
+
+  server.registerTool(
+    "create_project",
+    {
+      title: "Create Project",
+      description: "Create a project container for tasks, board cards, and notes.",
+      inputSchema: {
+        key: z.string().regex(/^[A-Z]{1,3}$/),
+        title: z.string().min(1),
+        summary: z.string().optional()
+      }
+    },
+    async (input) => jsonContent({ item: store.createProject(input) })
+  );
+
+  server.registerTool(
     "list_ideas",
     {
       title: "List Ideas",
-      description: "List ideas with refinement and readiness state."
+      description: "List ideas with refinement and readiness state.",
+      inputSchema: {
+        projectId: z.string().optional()
+      }
     },
-    async () => jsonContent({ items: store.listIdeas() })
+    async ({ projectId }) => jsonContent({ items: store.listIdeas(projectId) })
   );
 
   server.registerTool(
@@ -55,6 +81,7 @@ export const createMcpServer = (store: BoardStore) => {
       title: "Create Idea",
       description: "Create a new idea for refinement.",
       inputSchema: {
+        projectId: z.string().optional(),
         title: z.string().min(1),
         summary: z.string().optional(),
         details: z.string().optional(),
@@ -69,7 +96,7 @@ export const createMcpServer = (store: BoardStore) => {
     "mark_idea_ready",
     {
       title: "Mark Idea Ready",
-      description: "Mark an idea as ready for GitHub sync and board processing.",
+      description: "Mark an idea as ready and available on the Kanban board.",
       inputSchema: {
         id: z.string().min(1)
       }
@@ -81,9 +108,12 @@ export const createMcpServer = (store: BoardStore) => {
     "list_board",
     {
       title: "List Board",
-      description: "Read the Kanban board columns."
+      description: "Read the Kanban board columns.",
+      inputSchema: {
+        projectId: z.string().optional()
+      }
     },
-    async () => jsonContent({ columns: store.getBoardColumns() })
+    async ({ projectId }) => jsonContent({ columns: store.getBoardColumns(projectId) })
   );
 
   server.registerTool(
@@ -105,6 +135,7 @@ export const createMcpServer = (store: BoardStore) => {
       title: "Create Document",
       description: "Create an execution plan, design doc, or notes document.",
       inputSchema: {
+        projectId: z.string().optional(),
         title: z.string().min(1),
         kind: z.enum(documentKinds).optional(),
         content: z.string().optional(),
@@ -119,9 +150,12 @@ export const createMcpServer = (store: BoardStore) => {
     "list_documents",
     {
       title: "List Documents",
-      description: "List execution plans and other planning documents."
+      description: "List execution plans and other planning documents.",
+      inputSchema: {
+        projectId: z.string().optional()
+      }
     },
-    async () => jsonContent({ items: store.listDocuments() })
+    async ({ projectId }) => jsonContent({ items: store.listDocuments(projectId) })
   );
 
   return server;

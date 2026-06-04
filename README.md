@@ -1,6 +1,6 @@
 # vibepod-board
 
-Planning board for refining ideas into ready work, moving synced work through a Kanban board, and storing detailed execution plans. The same state is exposed through the browser UI, REST API, and an MCP Streamable HTTP endpoint for Claude Code, Codex, and other MCP clients.
+Planning board for organizing projects, refining tasks, marking ready work onto a Kanban board, and storing detailed notes or execution plans. The same state is exposed through the browser UI, REST API, and an MCP Streamable HTTP endpoint for Claude Code, Codex, and other MCP clients.
 
 ## Run with Docker
 
@@ -16,7 +16,7 @@ The container joins the shared VibePod Docker network named `vibepod-network` by
 
 ## Optional GitHub Issue Sync
 
-Without GitHub environment variables, the sync action runs in local mode: ready ideas become board cards without creating GitHub issues.
+Ready tasks become board cards locally. The API sync endpoint can optionally attach a GitHub issue when GitHub environment variables are configured.
 
 To create real GitHub issues, set:
 
@@ -28,6 +28,9 @@ GITHUB_REPOSITORY=owner/repo
 ## API
 
 - `GET /api/health`
+- `GET /api/projects`
+- `POST /api/projects`
+- `PATCH /api/projects/:id`
 - `GET /api/ideas`
 - `POST /api/ideas`
 - `PATCH /api/ideas/:id`
@@ -40,12 +43,16 @@ GITHUB_REPOSITORY=owner/repo
 - `PATCH /api/documents/:id`
 - `GET /api/mcp-info`
 
+`GET /api/ideas`, `GET /api/board`, and `GET /api/documents` accept `projectId` query params for project-scoped reads.
+
 ## MCP
 
 Endpoint: `POST /mcp`
 
 Tools:
 
+- `list_projects`
+- `create_project`
 - `list_ideas`
 - `create_idea`
 - `mark_idea_ready`

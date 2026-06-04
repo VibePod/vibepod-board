@@ -1,4 +1,4 @@
-export const ideaStatuses = ["idea", "refining", "ready", "synced"] as const;
+export const ideaStatuses = ["idea", "refining", "ready", "denied"] as const;
 export const boardColumns = ["ready", "planned", "in_progress", "review", "done"] as const;
 export const documentKinds = ["execution_plan", "design", "notes"] as const;
 
@@ -6,8 +6,19 @@ export type IdeaStatus = (typeof ideaStatuses)[number];
 export type BoardColumn = (typeof boardColumns)[number];
 export type DocumentKind = (typeof documentKinds)[number];
 
+export type Project = {
+  id: string;
+  key: string;
+  title: string;
+  summary: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type Idea = {
   id: string;
+  projectId: string;
+  taskNumber: number;
   title: string;
   summary: string;
   details: string;
@@ -22,6 +33,7 @@ export type Idea = {
 
 export type BoardCard = {
   id: string;
+  projectId: string;
   title: string;
   details: string;
   column: BoardColumn;
@@ -37,6 +49,7 @@ export type BoardColumns = Record<BoardColumn, BoardCard[]>;
 
 export type PlanDocument = {
   id: string;
+  projectId: string;
   title: string;
   kind: DocumentKind;
   content: string;
@@ -54,14 +67,24 @@ export type ActivityEvent = {
 };
 
 export type BoardData = {
-  schemaVersion: 1;
+  schemaVersion: 3;
+  projects: Project[];
   ideas: Idea[];
   boardCards: BoardCard[];
   documents: PlanDocument[];
   activity: ActivityEvent[];
 };
 
+export type CreateProjectInput = {
+  key: string;
+  title: string;
+  summary?: string;
+};
+
+export type UpdateProjectInput = Partial<Pick<Project, "key" | "title" | "summary">>;
+
 export type CreateIdeaInput = {
+  projectId?: string;
   title: string;
   summary?: string;
   details?: string;
@@ -80,6 +103,7 @@ export type CreateBoardCardOptions = {
 };
 
 export type CreateDocumentInput = {
+  projectId?: string;
   title: string;
   kind?: DocumentKind;
   content?: string;

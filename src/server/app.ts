@@ -19,6 +19,7 @@ type GitHubIssue = {
 };
 
 const ideaSchema = z.object({
+  projectId: z.string().optional(),
   title: z.string().trim().min(1),
   summary: z.string().optional().default(""),
   details: z.string().optional().default(""),
@@ -26,20 +27,44 @@ const ideaSchema = z.object({
   acceptanceCriteria: z.array(z.string()).optional().default([])
 });
 
+const ideaStatusSchema = z.preprocess(
+  (value) => (value === "dennied" ? "denied" : value),
+  z.enum(ideaStatuses)
+);
+
 const updateIdeaSchema = z.object({
   title: z.string().trim().min(1).optional(),
   summary: z.string().optional(),
   details: z.string().optional(),
   labels: z.array(z.string()).optional(),
   acceptanceCriteria: z.array(z.string()).optional(),
-  status: z.enum(ideaStatuses).optional()
+  status: ideaStatusSchema.optional()
+});
+
+const readySchema = z.object({
+  available: z.boolean().optional().default(true)
 });
 
 const moveCardSchema = z.object({
   column: z.enum(boardColumns)
 });
 
+const projectKeySchema = z.string().trim().regex(/^[A-Z]{1,3}$/, "Project ID must be 1 to 3 capital letters");
+
+const projectSchema = z.object({
+  key: projectKeySchema,
+  title: z.string().trim().min(1),
+  summary: z.string().optional().default("")
+});
+
+const updateProjectSchema = z.object({
+  key: projectKeySchema.optional(),
+  title: z.string().trim().min(1).optional(),
+  summary: z.string().optional()
+});
+
 const documentSchema = z.object({
+  projectId: z.string().optional(),
   title: z.string().trim().min(1),
   kind: z.enum(documentKinds).optional().default("execution_plan"),
   content: z.string().optional().default(""),
@@ -74,6 +99,8 @@ export const createApp = ({ store, publicDir }: CreateAppOptions) => {
       endpoint: "/mcp",
       transport: "streamable-http",
       tools: [
+        "list_projects",
+        "create_project",
         "list_ideas",
         "create_idea",
         "mark_idea_ready",
@@ -86,8 +113,28 @@ export const createApp = ({ store, publicDir }: CreateAppOptions) => {
     });
   });
 
-  app.get("/api/ideas", (_req, res) => {
-    res.json({ items: store.listIdeas() });
+  app.get("/api/projects", (_req, res) => {
+    res.json({ items: store.listProjects() });
+  });
+
+  app.post(
+    "/api/projects",
+    asyncHandler((req, res) => {
+      const item = store.createProject(projectSchema.parse(req.body));
+      res.status(201).json({ item });
+    })
+  );
+
+  app.patch(
+    "/api/projects/:id",
+    asyncHandler((req, res) => {
+      const item = store.updateProject(routeParam(req.params.id), updateProjectSchema.parse(req.body));
+      res.json({ item });
+    })
+  );
+
+  app.get("/api/ideas", (req, res) => {
+    res.json({ items: store.listIdeas(queryParam(req.query.projectId)) });
   });
 
   app.post(
@@ -109,7 +156,8 @@ export const createApp = ({ store, publicDir }: CreateAppOptions) => {
   app.post(
     "/api/ideas/:id/ready",
     asyncHandler((req, res) => {
-      const item = store.markIdeaReady(routeParam(req.params.id));
+      const { available } = readySchema.parse(req.body ?? {});
+      const item = store.setIdeaBoardAvailability(routeParam(req.params.id), available);
       res.json({ item });
     })
   );
@@ -124,8 +172,8 @@ export const createApp = ({ store, publicDir }: CreateAppOptions) => {
     })
   );
 
-  app.get("/api/board", (_req, res) => {
-    res.json({ columns: store.getBoardColumns() });
+  app.get("/api/board", (req, res) => {
+    res.json({ columns: store.getBoardColumns(queryParam(req.query.projectId)) });
   });
 
   app.patch(
@@ -137,8 +185,8 @@ export const createApp = ({ store, publicDir }: CreateAppOptions) => {
     })
   );
 
-  app.get("/api/documents", (_req, res) => {
-    res.json({ items: store.listDocuments() });
+  app.get("/api/documents", (req, res) => {
+    res.json({ items: store.listDocuments(queryParam(req.query.projectId)) });
   });
 
   app.post(
@@ -194,10 +242,21 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     res.status(409).json({ error: message });
     return;
   }
+  if (message.includes("already used")) {
+    res.status(409).json({ error: message });
+    return;
+  }
   res.status(500).json({ error: message });
 };
 
 const routeParam = (value: string | string[]): string => (Array.isArray(value) ? value[0] : value);
+
+const queryParam = (value: unknown): string | undefined => {
+  if (Array.isArray(value)) {
+    return queryParam(value[0]);
+  }
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+};
 
 const maybeCreateGitHubIssue = async (store: BoardStore, ideaId: string) => {
   const token = process.env.GITHUB_TOKEN;
