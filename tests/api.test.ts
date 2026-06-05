@@ -1,40 +1,122 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import type { Pool } from "pg";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { createAdminSessionManager } from "../src/server/auth.js";
 import { createApp } from "../src/server/app.js";
-import { BoardStore } from "../src/server/storage.js";
+import type { PostgresBoardStore } from "../src/server/storage.js";
+import { closeTestPool, createTestStore } from "./helpers/store.js";
 
-let tempDir: string;
-let store: BoardStore;
+let pool: Pool;
+let store: PostgresBoardStore;
 
 beforeEach(async () => {
-  tempDir = await mkdtemp(join(tmpdir(), "vibepod-board-api-"));
-  store = new BoardStore(join(tempDir, "board.json"));
+  const created = await createTestStore();
+  pool = created.pool;
+  store = created.store;
 });
 
 afterEach(async () => {
-  await rm(tempDir, { recursive: true, force: true });
+  await closeTestPool(pool);
 });
 
+const createAuthedApp = () => {
+  const sessions = createAdminSessionManager({ username: "admin", password: "secret" });
+  const app = createApp({ store, sessions });
+  return { app, sessions };
+};
+
+const login = async (app: ReturnType<typeof createApp>) => {
+  const agent = request.agent(app);
+  await agent.post("/api/auth/login").send({ username: "admin", password: "secret" }).expect(200);
+  return agent;
+};
+
 describe("API", () => {
+  it("requires admin auth for REST board endpoints", async () => {
+    const { app } = createAuthedApp();
+
+    await request(app).get("/api/health").expect(200);
+    await request(app).get("/api/projects").expect(401);
+
+    const agent = await login(app);
+    await agent.get("/api/projects").expect(200);
+    await agent.post("/api/auth/logout").expect(200);
+    await agent.get("/api/projects").expect(401);
+  });
+
+  it("reports auth state through /api/auth/me", async () => {
+    const { app } = createAuthedApp();
+    const agent = request.agent(app);
+
+    expect((await agent.get("/api/auth/me").expect(200)).body).toEqual({ authenticated: false });
+
+    await agent.post("/api/auth/login").send({ username: "admin", password: "secret" }).expect(200);
+
+    expect((await agent.get("/api/auth/me").expect(200)).body).toEqual({
+      authenticated: true,
+      username: "admin"
+    });
+  });
+
+  it("allows project tokens to access only mapped project data", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+
+    const appProject = await agent.post("/api/projects").send({ title: "App", key: "APP" }).expect(201);
+    const apiProject = await agent.post("/api/projects").send({ title: "API", key: "API" }).expect(201);
+    await agent.post("/api/ideas").send({ projectId: appProject.body.item.id, title: "Visible" }).expect(201);
+    await agent.post("/api/ideas").send({ projectId: apiProject.body.item.id, title: "Hidden" }).expect(201);
+
+    const tokenResponse = await agent
+      .post("/api/tokens")
+      .send({ name: "Codex", projectIds: [appProject.body.item.id] })
+      .expect(201);
+    const token = tokenResponse.body.token;
+
+    const tokenProjects = await request(app)
+      .get("/api/projects")
+      .set("Authorization", `Bearer ${token}`)
+      .expect(200);
+    expect(tokenProjects.body.items.map((project: { id: string }) => project.id)).toEqual([
+      appProject.body.item.id
+    ]);
+
+    const tokenIdeas = await request(app)
+      .get("/api/ideas")
+      .set("Authorization", `Bearer ${token}`)
+      .expect(200);
+    expect(tokenIdeas.body.items.map((idea: { title: string }) => idea.title)).toEqual(["Visible"]);
+
+    await request(app)
+      .post("/api/ideas")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ projectId: apiProject.body.item.id, title: "Forbidden" })
+      .expect(403);
+
+    await request(app)
+      .post("/api/projects")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ key: "NEW", title: "Nope" })
+      .expect(403);
+  });
+
   it("validates project IDs on create and update", async () => {
-    const app = createApp({ store });
+    const { app } = createAuthedApp();
+    const agent = await login(app);
 
-    await request(app).post("/api/projects").send({ title: "Missing key" }).expect(400);
-    await request(app).post("/api/projects").send({ title: "Invalid key", key: "app" }).expect(400);
+    await agent.post("/api/projects").send({ title: "Missing key" }).expect(400);
+    await agent.post("/api/projects").send({ title: "Invalid key", key: "app" }).expect(400);
 
-    const created = await request(app)
+    const created = await agent
       .post("/api/projects")
       .send({ title: "Launch site", key: "LS" })
       .expect(201);
     expect(created.body.item.key).toBe("LS");
 
-    await request(app).post("/api/projects").send({ title: "Duplicate", key: "LS" }).expect(409);
+    await agent.post("/api/projects").send({ title: "Duplicate", key: "LS" }).expect(409);
 
-    const updated = await request(app)
+    const updated = await agent
       .patch(`/api/projects/${created.body.item.id}`)
       .send({ key: "WEB" })
       .expect(200);
@@ -42,13 +124,14 @@ describe("API", () => {
   });
 
   it("creates projects and scopes project work through query params", async () => {
-    const app = createApp({ store });
+    const { app } = createAuthedApp();
+    const agent = await login(app);
 
-    const project = await request(app)
+    const project = await agent
       .post("/api/projects")
       .send({ title: "Launch site", key: "LS", summary: "Coordinate launch work" })
       .expect(201);
-    const otherProject = await request(app)
+    const otherProject = await agent
       .post("/api/projects")
       .send({ title: "Backlog", key: "BL" })
       .expect(201);
@@ -56,79 +139,66 @@ describe("API", () => {
     const projectId = project.body.item.id;
     const otherProjectId = otherProject.body.item.id;
 
-    const task = await request(app)
-      .post("/api/ideas")
-      .send({ projectId, title: "Publish landing page" })
-      .expect(201);
-    await request(app).post("/api/ideas").send({ projectId: otherProjectId, title: "Backlog task" }).expect(201);
-    await request(app).post(`/api/ideas/${task.body.item.id}/ready`).expect(200);
-    await request(app).post(`/api/ideas/${task.body.item.id}/sync-github`).send({}).expect(200);
-    await request(app)
-      .post("/api/documents")
-      .send({ projectId, title: "Launch notes", kind: "notes" })
-      .expect(201);
+    const task = await agent.post("/api/ideas").send({ projectId, title: "Publish landing page" }).expect(201);
+    await agent.post("/api/ideas").send({ projectId: otherProjectId, title: "Backlog task" }).expect(201);
+    await agent.post(`/api/ideas/${task.body.item.id}/ready`).expect(200);
+    await agent.post(`/api/ideas/${task.body.item.id}/sync-github`).send({}).expect(200);
+    await agent.post("/api/documents").send({ projectId, title: "Launch notes", kind: "notes" }).expect(201);
 
-    const projects = await request(app).get("/api/projects").expect(200);
+    const projects = await agent.get("/api/projects").expect(200);
     expect(projects.body.items.map((item: { title: string }) => item.title)).toEqual([
       "Backlog",
       "Launch site"
     ]);
 
-    const scopedIdeas = await request(app).get(`/api/ideas?projectId=${projectId}`).expect(200);
+    const scopedIdeas = await agent.get(`/api/ideas?projectId=${projectId}`).expect(200);
     expect(scopedIdeas.body.items).toHaveLength(1);
     expect(scopedIdeas.body.items[0].projectId).toBe(projectId);
 
-    const scopedBoard = await request(app).get(`/api/board?projectId=${projectId}`).expect(200);
+    const scopedBoard = await agent.get(`/api/board?projectId=${projectId}`).expect(200);
     expect(scopedBoard.body.columns.ready).toHaveLength(1);
     expect(scopedBoard.body.columns.ready[0].projectId).toBe(projectId);
 
-    const scopedDocuments = await request(app).get(`/api/documents?projectId=${projectId}`).expect(200);
+    const scopedDocuments = await agent.get(`/api/documents?projectId=${projectId}`).expect(200);
     expect(scopedDocuments.body.items).toHaveLength(1);
     expect(scopedDocuments.body.items[0].projectId).toBe(projectId);
   });
 
   it("toggles board availability through the ready endpoint", async () => {
-    const app = createApp({ store });
-    const project = await request(app)
-      .post("/api/projects")
-      .send({ title: "Launch site", key: "LS" })
-      .expect(201);
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+    const project = await agent.post("/api/projects").send({ title: "Launch site", key: "LS" }).expect(201);
     const projectId = project.body.item.id;
-    const task = await request(app)
-      .post("/api/ideas")
-      .send({ projectId, title: "Publish launch checklist" })
-      .expect(201);
+    const task = await agent.post("/api/ideas").send({ projectId, title: "Publish launch checklist" }).expect(201);
     const ideaId = task.body.item.id;
 
-    const ready = await request(app).post(`/api/ideas/${ideaId}/ready`).send({ available: true }).expect(200);
+    const ready = await agent.post(`/api/ideas/${ideaId}/ready`).send({ available: true }).expect(200);
     expect(ready.body.item.status).toBe("ready");
 
-    const boardWithTask = await request(app).get(`/api/board?projectId=${projectId}`).expect(200);
+    const boardWithTask = await agent.get(`/api/board?projectId=${projectId}`).expect(200);
     expect(boardWithTask.body.columns.ready).toHaveLength(1);
     expect(boardWithTask.body.columns.ready[0].ideaId).toBe(ideaId);
 
-    const unavailable = await request(app)
-      .post(`/api/ideas/${ideaId}/ready`)
-      .send({ available: false })
-      .expect(200);
+    const unavailable = await agent.post(`/api/ideas/${ideaId}/ready`).send({ available: false }).expect(200);
     expect(unavailable.body.item.status).toBe("idea");
 
-    const boardWithoutTask = await request(app).get(`/api/board?projectId=${projectId}`).expect(200);
+    const boardWithoutTask = await agent.get(`/api/board?projectId=${projectId}`).expect(200);
     expect(boardWithoutTask.body.columns.ready).toHaveLength(0);
   });
 
   it("updates a task to denied status", async () => {
-    const app = createApp({ store });
-    const created = await request(app).post("/api/ideas").send({ title: "Add confetti animation" }).expect(201);
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+    const created = await agent.post("/api/ideas").send({ title: "Add confetti animation" }).expect(201);
 
-    const response = await request(app)
+    const response = await agent
       .patch(`/api/ideas/${created.body.item.id}`)
       .send({ status: "denied" })
       .expect(200);
 
     expect(response.body.item.status).toBe("denied");
 
-    const aliasResponse = await request(app)
+    const aliasResponse = await agent
       .patch(`/api/ideas/${created.body.item.id}`)
       .send({ status: "dennied" })
       .expect(200);
@@ -137,37 +207,40 @@ describe("API", () => {
   });
 
   it("creates ideas and lists them", async () => {
-    const app = createApp({ store });
+    const { app } = createAuthedApp();
+    const agent = await login(app);
 
-    await request(app)
+    await agent
       .post("/api/ideas")
       .send({ title: "Kanban processing", summary: "Ready issues move through columns" })
       .expect(201);
 
-    const response = await request(app).get("/api/ideas").expect(200);
+    const response = await agent.get("/api/ideas").expect(200);
     expect(response.body.items).toHaveLength(1);
     expect(response.body.items[0].title).toBe("Kanban processing");
   });
 
   it("promotes a ready idea into the board via local GitHub sync mode", async () => {
-    const app = createApp({ store });
-    const created = await request(app).post("/api/ideas").send({ title: "Sync bridge" });
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+    const created = await agent.post("/api/ideas").send({ title: "Sync bridge" });
     const ideaId = created.body.item.id;
 
-    await request(app).post(`/api/ideas/${ideaId}/ready`).expect(200);
-    const sync = await request(app).post(`/api/ideas/${ideaId}/sync-github`).send({}).expect(200);
+    await agent.post(`/api/ideas/${ideaId}/ready`).expect(200);
+    const sync = await agent.post(`/api/ideas/${ideaId}/sync-github`).send({}).expect(200);
 
     expect(sync.body.mode).toBe("local");
     expect(sync.body.card.column).toBe("ready");
 
-    const board = await request(app).get("/api/board").expect(200);
+    const board = await agent.get("/api/board").expect(200);
     expect(board.body.columns.ready).toHaveLength(1);
   });
 
   it("creates documents through the API", async () => {
-    const app = createApp({ store });
+    const { app } = createAuthedApp();
+    const agent = await login(app);
 
-    const response = await request(app)
+    const response = await agent
       .post("/api/documents")
       .send({
         title: "Execution plan",

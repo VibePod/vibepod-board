@@ -25,6 +25,8 @@ cd vibepod-board
 docker compose up --build
 ```
 
+Compose starts PostgreSQL and stores board state in the `vibepod-board-postgres-data` volume. Set `ADMIN_USERNAME` and `ADMIN_PASSWORD` before starting the board in shared environments.
+
 Open the browser UI from the Docker host at:
 
 ```text
@@ -57,6 +59,14 @@ The MCP endpoint uses Streamable HTTP. REST metadata is available at:
 http://localhost:3000/api/mcp-info
 ```
 
+MCP requires a project-scoped API token:
+
+```text
+Authorization: Bearer <vibepod-board-token>
+```
+
+Create tokens from the browser UI under **API Tokens** after signing in as the env-configured admin. A token can be mapped to one or more projects. The raw token is shown once when created.
+
 ## Client Examples
 
 Use the Docker-network URL when the agent is running in a VibePod container:
@@ -70,7 +80,7 @@ Use `http://localhost:3000/mcp` instead when the agent runs directly on the Dock
 ### Claude Code
 
 ```bash
-claude mcp add --transport http --scope user vibepod-board http://vibepod-board:3000/mcp
+claude mcp add-json vibepod-board '{"type":"http","url":"http://vibepod-board:3000/mcp","headers":{"Authorization":"Bearer <vibepod-board-token>"}}'
 claude mcp list
 ```
 
@@ -81,7 +91,10 @@ Project `.mcp.json` alternative:
   "mcpServers": {
     "vibepod-board": {
       "type": "http",
-      "url": "http://vibepod-board:3000/mcp"
+      "url": "http://vibepod-board:3000/mcp",
+      "headers": {
+        "Authorization": "Bearer <vibepod-board-token>"
+      }
     }
   }
 }
@@ -91,16 +104,12 @@ Open Claude Code and run `/mcp` to confirm the server is connected.
 
 ### Codex
 
-```bash
-codex mcp add vibepod-board --url http://vibepod-board:3000/mcp
-codex mcp list
-```
-
 `~/.codex/config.toml` alternative:
 
 ```toml
 [mcp_servers.vibepod-board]
 url = "http://vibepod-board:3000/mcp"
+http_headers = { Authorization = "Bearer <vibepod-board-token>" }
 ```
 
 Use `/mcp` in the Codex TUI to inspect the active server.
@@ -108,7 +117,7 @@ Use `/mcp` in the Codex TUI to inspect the active server.
 ### Auggie
 
 ```bash
-auggie mcp add vibepod-board --transport http --url http://vibepod-board:3000/mcp
+auggie mcp add vibepod-board --transport http --url http://vibepod-board:3000/mcp --header "Authorization: Bearer <vibepod-board-token>"
 auggie mcp list
 ```
 
@@ -119,7 +128,10 @@ auggie mcp list
   "mcpServers": {
     "vibepod-board": {
       "type": "http",
-      "url": "http://vibepod-board:3000/mcp"
+      "url": "http://vibepod-board:3000/mcp",
+      "headers": {
+        "Authorization": "Bearer <vibepod-board-token>"
+      }
     }
   }
 }
@@ -138,7 +150,10 @@ Add this to `opencode.json`:
     "vibepod-board": {
       "type": "remote",
       "url": "http://vibepod-board:3000/mcp",
-      "enabled": true
+      "enabled": true,
+      "headers": {
+        "Authorization": "Bearer <vibepod-board-token>"
+      }
     }
   }
 }
@@ -159,6 +174,8 @@ Then configure the agent-side MCP client to use:
 ```text
 http://vibepod-board:3000/mcp
 ```
+
+Include the bearer token header in the client config.
 
 If you start an agent through VibePod, pass the network explicitly when needed:
 

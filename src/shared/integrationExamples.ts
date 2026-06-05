@@ -25,20 +25,27 @@ export const endpointOptions = [
   }
 ] as const;
 
-export const integrationExamples: IntegrationExample[] = [
+export const bearerTokenExample = "<vibepod-board-token>";
+
+export const authorizationHeader = (token = bearerTokenExample) => `Bearer ${token}`;
+
+export const integrationExamplesForToken = (token = bearerTokenExample): IntegrationExample[] => [
   {
     id: "claude-code",
     name: "Claude Code",
-    description: "Add vibepod-board as a remote HTTP MCP server through the Claude Code CLI.",
+    description: "Add vibepod-board as a remote HTTP MCP server with a bearer token.",
     docsUrl: "https://docs.anthropic.com/en/docs/claude-code/mcp",
     command:
-      "claude mcp add --transport http --scope user vibepod-board http://vibepod-board:3000/mcp",
+      `claude mcp add-json vibepod-board '{"type":"http","url":"http://vibepod-board:3000/mcp","headers":{"Authorization":"${authorizationHeader(token)}"}}'`,
     configLabel: "Project .mcp.json alternative",
     config: `{
   "mcpServers": {
     "vibepod-board": {
       "type": "http",
-      "url": "http://vibepod-board:3000/mcp"
+      "url": "http://vibepod-board:3000/mcp",
+      "headers": {
+        "Authorization": "${authorizationHeader(token)}"
+      }
     }
   }
 }`,
@@ -47,27 +54,30 @@ export const integrationExamples: IntegrationExample[] = [
   {
     id: "codex",
     name: "Codex",
-    description: "Use the Codex MCP command or add the Streamable HTTP server to config.toml.",
+    description: "Use the Codex MCP config with an Authorization header.",
     docsUrl: "https://developers.openai.com/codex/mcp",
-    command: "codex mcp add vibepod-board --url http://vibepod-board:3000/mcp",
     configLabel: "~/.codex/config.toml",
     config: `[mcp_servers.vibepod-board]
-url = "http://vibepod-board:3000/mcp"`,
+url = "http://vibepod-board:3000/mcp"
+http_headers = { Authorization = "${authorizationHeader(token)}" }`,
     verify: "Run codex mcp list, then use /mcp in the Codex TUI."
   },
   {
     id: "auggie",
     name: "Auggie",
-    description: "Persist the board endpoint in Augment settings or add it with Auggie CLI.",
+    description: "Persist the board endpoint with a bearer token in Augment settings.",
     docsUrl: "https://docs.augmentcode.com/cli/integrations",
     command:
-      "auggie mcp add vibepod-board --transport http --url http://vibepod-board:3000/mcp",
+      `auggie mcp add vibepod-board --transport http --url http://vibepod-board:3000/mcp --header "Authorization: ${authorizationHeader(token)}"`,
     configLabel: "~/.augment/settings.json",
     config: `{
   "mcpServers": {
     "vibepod-board": {
       "type": "http",
-      "url": "http://vibepod-board:3000/mcp"
+      "url": "http://vibepod-board:3000/mcp",
+      "headers": {
+        "Authorization": "${authorizationHeader(token)}"
+      }
     }
   }
 }`,
@@ -76,7 +86,7 @@ url = "http://vibepod-board:3000/mcp"`,
   {
     id: "opencode",
     name: "OpenCode",
-    description: "Add vibepod-board as a remote MCP server in OpenCode config.",
+    description: "Add vibepod-board as a remote MCP server with request headers.",
     docsUrl: "https://opencode.ai/docs/mcp-servers/",
     configLabel: "opencode.json",
     config: `{
@@ -85,10 +95,15 @@ url = "http://vibepod-board:3000/mcp"`,
     "vibepod-board": {
       "type": "remote",
       "url": "http://vibepod-board:3000/mcp",
-      "enabled": true
+      "enabled": true,
+      "headers": {
+        "Authorization": "${authorizationHeader(token)}"
+      }
     }
   }
 }`,
     verify: "Run opencode mcp list, then prompt OpenCode to use vibepod-board."
   }
 ];
+
+export const integrationExamples = integrationExamplesForToken();

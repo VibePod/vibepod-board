@@ -114,3 +114,34 @@ export type CreateDocumentInput = {
 export type UpdateDocumentInput = Partial<
   Pick<PlanDocument, "title" | "kind" | "content" | "linkedIdeaIds" | "linkedCardIds">
 >;
+
+export type ApiTokenProject = Pick<Project, "id" | "key" | "title">;
+
+export type ApiTokenSummary = {
+  id: string;
+  name: string;
+  projects: ApiTokenProject[];
+  createdAt: string;
+  lastUsedAt?: string;
+  revokedAt?: string;
+};
+
+export type CreateApiTokenInput = {
+  name: string;
+  projectIds: string[];
+};
+
+export type UpdateApiTokenInput = {
+  name?: string;
+  projectIds?: string[];
+};
+
+export type CreatedApiTokenResponse = {
+  item: ApiTokenSummary;
+  token: string;
+};
+
+export type AuthMeResponse = {
+  authenticated: boolean;
+  username?: string;
+};

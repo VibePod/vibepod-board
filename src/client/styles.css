@@ -595,6 +595,39 @@ body {
   padding-top: 4px;
 }
 
+.login-shell {
+  align-items: center;
+  background:
+    linear-gradient(135deg, rgba(47, 158, 143, 0.1), transparent 34%),
+    var(--app-surface-muted);
+  display: flex;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.login-panel {
+  margin: 0 auto;
+  max-width: 420px;
+  width: 100%;
+}
+
+.token-list .mantine-Paper-root,
+.token-created,
+.token-config .integration-example {
+  background: var(--app-surface);
+}
+
+.token-created code,
+.token-config pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.token-config {
+  max-height: 420px;
+  overflow: auto;
+}
+
 @media (max-width: 980px) {
   .shell {
     grid-template-columns: 1fr;

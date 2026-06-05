@@ -1,13 +1,16 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
+import type { Pool, PoolClient } from "pg";
 
 import {
   boardColumns,
   type ActivityEvent,
+  type ApiTokenSummary,
   type BoardCard,
   type BoardColumn,
   type BoardColumns,
+  type CreateApiTokenInput,
   type BoardData,
   type CreateBoardCardOptions,
   type CreateDocumentInput,
@@ -16,10 +19,21 @@ import {
   type Idea,
   type PlanDocument,
   type Project,
+  type UpdateApiTokenInput,
   type UpdateDocumentInput,
   type UpdateIdeaInput,
   type UpdateProjectInput
 } from "../shared/types.js";
+import { createRawApiToken, hashApiToken } from "./auth.js";
+import {
+  assertCanAccessProject,
+  defaultProjectIdForCreate,
+  filterProjectIds,
+  type AccessContext,
+  type BoardDataStore,
+  type CreatedApiToken,
+  type AuthenticatedToken
+} from "./store.js";
 
 const emptyData = (): BoardData => ({
   schemaVersion: 3,
@@ -74,6 +88,986 @@ const normalizeProjectKey = (key: string | undefined): string => {
   }
   return normalized;
 };
+
+type ProjectRow = {
+  id: string;
+  key: string;
+  title: string;
+  summary: string;
+  created_at: Date | string;
+  updated_at: Date | string;
+};
+
+type IdeaRow = {
+  id: string;
+  project_id: string;
+  task_number: number;
+  title: string;
+  summary: string;
+  details: string;
+  status: Idea["status"];
+  labels: unknown;
+  acceptance_criteria: unknown;
+  github_issue_url: string | null;
+  github_issue_number: number | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+};
+
+type BoardCardRow = {
+  id: string;
+  project_id: string;
+  idea_id: string | null;
+  title: string;
+  details: string;
+  column_name: BoardColumn;
+  github_issue_url: string | null;
+  github_issue_number: number | null;
+  labels: unknown;
+  created_at: Date | string;
+  updated_at: Date | string;
+};
+
+type DocumentRow = {
+  id: string;
+  project_id: string;
+  title: string;
+  kind: PlanDocument["kind"];
+  content: string;
+  linked_idea_ids: unknown;
+  linked_card_ids: unknown;
+  created_at: Date | string;
+  updated_at: Date | string;
+};
+
+type ActivityRow = {
+  id: string;
+  type: string;
+  message: string;
+  created_at: Date | string;
+};
+
+type ApiTokenRow = {
+  id: string;
+  name: string;
+  created_at: Date | string;
+  last_used_at: Date | string | null;
+  revoked_at: Date | string | null;
+};
+
+export class PostgresBoardStore implements BoardDataStore {
+  constructor(private readonly pool: Pool) {}
+
+  async getState(access: AccessContext): Promise<BoardData> {
+    return {
+      schemaVersion: 3,
+      projects: await this.listProjects(access),
+      ideas: await this.listIdeas(access),
+      boardCards: await this.listBoardCards(access),
+      documents: await this.listDocuments(access),
+      activity: await this.listActivity(access)
+    };
+  }
+
+  async listProjects(access?: AccessContext): Promise<Project[]> {
+    const result = await this.pool.query<ProjectRow>(
+      "select * from projects order by updated_at desc, title asc"
+    );
+    const projects = result.rows.map(projectFromRow);
+    if (!access || access.kind === "admin") {
+      return projects;
+    }
+    const allowed = new Set(access.projectIds);
+    return projects.filter((project) => allowed.has(project.id));
+  }
+
+  async createProject(input: CreateProjectInput): Promise<Project> {
+    assertTitle(input.title, "Project");
+    const key = normalizeProjectKey(input.key);
+    const timestamp = nowIso();
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      await this.assertProjectKeyAvailable(client, key);
+      const result = await client.query<ProjectRow>(
+        `insert into projects (id, key, title, summary, created_at, updated_at)
+         values ($1, $2, $3, $4, $5, $5)
+         returning *`,
+        [randomUUID(), key, input.title.trim(), input.summary?.trim() ?? "", timestamp]
+      );
+      const project = projectFromRow(result.rows[0]);
+      await this.addActivity(client, "project.created", `Created project: ${project.title}`, timestamp);
+      await client.query("commit");
+      return project;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async updateProject(id: string, input: UpdateProjectInput): Promise<Project> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const current = await this.requireProject(client, id);
+      const key = input.key !== undefined ? normalizeProjectKey(input.key) : current.key;
+      if (input.key !== undefined) {
+        await this.assertProjectKeyAvailable(client, key, current.id);
+      }
+      const title = input.title !== undefined ? input.title.trim() : current.title;
+      if (input.title !== undefined) {
+        assertTitle(input.title, "Project");
+      }
+      const summary = input.summary !== undefined ? input.summary.trim() : current.summary;
+      const timestamp = nowIso();
+      const result = await client.query<ProjectRow>(
+        `update projects
+         set key = $2, title = $3, summary = $4, updated_at = $5
+         where id = $1
+         returning *`,
+        [id, key, title, summary, timestamp]
+      );
+      const project = projectFromRow(result.rows[0]);
+      await this.addActivity(client, "project.updated", `Updated project: ${project.title}`, timestamp);
+      await client.query("commit");
+      return project;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async listIdeas(access: AccessContext, projectId?: string): Promise<Idea[]> {
+    if (projectId) {
+      const project = await this.requireProject(this.pool, projectId);
+      assertCanAccessProject(access, project.id);
+      const result = await this.pool.query<IdeaRow>(
+        "select * from ideas where project_id = $1 order by updated_at desc, title asc",
+        [project.id]
+      );
+      return result.rows.map(ideaFromRow);
+    }
+
+    if (access.kind === "token" && access.projectIds.length === 0) {
+      return [];
+    }
+
+    const result =
+      access.kind === "admin"
+        ? await this.pool.query<IdeaRow>("select * from ideas order by updated_at desc, title asc")
+        : await this.pool.query<IdeaRow>(
+            "select * from ideas where project_id = any($1::text[]) order by updated_at desc, title asc",
+            [filterProjectIds(access, access.projectIds)]
+          );
+    return result.rows.map(ideaFromRow);
+  }
+
+  async createIdea(access: AccessContext, input: CreateIdeaInput): Promise<Idea> {
+    assertTitle(input.title, "Idea");
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const projectId = await this.resolveProjectIdForCreate(
+        client,
+        defaultProjectIdForCreate(access, input.projectId)
+      );
+      assertCanAccessProject(access, projectId);
+      const timestamp = nowIso();
+      const result = await client.query<IdeaRow>(
+        `insert into ideas (
+           id, project_id, task_number, title, summary, details, status, labels,
+           acceptance_criteria, created_at, updated_at
+         )
+         values ($1, $2, $3, $4, $5, $6, 'idea', $7, $8, $9, $9)
+         returning *`,
+        [
+          randomUUID(),
+          projectId,
+          await this.nextTaskNumber(client, projectId),
+          input.title.trim(),
+          input.summary?.trim() ?? "",
+          input.details?.trim() ?? "",
+          JSON.stringify(normalizeList(input.labels)),
+          JSON.stringify(normalizeList(input.acceptanceCriteria)),
+          timestamp
+        ]
+      );
+      const idea = ideaFromRow(result.rows[0]);
+      await this.addActivity(client, "idea.created", `Created idea: ${idea.title}`, timestamp);
+      await client.query("commit");
+      return idea;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async updateIdea(access: AccessContext, id: string, input: UpdateIdeaInput): Promise<Idea> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const current = await this.requireIdea(client, id);
+      assertCanAccessProject(access, current.projectId);
+      const title = input.title !== undefined ? input.title.trim() : current.title;
+      if (input.title !== undefined) {
+        assertTitle(input.title, "Idea");
+      }
+      const summary = input.summary !== undefined ? input.summary.trim() : current.summary;
+      const details = input.details !== undefined ? input.details.trim() : current.details;
+      const labels = input.labels !== undefined ? normalizeList(input.labels) : current.labels;
+      const acceptanceCriteria =
+        input.acceptanceCriteria !== undefined
+          ? normalizeList(input.acceptanceCriteria)
+          : current.acceptanceCriteria;
+      let status = input.status ?? current.status;
+      if (
+        status === "idea" &&
+        (input.details !== undefined || input.acceptanceCriteria !== undefined) &&
+        (details || acceptanceCriteria.length > 0)
+      ) {
+        status = "refining";
+      }
+      const timestamp = nowIso();
+      const result = await client.query<IdeaRow>(
+        `update ideas
+         set title = $2,
+             summary = $3,
+             details = $4,
+             labels = $5,
+             acceptance_criteria = $6,
+             status = $7,
+             updated_at = $8
+         where id = $1
+         returning *`,
+        [
+          id,
+          title,
+          summary,
+          details,
+          JSON.stringify(labels),
+          JSON.stringify(acceptanceCriteria),
+          status,
+          timestamp
+        ]
+      );
+      const idea = ideaFromRow(result.rows[0]);
+      await this.addActivity(client, "idea.updated", `Updated idea: ${idea.title}`, timestamp);
+      await client.query("commit");
+      return idea;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async markIdeaReady(access: AccessContext, id: string): Promise<Idea> {
+    return this.setIdeaBoardAvailability(access, id, true);
+  }
+
+  async setIdeaBoardAvailability(
+    access: AccessContext,
+    id: string,
+    available: boolean
+  ): Promise<Idea> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const idea = await this.requireIdea(client, id);
+      assertCanAccessProject(access, idea.projectId);
+      const timestamp = nowIso();
+
+      if (available) {
+        const ready = await this.updateIdeaStatus(client, idea.id, "ready", timestamp);
+        await this.ensureBoardCard(client, ready, { githubMode: "local" }, timestamp);
+        await this.addActivity(client, "idea.ready", `Marked idea ready: ${ready.title}`, timestamp);
+        await client.query("commit");
+        return ready;
+      }
+
+      await client.query("delete from board_cards where idea_id = $1", [idea.id]);
+      const status = idea.details || idea.acceptanceCriteria.length > 0 ? "refining" : "idea";
+      const unavailable = await this.updateIdeaStatus(client, idea.id, status, timestamp);
+      await this.addActivity(client, "idea.not_ready", `Removed idea from board: ${idea.title}`, timestamp);
+      await client.query("commit");
+      return unavailable;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async createBoardCardFromIdea(
+    access: AccessContext,
+    id: string,
+    options: CreateBoardCardOptions
+  ): Promise<BoardCard> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const idea = await this.requireIdea(client, id);
+      assertCanAccessProject(access, idea.projectId);
+      if (idea.status !== "ready") {
+        throw new Error("Only ready ideas can be moved to the board");
+      }
+      const card = await this.ensureBoardCard(client, idea, options);
+      await client.query("commit");
+      return card;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async listBoardCards(access: AccessContext, projectId?: string): Promise<BoardCard[]> {
+    if (projectId) {
+      const project = await this.requireProject(this.pool, projectId);
+      assertCanAccessProject(access, project.id);
+      const result = await this.pool.query<BoardCardRow>(
+        "select * from board_cards where project_id = $1 order by updated_at desc, title asc",
+        [project.id]
+      );
+      return result.rows.map(boardCardFromRow);
+    }
+
+    if (access.kind === "token" && access.projectIds.length === 0) {
+      return [];
+    }
+
+    const result =
+      access.kind === "admin"
+        ? await this.pool.query<BoardCardRow>(
+            "select * from board_cards order by updated_at desc, title asc"
+          )
+        : await this.pool.query<BoardCardRow>(
+            "select * from board_cards where project_id = any($1::text[]) order by updated_at desc, title asc",
+            [access.projectIds]
+          );
+    return result.rows.map(boardCardFromRow);
+  }
+
+  async getBoardColumns(access: AccessContext, projectId?: string): Promise<BoardColumns> {
+    const cards = await this.listBoardCards(access, projectId);
+    const columns: BoardColumns = {
+      ready: [],
+      planned: [],
+      in_progress: [],
+      review: [],
+      done: []
+    };
+    for (const card of cards) {
+      columns[card.column].push(card);
+    }
+    for (const column of boardColumns) {
+      columns[column].sort(sortUpdatedDesc);
+    }
+    return columns;
+  }
+
+  async moveBoardCard(access: AccessContext, id: string, column: BoardColumn): Promise<BoardCard> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const current = await this.requireBoardCard(client, id);
+      assertCanAccessProject(access, current.projectId);
+      const timestamp = nowIso();
+      const result = await client.query<BoardCardRow>(
+        `update board_cards
+         set column_name = $2, updated_at = $3
+         where id = $1
+         returning *`,
+        [id, column, timestamp]
+      );
+      const card = boardCardFromRow(result.rows[0]);
+      await this.addActivity(client, "board.moved", `Moved card to ${column}: ${card.title}`, timestamp);
+      await client.query("commit");
+      return card;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async listDocuments(access: AccessContext, projectId?: string): Promise<PlanDocument[]> {
+    if (projectId) {
+      const project = await this.requireProject(this.pool, projectId);
+      assertCanAccessProject(access, project.id);
+      const result = await this.pool.query<DocumentRow>(
+        "select * from documents where project_id = $1 order by updated_at desc, title asc",
+        [project.id]
+      );
+      return result.rows.map(documentFromRow);
+    }
+
+    if (access.kind === "token" && access.projectIds.length === 0) {
+      return [];
+    }
+
+    const result =
+      access.kind === "admin"
+        ? await this.pool.query<DocumentRow>("select * from documents order by updated_at desc, title asc")
+        : await this.pool.query<DocumentRow>(
+            "select * from documents where project_id = any($1::text[]) order by updated_at desc, title asc",
+            [access.projectIds]
+          );
+    return result.rows.map(documentFromRow);
+  }
+
+  async createDocument(access: AccessContext, input: CreateDocumentInput): Promise<PlanDocument> {
+    assertTitle(input.title, "Document");
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const projectId = await this.resolveProjectIdForCreate(
+        client,
+        defaultProjectIdForCreate(access, input.projectId)
+      );
+      assertCanAccessProject(access, projectId);
+      const timestamp = nowIso();
+      const result = await client.query<DocumentRow>(
+        `insert into documents (
+           id, project_id, title, kind, content, linked_idea_ids, linked_card_ids, created_at, updated_at
+         )
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+         returning *`,
+        [
+          randomUUID(),
+          projectId,
+          input.title.trim(),
+          input.kind ?? "execution_plan",
+          input.content?.trim() ?? "",
+          JSON.stringify(normalizeList(input.linkedIdeaIds)),
+          JSON.stringify(normalizeList(input.linkedCardIds)),
+          timestamp
+        ]
+      );
+      const document = documentFromRow(result.rows[0]);
+      await this.addActivity(client, "document.created", `Created document: ${document.title}`, timestamp);
+      await client.query("commit");
+      return document;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async updateDocument(
+    access: AccessContext,
+    id: string,
+    input: UpdateDocumentInput
+  ): Promise<PlanDocument> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const current = await this.requireDocument(client, id);
+      assertCanAccessProject(access, current.projectId);
+      const title = input.title !== undefined ? input.title.trim() : current.title;
+      if (input.title !== undefined) {
+        assertTitle(input.title, "Document");
+      }
+      const timestamp = nowIso();
+      const result = await client.query<DocumentRow>(
+        `update documents
+         set title = $2,
+             kind = $3,
+             content = $4,
+             linked_idea_ids = $5,
+             linked_card_ids = $6,
+             updated_at = $7
+         where id = $1
+         returning *`,
+        [
+          id,
+          title,
+          input.kind ?? current.kind,
+          input.content ?? current.content,
+          JSON.stringify(input.linkedIdeaIds !== undefined ? normalizeList(input.linkedIdeaIds) : current.linkedIdeaIds),
+          JSON.stringify(input.linkedCardIds !== undefined ? normalizeList(input.linkedCardIds) : current.linkedCardIds),
+          timestamp
+        ]
+      );
+      const document = documentFromRow(result.rows[0]);
+      await this.addActivity(client, "document.updated", `Updated document: ${document.title}`, timestamp);
+      await client.query("commit");
+      return document;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async listActivity(access: AccessContext): Promise<ActivityEvent[]> {
+    if (access.kind === "token") {
+      return [];
+    }
+    const result = await this.pool.query<ActivityRow>(
+      "select * from activity_events order by created_at desc"
+    );
+    return result.rows.map(activityFromRow);
+  }
+
+  async listApiTokens(): Promise<ApiTokenSummary[]> {
+    const result = await this.pool.query<ApiTokenRow>(
+      "select id, name, created_at, last_used_at, revoked_at from api_tokens order by created_at desc"
+    );
+    return Promise.all(result.rows.map((row) => this.apiTokenSummary(row)));
+  }
+
+  async createApiToken(input: CreateApiTokenInput): Promise<CreatedApiToken> {
+    if (!input.name.trim()) {
+      throw new Error("Token name is required");
+    }
+    if (input.projectIds.length === 0) {
+      throw new Error("At least one project is required");
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      await this.requireProjects(client, input.projectIds);
+      const token = createRawApiToken();
+      const timestamp = nowIso();
+      const created = await client.query<ApiTokenRow>(
+        `insert into api_tokens (id, name, token_hash, created_at)
+         values ($1, $2, $3, $4)
+         returning id, name, created_at, last_used_at, revoked_at`,
+        [randomUUID(), input.name.trim(), hashApiToken(token), timestamp]
+      );
+      for (const projectId of normalizeList(input.projectIds)) {
+        await client.query(
+          "insert into api_token_projects (token_id, project_id) values ($1, $2)",
+          [created.rows[0].id, projectId]
+        );
+      }
+      const item = await this.apiTokenSummary(created.rows[0], client);
+      await client.query("commit");
+      return {
+        item,
+        token
+      };
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async updateApiToken(
+    id: string,
+    input: UpdateApiTokenInput
+  ): Promise<ApiTokenSummary> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const current = await this.requireApiToken(client, id);
+      const name = input.name !== undefined ? input.name.trim() : current.name;
+      if (!name) {
+        throw new Error("Token name is required");
+      }
+      const updated = await client.query<ApiTokenRow>(
+        `update api_tokens
+         set name = $2
+         where id = $1
+         returning id, name, created_at, last_used_at, revoked_at`,
+        [id, name]
+      );
+      if (input.projectIds !== undefined) {
+        if (input.projectIds.length === 0) {
+          throw new Error("At least one project is required");
+        }
+        await this.requireProjects(client, input.projectIds);
+        await client.query("delete from api_token_projects where token_id = $1", [id]);
+        for (const projectId of normalizeList(input.projectIds)) {
+          await client.query(
+            "insert into api_token_projects (token_id, project_id) values ($1, $2)",
+            [id, projectId]
+          );
+        }
+      }
+      const item = await this.apiTokenSummary(updated.rows[0], client);
+      await client.query("commit");
+      return item;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async revokeApiToken(id: string): Promise<ApiTokenSummary> {
+    const result = await this.pool.query<ApiTokenRow>(
+      `update api_tokens
+       set revoked_at = coalesce(revoked_at, $2)
+       where id = $1
+       returning id, name, created_at, last_used_at, revoked_at`,
+      [id, nowIso()]
+    );
+    const row = result.rows[0];
+    if (!row) {
+      throw new Error(`API token not found: ${id}`);
+    }
+    return this.apiTokenSummary(row);
+  }
+
+  async authenticateApiToken(token: string): Promise<AuthenticatedToken | null> {
+    const result = await this.pool.query<{ id: string }>(
+      `update api_tokens
+       set last_used_at = $2
+       where token_hash = $1 and revoked_at is null
+       returning id`,
+      [hashApiToken(token), nowIso()]
+    );
+    const row = result.rows[0];
+    if (!row) {
+      return null;
+    }
+    const projectIds = await this.apiTokenProjectIds(this.pool, row.id);
+    return { tokenId: row.id, projectIds };
+  }
+
+  private async requireProject(queryable: Pick<Pool | PoolClient, "query">, id: string): Promise<Project> {
+    const result = await queryable.query<ProjectRow>("select * from projects where id = $1", [id]);
+    const row = result.rows[0];
+    if (!row) {
+      throw new Error(`Project not found: ${id}`);
+    }
+    return projectFromRow(row);
+  }
+
+  private async requireIdea(queryable: Pick<Pool | PoolClient, "query">, id: string): Promise<Idea> {
+    const result = await queryable.query<IdeaRow>("select * from ideas where id = $1", [id]);
+    const row = result.rows[0];
+    if (!row) {
+      throw new Error(`Idea not found: ${id}`);
+    }
+    return ideaFromRow(row);
+  }
+
+  private async requireBoardCard(
+    queryable: Pick<Pool | PoolClient, "query">,
+    id: string
+  ): Promise<BoardCard> {
+    const result = await queryable.query<BoardCardRow>("select * from board_cards where id = $1", [id]);
+    const row = result.rows[0];
+    if (!row) {
+      throw new Error(`Board card not found: ${id}`);
+    }
+    return boardCardFromRow(row);
+  }
+
+  private async requireDocument(
+    queryable: Pick<Pool | PoolClient, "query">,
+    id: string
+  ): Promise<PlanDocument> {
+    const result = await queryable.query<DocumentRow>("select * from documents where id = $1", [id]);
+    const row = result.rows[0];
+    if (!row) {
+      throw new Error(`Document not found: ${id}`);
+    }
+    return documentFromRow(row);
+  }
+
+  private async requireApiToken(
+    queryable: Pick<Pool | PoolClient, "query">,
+    id: string
+  ): Promise<ApiTokenRow> {
+    const result = await queryable.query<ApiTokenRow>(
+      "select id, name, created_at, last_used_at, revoked_at from api_tokens where id = $1",
+      [id]
+    );
+    const row = result.rows[0];
+    if (!row) {
+      throw new Error(`API token not found: ${id}`);
+    }
+    return row;
+  }
+
+  private async requireProjects(queryable: Pick<Pool | PoolClient, "query">, projectIds: string[]) {
+    const uniqueIds = normalizeList(projectIds);
+    const result = await queryable.query<{ id: string }>(
+      "select id from projects where id = any($1::text[])",
+      [uniqueIds]
+    );
+    const found = new Set(result.rows.map((row) => row.id));
+    const missing = uniqueIds.find((id) => !found.has(id));
+    if (missing) {
+      throw new Error(`Project not found: ${missing}`);
+    }
+  }
+
+  private async resolveProjectIdForCreate(
+    client: PoolClient,
+    requestedProjectId: string | undefined
+  ): Promise<string> {
+    if (requestedProjectId !== undefined) {
+      return (await this.requireProject(client, requestedProjectId)).id;
+    }
+
+    const existing = await client.query<ProjectRow>(
+      "select * from projects order by created_at asc, id asc limit 1"
+    );
+    if (existing.rows[0]) {
+      return existing.rows[0].id;
+    }
+
+    const timestamp = nowIso();
+    const key = nextAvailableProjectKey([], "GEN");
+    const created = await client.query<ProjectRow>(
+      `insert into projects (id, key, title, summary, created_at, updated_at)
+       values ($1, $2, 'General', $3, $4, $4)
+       returning *`,
+      [randomUUID(), key, defaultProjectSummary, timestamp]
+    );
+    const project = projectFromRow(created.rows[0]);
+    await this.addActivity(client, "project.created", `Created project: ${project.title}`, timestamp);
+    return project.id;
+  }
+
+  private async assertProjectKeyAvailable(
+    queryable: Pick<Pool | PoolClient, "query">,
+    key: string,
+    currentProjectId?: string
+  ) {
+    const result = await queryable.query<ProjectRow>(
+      "select * from projects where key = $1 and ($2::text is null or id <> $2) limit 1",
+      [key, currentProjectId ?? null]
+    );
+    if (result.rows[0]) {
+      throw new Error(`Project ID ${key} is already used`);
+    }
+  }
+
+  private async nextTaskNumber(queryable: Pick<Pool | PoolClient, "query">, projectId: string): Promise<number> {
+    const result = await queryable.query<{ next_number: number }>(
+      "select coalesce(max(task_number), 0) + 1 as next_number from ideas where project_id = $1",
+      [projectId]
+    );
+    return Number(result.rows[0]?.next_number ?? 1);
+  }
+
+  private async updateIdeaStatus(
+    queryable: Pick<Pool | PoolClient, "query">,
+    id: string,
+    status: Idea["status"],
+    timestamp = nowIso()
+  ): Promise<Idea> {
+    const result = await queryable.query<IdeaRow>(
+      "update ideas set status = $2, updated_at = $3 where id = $1 returning *",
+      [id, status, timestamp]
+    );
+    return ideaFromRow(result.rows[0]);
+  }
+
+  private async ensureBoardCard(
+    queryable: Pick<Pool | PoolClient, "query">,
+    idea: Idea,
+    options: CreateBoardCardOptions,
+    timestamp = nowIso()
+  ): Promise<BoardCard> {
+    const existing = await queryable.query<BoardCardRow>(
+      "select * from board_cards where idea_id = $1 limit 1",
+      [idea.id]
+    );
+    if (existing.rows[0]) {
+      const githubIssueUrl = options.githubMode === "github" ? options.githubIssueUrl : existing.rows[0].github_issue_url;
+      const githubIssueNumber =
+        options.githubMode === "github" ? options.githubIssueNumber : existing.rows[0].github_issue_number;
+      const updated = await queryable.query<BoardCardRow>(
+        `update board_cards
+         set github_issue_url = $2,
+             github_issue_number = $3,
+             updated_at = $4
+         where id = $1
+         returning *`,
+        [existing.rows[0].id, githubIssueUrl, githubIssueNumber, timestamp]
+      );
+      if (options.githubMode === "github") {
+        await this.applyIdeaGitHubIssue(queryable, idea.id, options, timestamp);
+      }
+      return boardCardFromRow(updated.rows[0]);
+    }
+
+    const created = await queryable.query<BoardCardRow>(
+      `insert into board_cards (
+         id, project_id, idea_id, title, details, column_name, github_issue_url,
+         github_issue_number, labels, created_at, updated_at
+       )
+       values ($1, $2, $3, $4, $5, 'ready', $6, $7, $8, $9, $9)
+       returning *`,
+      [
+        randomUUID(),
+        idea.projectId,
+        idea.id,
+        idea.title,
+        idea.details || idea.summary,
+        options.githubMode === "github" ? options.githubIssueUrl : null,
+        options.githubMode === "github" ? options.githubIssueNumber : null,
+        JSON.stringify(idea.labels),
+        timestamp
+      ]
+    );
+    if (options.githubMode === "github") {
+      await this.applyIdeaGitHubIssue(queryable, idea.id, options, timestamp);
+    }
+    const card = boardCardFromRow(created.rows[0]);
+    await this.addActivity(queryable, "board.created", `Created board card: ${card.title}`, timestamp);
+    return card;
+  }
+
+  private async applyIdeaGitHubIssue(
+    queryable: Pick<Pool | PoolClient, "query">,
+    ideaId: string,
+    options: CreateBoardCardOptions,
+    timestamp = nowIso()
+  ) {
+    if (options.githubMode !== "github") {
+      return;
+    }
+    await queryable.query(
+      `update ideas
+       set github_issue_url = $2,
+           github_issue_number = $3,
+           updated_at = $4
+       where id = $1`,
+      [ideaId, options.githubIssueUrl, options.githubIssueNumber, timestamp]
+    );
+  }
+
+  private async addActivity(
+    queryable: Pick<Pool | PoolClient, "query">,
+    type: string,
+    message: string,
+    createdAt = nowIso()
+  ) {
+    await queryable.query(
+      "insert into activity_events (id, type, message, created_at) values ($1, $2, $3, $4)",
+      [randomUUID(), type, message, createdAt]
+    );
+    await queryable.query(
+      `delete from activity_events
+       where id not in (
+         select id from activity_events
+         order by created_at desc
+         limit 100
+      )`
+    );
+  }
+
+  private async apiTokenSummary(
+    row: ApiTokenRow,
+    queryable: Pick<Pool | PoolClient, "query"> = this.pool
+  ): Promise<ApiTokenSummary> {
+    const projects = await queryable.query<Pick<ProjectRow, "id" | "key" | "title">>(
+      `select projects.id, projects.key, projects.title
+       from projects
+       inner join api_token_projects on api_token_projects.project_id = projects.id
+       where api_token_projects.token_id = $1
+       order by projects.key asc, projects.title asc`,
+      [row.id]
+    );
+    return {
+      id: row.id,
+      name: row.name,
+      projects: projects.rows,
+      createdAt: rowTimestamp(row.created_at),
+      lastUsedAt: row.last_used_at ? rowTimestamp(row.last_used_at) : undefined,
+      revokedAt: row.revoked_at ? rowTimestamp(row.revoked_at) : undefined
+    };
+  }
+
+  private async apiTokenProjectIds(
+    queryable: Pick<Pool | PoolClient, "query">,
+    tokenId: string
+  ): Promise<string[]> {
+    const result = await queryable.query<{ project_id: string }>(
+      "select project_id from api_token_projects where token_id = $1 order by project_id asc",
+      [tokenId]
+    );
+    return result.rows.map((row) => row.project_id);
+  }
+}
+
+const rowTimestamp = (value: Date | string): string =>
+  value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+
+const jsonStringArray = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+
+const projectFromRow = (row: ProjectRow): Project => ({
+  id: row.id,
+  key: row.key,
+  title: row.title,
+  summary: row.summary,
+  createdAt: rowTimestamp(row.created_at),
+  updatedAt: rowTimestamp(row.updated_at)
+});
+
+const ideaFromRow = (row: IdeaRow): Idea => ({
+  id: row.id,
+  projectId: row.project_id,
+  taskNumber: row.task_number,
+  title: row.title,
+  summary: row.summary,
+  details: row.details,
+  status: row.status,
+  labels: jsonStringArray(row.labels),
+  acceptanceCriteria: jsonStringArray(row.acceptance_criteria),
+  githubIssueUrl: row.github_issue_url ?? undefined,
+  githubIssueNumber: row.github_issue_number ?? undefined,
+  createdAt: rowTimestamp(row.created_at),
+  updatedAt: rowTimestamp(row.updated_at)
+});
+
+const boardCardFromRow = (row: BoardCardRow): BoardCard => ({
+  id: row.id,
+  projectId: row.project_id,
+  title: row.title,
+  details: row.details,
+  column: row.column_name,
+  ideaId: row.idea_id ?? undefined,
+  githubIssueUrl: row.github_issue_url ?? undefined,
+  githubIssueNumber: row.github_issue_number ?? undefined,
+  labels: jsonStringArray(row.labels),
+  createdAt: rowTimestamp(row.created_at),
+  updatedAt: rowTimestamp(row.updated_at)
+});
+
+const documentFromRow = (row: DocumentRow): PlanDocument => ({
+  id: row.id,
+  projectId: row.project_id,
+  title: row.title,
+  kind: row.kind,
+  content: row.content,
+  linkedIdeaIds: jsonStringArray(row.linked_idea_ids),
+  linkedCardIds: jsonStringArray(row.linked_card_ids),
+  createdAt: rowTimestamp(row.created_at),
+  updatedAt: rowTimestamp(row.updated_at)
+});
+
+const activityFromRow = (row: ActivityRow): ActivityEvent => ({
+  id: row.id,
+  type: row.type,
+  message: row.message,
+  createdAt: rowTimestamp(row.created_at)
+});
 
 export class BoardStore {
   private data: BoardData;

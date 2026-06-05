@@ -4,7 +4,9 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import * as z from "zod/v4";
 
 import { boardColumns, documentKinds } from "../shared/types.js";
-import type { BoardStore } from "./storage.js";
+import { parseBearerToken } from "./auth.js";
+import { createMcpToolHandlers } from "./mcpTools.js";
+import { tokenAccess, type AccessContext, type BoardDataStore } from "./store.js";
 
 const jsonContent = (value: unknown) => ({
   content: [
@@ -15,18 +17,19 @@ const jsonContent = (value: unknown) => ({
   ]
 });
 
-export const createMcpServer = (store: BoardStore) => {
+export const createMcpServer = (store: BoardDataStore, access: AccessContext) => {
   const server = new McpServer({
     name: "vibepod-board",
     version: "0.1.0"
   });
+  const handlers = createMcpToolHandlers(store, access);
 
   server.registerResource(
     "board-state",
     "vibepod-board://state",
     {
       title: "VibePod Board State",
-      description: "Full vibepod-board state as JSON.",
+      description: "Full scoped vibepod-board state as JSON.",
       mimeType: "application/json"
     },
     async (uri) => ({
@@ -34,7 +37,7 @@ export const createMcpServer = (store: BoardStore) => {
         {
           uri: uri.href,
           mimeType: "application/json",
-          text: JSON.stringify(store.getState(), null, 2)
+          text: JSON.stringify(await handlers.read_state(), null, 2)
         }
       ]
     })
@@ -46,7 +49,7 @@ export const createMcpServer = (store: BoardStore) => {
       title: "List Projects",
       description: "List projects that contain tasks, board cards, and notes."
     },
-    async () => jsonContent({ items: store.listProjects() })
+    async () => jsonContent(await handlers.list_projects())
   );
 
   server.registerTool(
@@ -60,7 +63,7 @@ export const createMcpServer = (store: BoardStore) => {
         summary: z.string().optional()
       }
     },
-    async (input) => jsonContent({ item: store.createProject(input) })
+    async (input) => jsonContent(await handlers.create_project(input))
   );
 
   server.registerTool(
@@ -72,7 +75,7 @@ export const createMcpServer = (store: BoardStore) => {
         projectId: z.string().optional()
       }
     },
-    async ({ projectId }) => jsonContent({ items: store.listIdeas(projectId) })
+    async ({ projectId }) => jsonContent(await handlers.list_ideas({ projectId }))
   );
 
   server.registerTool(
@@ -89,7 +92,7 @@ export const createMcpServer = (store: BoardStore) => {
         acceptanceCriteria: z.array(z.string()).optional()
       }
     },
-    async (input) => jsonContent({ item: store.createIdea(input) })
+    async (input) => jsonContent(await handlers.create_idea(input))
   );
 
   server.registerTool(
@@ -101,7 +104,7 @@ export const createMcpServer = (store: BoardStore) => {
         id: z.string().min(1)
       }
     },
-    async ({ id }) => jsonContent({ item: store.markIdeaReady(id) })
+    async ({ id }) => jsonContent(await handlers.mark_idea_ready({ id }))
   );
 
   server.registerTool(
@@ -113,7 +116,7 @@ export const createMcpServer = (store: BoardStore) => {
         projectId: z.string().optional()
       }
     },
-    async ({ projectId }) => jsonContent({ columns: store.getBoardColumns(projectId) })
+    async ({ projectId }) => jsonContent(await handlers.list_board({ projectId }))
   );
 
   server.registerTool(
@@ -126,7 +129,7 @@ export const createMcpServer = (store: BoardStore) => {
         column: z.enum(boardColumns)
       }
     },
-    async ({ id, column }) => jsonContent({ item: store.moveBoardCard(id, column) })
+    async ({ id, column }) => jsonContent(await handlers.move_board_card({ id, column }))
   );
 
   server.registerTool(
@@ -143,7 +146,7 @@ export const createMcpServer = (store: BoardStore) => {
         linkedCardIds: z.array(z.string()).optional()
       }
     },
-    async (input) => jsonContent({ item: store.createDocument(input) })
+    async (input) => jsonContent(await handlers.create_document(input))
   );
 
   server.registerTool(
@@ -155,17 +158,28 @@ export const createMcpServer = (store: BoardStore) => {
         projectId: z.string().optional()
       }
     },
-    async ({ projectId }) => jsonContent({ items: store.listDocuments(projectId) })
+    async ({ projectId }) => jsonContent(await handlers.list_documents({ projectId }))
   );
 
   return server;
 };
 
-export const createMcpRouter = (store: BoardStore) => {
+export const createMcpRouter = (store: BoardDataStore) => {
   const router = Router();
 
   router.post("/", async (req, res) => {
-    const server = createMcpServer(store);
+    const token = parseBearerToken(req.headers.authorization);
+    if (!token) {
+      res.status(401).json({ error: "Authentication required" });
+      return;
+    }
+    const authenticated = await store.authenticateApiToken(token);
+    if (!authenticated) {
+      res.status(401).json({ error: "Invalid or revoked token" });
+      return;
+    }
+
+    const server = createMcpServer(store, tokenAccess(authenticated.tokenId, authenticated.projectIds));
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined
     });

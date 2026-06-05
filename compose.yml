@@ -2,23 +2,42 @@ services:
   board:
     build: .
     image: vibepod-board:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "3000:3000"
     environment:
       PORT: "3000"
       HOST: "0.0.0.0"
-      DATA_DIR: /data
+      DATABASE_URL: postgres://${POSTGRES_USER:-vibepod}:${POSTGRES_PASSWORD:-vibepod}@postgres:5432/${POSTGRES_DB:-vibepod_board}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin-password}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       GITHUB_REPOSITORY: ${GITHUB_REPOSITORY:-}
-    volumes:
-      - vibepod-board-data:/data
     networks:
       vibepod:
         aliases:
           - vibepod-board
 
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-vibepod_board}
+      POSTGRES_USER: ${POSTGRES_USER:-vibepod}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vibepod}
+    volumes:
+      - vibepod-board-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vibepod} -d ${POSTGRES_DB:-vibepod_board}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - vibepod
+
 volumes:
-  vibepod-board-data:
+  vibepod-board-postgres-data:
 
 networks:
   vibepod:

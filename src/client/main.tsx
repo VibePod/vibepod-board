@@ -10,6 +10,7 @@ import {
   Code,
   createTheme,
   Group,
+  MultiSelect,
   MantineProvider,
   Modal,
   Paper,
@@ -31,7 +32,9 @@ import {
   ExternalLink,
   FileText,
   FolderKanban,
+  KeyRound,
   ListChecks,
+  LogOut,
   Moon,
   Pencil,
   Plus,
@@ -40,12 +43,17 @@ import {
   Save,
   Sun
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useEffect, useState } from "react";
+import React, { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { endpointOptions, integrationExamples } from "../shared/integrationExamples.js";
+import { integrationExamplesForToken } from "../shared/integrationExamples.js";
 import {
+  type ApiTokenSummary,
+  type AuthMeResponse,
   boardColumns,
+  type CreateApiTokenInput,
+  type CreatedApiTokenResponse,
   documentKinds,
   ideaStatuses,
   type BoardCard,
@@ -90,6 +98,16 @@ type AppState = {
 
 type ActiveView = NavigationView;
 
+type AuthState =
+  | { status: "checking" }
+  | { status: "authenticated"; username: string }
+  | { status: "unauthenticated" };
+
+type LoginDraft = {
+  username: string;
+  password: string;
+};
+
 type ProjectDraft = {
   id?: string;
   key: string;
@@ -124,6 +142,11 @@ type ProjectModalState = {
   draft: ProjectDraft;
 };
 
+type CreatedTokenState = {
+  name: string;
+  token: string;
+} | null;
+
 const emptyColumns: BoardColumns = {
   ready: [],
   planned: [],
@@ -153,9 +176,20 @@ const emptyNoteDraft = (): NoteDraft => ({
   linkedIdeaId: ""
 });
 
+const emptyLoginDraft = (): LoginDraft => ({
+  username: "",
+  password: ""
+});
+
+const emptyTokenDraft = (): CreateApiTokenInput => ({
+  name: "",
+  projectIds: []
+});
+
 const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(path, {
     ...init,
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       ...init?.headers
@@ -212,6 +246,8 @@ const appTheme = createTheme({
 
 const App = () => {
   const { colorScheme, toggleColorScheme } = useMantineColorScheme();
+  const [auth, setAuth] = useState<AuthState>({ status: "checking" });
+  const [loginDraft, setLoginDraft] = useState<LoginDraft>(emptyLoginDraft());
   const [state, setState] = useState<AppState>({
     projects: [],
     ideas: [],
@@ -233,6 +269,10 @@ const App = () => {
   const [error, setError] = useState<string>("");
   const [isLoading, setIsLoading] = useState(true);
   const [isMcpGuideOpen, setIsMcpGuideOpen] = useState(false);
+  const [isTokenManagerOpen, setIsTokenManagerOpen] = useState(false);
+  const [tokens, setTokens] = useState<ApiTokenSummary[]>([]);
+  const [createdToken, setCreatedToken] = useState<CreatedTokenState>(null);
+  const [tokenDraft, setTokenDraft] = useState<CreateApiTokenInput>(emptyTokenDraft());
 
   const loadState = async () => {
     setError("");
@@ -251,11 +291,90 @@ const App = () => {
     setIsLoading(false);
   };
 
+  const loginAdmin = async (event: FormEvent) => {
+    event.preventDefault();
+    setError("");
+    try {
+      const me = await api<AuthMeResponse>("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify(loginDraft)
+      });
+      setAuth({ status: "authenticated", username: me.username ?? loginDraft.username });
+      setLoginDraft(emptyLoginDraft());
+      setIsLoading(true);
+      await loadState();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to sign in");
+    }
+  };
+
+  const logoutAdmin = async () => {
+    await api<AuthMeResponse>("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    setAuth({ status: "unauthenticated" });
+    setState({ projects: [], ideas: [], columns: emptyColumns, documents: [] });
+    setSelectedProjectId("");
+    setActiveView("projects");
+    setIsTokenManagerOpen(false);
+  };
+
+  const loadTokens = async () => {
+    const response = await api<{ items: ApiTokenSummary[] }>("/api/tokens");
+    setTokens(response.items);
+  };
+
+  const openTokenManager = async () => {
+    setError("");
+    setCreatedToken(null);
+    setTokenDraft(emptyTokenDraft());
+    setIsTokenManagerOpen(true);
+    try {
+      await loadTokens();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load tokens");
+    }
+  };
+
+  const createToken = async (event: FormEvent) => {
+    event.preventDefault();
+    setError("");
+    try {
+      const created = await api<CreatedApiTokenResponse>("/api/tokens", {
+        method: "POST",
+        body: JSON.stringify(tokenDraft)
+      });
+      setCreatedToken({ name: created.item.name, token: created.token });
+      setTokenDraft(emptyTokenDraft());
+      await loadTokens();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create token");
+    }
+  };
+
+  const revokeToken = async (tokenId: string) => {
+    setError("");
+    await api(`/api/tokens/${tokenId}/revoke`, { method: "POST" });
+    await loadTokens();
+  };
+
   useEffect(() => {
-    loadState().catch((err: unknown) => {
-      setError(err instanceof Error ? err.message : "Failed to load board");
-      setIsLoading(false);
-    });
+    const bootstrap = async () => {
+      try {
+        const me = await api<AuthMeResponse>("/api/auth/me");
+        if (!me.authenticated) {
+          setAuth({ status: "unauthenticated" });
+          setIsLoading(false);
+          return;
+        }
+        setAuth({ status: "authenticated", username: me.username ?? "admin" });
+        await loadState();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load board");
+        setAuth({ status: "unauthenticated" });
+        setIsLoading(false);
+      }
+    };
+
+    void bootstrap();
   }, []);
 
   useEffect(() => {
@@ -278,13 +397,14 @@ const App = () => {
   }, []);
 
   useEffect(() => {
-    if (!isMcpGuideOpen && !projectModal && !taskModal && !taskViewModal && !noteModal) {
+    if (!isMcpGuideOpen && !isTokenManagerOpen && !projectModal && !taskModal && !taskViewModal && !noteModal) {
       return;
     }
 
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setIsMcpGuideOpen(false);
+        setIsTokenManagerOpen(false);
         setProjectModal(null);
         setTaskModal(null);
         setTaskViewModal(null);
@@ -294,7 +414,7 @@ const App = () => {
 
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [isMcpGuideOpen, projectModal, taskModal, taskViewModal, noteModal]);
+  }, [isMcpGuideOpen, isTokenManagerOpen, projectModal, taskModal, taskViewModal, noteModal]);
 
   const selectedProject = state.projects.find((project) => project.id === selectedProjectId);
   const projectIdeas = selectedProject ? state.ideas.filter((idea) => idea.projectId === selectedProject.id) : [];
@@ -324,6 +444,63 @@ const App = () => {
   const showProjectSidebar = shouldShowProjectSidebar(activeView, !!selectedProject);
   const projectOptions = projectSelectorOptions(state.projects);
   const isDarkTheme = colorScheme === "dark";
+
+  if (auth.status === "checking") {
+    return (
+      <main className="login-shell">
+        <Paper className="login-panel" withBorder radius="md" p="lg">
+          <Alert color="blue" variant="light">
+            Loading board...
+          </Alert>
+        </Paper>
+      </main>
+    );
+  }
+
+  if (auth.status === "unauthenticated") {
+    return (
+      <main className="login-shell">
+        <Paper className="login-panel" withBorder radius="md" p="xl">
+          <form className="modal-form" onSubmit={(event) => void loginAdmin(event)}>
+            <Stack gap="md">
+              <Group gap="sm">
+                <ThemeIcon variant="light" color="teal" size={42} radius="md">
+                  <KeyRound size={22} />
+                </ThemeIcon>
+                <Box>
+                  <Title order={2}>Admin Login</Title>
+                  <Text c="dimmed">vibepod-board</Text>
+                </Box>
+              </Group>
+              {error && (
+                <Alert color="red" variant="light">
+                  {error}
+                </Alert>
+              )}
+              <TextInput
+                label="Username"
+                aria-label="Username"
+                value={loginDraft.username}
+                onChange={(event) => setLoginDraft((current) => ({ ...current, username: event.target.value }))}
+                required
+              />
+              <TextInput
+                label="Password"
+                aria-label="Password"
+                type="password"
+                value={loginDraft.password}
+                onChange={(event) => setLoginDraft((current) => ({ ...current, password: event.target.value }))}
+                required
+              />
+              <Button type="submit" leftSection={<KeyRound size={16} />}>
+                Sign In
+              </Button>
+            </Stack>
+          </form>
+        </Paper>
+      </main>
+    );
+  }
 
   const navigateTo = (navigation: NavigationState) => {
     const path = formatNavigationPath(navigation);
@@ -600,6 +777,24 @@ const App = () => {
             onClick={() => setIsMcpGuideOpen(true)}
           >
             MCP Integration
+          </Button>
+          <Button
+            type="button"
+            variant="light"
+            color="gray"
+            leftSection={<KeyRound size={16} />}
+            onClick={() => void openTokenManager()}
+          >
+            API Tokens
+          </Button>
+          <Button
+            type="button"
+            variant="subtle"
+            color="gray"
+            leftSection={<LogOut size={16} />}
+            onClick={() => void logoutAdmin()}
+          >
+            Logout
           </Button>
         </Group>
       </header>
@@ -1295,6 +1490,123 @@ const App = () => {
       </Modal>
 
       <Modal
+        opened={isTokenManagerOpen}
+        onClose={() => setIsTokenManagerOpen(false)}
+        title="API Tokens"
+        centered
+        size="xl"
+      >
+        <Stack gap="lg">
+          {createdToken && (
+            <Paper className="token-created" withBorder radius="md" p="md">
+              <Stack gap="sm">
+                <Group align="center" justify="space-between">
+                  <Title order={3}>{createdToken.name}</Title>
+                  <Badge variant="light" color="green">
+                    New Token
+                  </Badge>
+                </Group>
+                <Code block>{createdToken.token}</Code>
+                <Stack className="token-config" gap="md">
+                  {integrationExamplesForToken(createdToken.token).map((example) => (
+                    <Paper className="integration-example" withBorder radius="md" p="md" key={example.id}>
+                      <Stack gap="sm">
+                        <Title order={4}>{example.name}</Title>
+                        {example.command && (
+                          <pre>
+                            <code>{example.command}</code>
+                          </pre>
+                        )}
+                        <Text size="sm" fw={700}>
+                          {example.configLabel}
+                        </Text>
+                        <pre>
+                          <code>{example.config}</code>
+                        </pre>
+                      </Stack>
+                    </Paper>
+                  ))}
+                </Stack>
+              </Stack>
+            </Paper>
+          )}
+
+          <Paper withBorder radius="md" p="md">
+            <form className="modal-form" onSubmit={(event) => void createToken(event)}>
+              <Stack gap="md">
+                <Title order={3}>Create Token</Title>
+                <TextInput
+                  label="Token Name"
+                  value={tokenDraft.name}
+                  onChange={(event) =>
+                    setTokenDraft((current) => ({ ...current, name: event.currentTarget.value }))
+                  }
+                  required
+                />
+                <MultiSelect
+                  label="Projects"
+                  value={tokenDraft.projectIds}
+                  onChange={(projectIds) => setTokenDraft((current) => ({ ...current, projectIds }))}
+                  data={projectOptions}
+                  searchable
+                  required
+                />
+                <Group justify="flex-end">
+                  <Button type="submit" leftSection={<KeyRound size={16} />}>
+                    Create Token
+                  </Button>
+                </Group>
+              </Stack>
+            </form>
+          </Paper>
+
+          <Stack className="token-list" gap="sm">
+            {tokens.length === 0 && (
+              <Paper className="empty-state inline" withBorder radius="md" p="md">
+                <Text c="dimmed">No API tokens yet.</Text>
+              </Paper>
+            )}
+            {tokens.map((token) => (
+              <Paper withBorder radius="md" p="md" key={token.id}>
+                <Group align="flex-start" justify="space-between" gap="md">
+                  <Box>
+                    <Group gap="xs">
+                      <Title order={3}>{token.name}</Title>
+                      {token.revokedAt && (
+                        <Badge variant="light" color="red">
+                          Revoked
+                        </Badge>
+                      )}
+                    </Group>
+                    <Group gap={6} mt="xs">
+                      {token.projects.map((project) => (
+                        <Badge key={project.id} variant="light" color="gray">
+                          {project.key}
+                        </Badge>
+                      ))}
+                    </Group>
+                    <Text c="dimmed" size="sm" mt="xs">
+                      Created {formatDateTime(token.createdAt)}
+                      {token.lastUsedAt ? `, last used ${formatDateTime(token.lastUsedAt)}` : ""}
+                    </Text>
+                  </Box>
+                  <Button
+                    type="button"
+                    variant="light"
+                    color="red"
+                    disabled={!!token.revokedAt}
+                    onClick={() => void revokeToken(token.id)}
+                  >
+                    Revoke
+                  </Button>
+                </Group>
+              </Paper>
+            ))}
+          </Stack>
+        </Stack>
+      </Modal>
+
+      <Modal
         opened={isMcpGuideOpen}
         onClose={() => setIsMcpGuideOpen(false)}
         title="MCP Integration Guide"
@@ -1356,7 +1668,7 @@ const App = () => {
   );
 };
 
-const AppShell = () => (
+export const AppShell = () => (
   <MantineProvider defaultColorScheme="light" theme={appTheme}>
     <App />
   </MantineProvider>
@@ -1393,6 +1705,9 @@ const normalizeProjectKeyInput = (value: string) =>
     .toUpperCase()
     .replace(/[^A-Z]/g, "")
     .slice(0, 3);
+
+const formatDateTime = (value: string) =>
+  value ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : "";
 
 const statusColors: Record<IdeaStatus, string> = {
   idea: "gray",
@@ -1434,4 +1749,7 @@ const viewTitle = (activeView: ActiveView, project: Project | undefined) => {
   return `${project.title} Notes`;
 };
 
-createRoot(document.getElementById("root")!).render(<AppShell />);
+const rootElement = document.getElementById("root");
+if (rootElement) {
+  createRoot(rootElement).render(<AppShell />);
+}

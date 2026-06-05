@@ -8,6 +8,25 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: vibepod_board_test
+          POSTGRES_USER: vibepod
+          POSTGRES_PASSWORD: vibepod
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vibepod -d vibepod_board_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://vibepod:vibepod@localhost:5432/vibepod_board_test
+      DATABASE_URL: postgres://vibepod:vibepod@localhost:5432/vibepod_board_test
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: admin-password
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

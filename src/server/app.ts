@@ -1,15 +1,26 @@
 import cors from "cors";
-import express, { type ErrorRequestHandler, type RequestHandler } from "express";
+import express, {
+  type ErrorRequestHandler,
+  type Request,
+  type RequestHandler
+} from "express";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 
 import { boardColumns, documentKinds, ideaStatuses } from "../shared/types.js";
-import type { BoardStore } from "./storage.js";
+import {
+  parseBearerToken,
+  sessionFromRequest,
+  setSessionCookie,
+  type AdminSessionManager
+} from "./auth.js";
 import { createMcpRouter } from "./mcp.js";
+import { adminAccess, tokenAccess, type AccessContext, type BoardDataStore } from "./store.js";
 
 type CreateAppOptions = {
-  store: BoardStore;
+  store: BoardDataStore;
+  sessions: AdminSessionManager;
   publicDir?: string;
 };
 
@@ -17,6 +28,11 @@ type GitHubIssue = {
   html_url: string;
   number: number;
 };
+
+const loginSchema = z.object({
+  username: z.string(),
+  password: z.string()
+});
 
 const ideaSchema = z.object({
   projectId: z.string().optional(),
@@ -80,7 +96,17 @@ const updateDocumentSchema = z.object({
   linkedCardIds: z.array(z.string()).optional()
 });
 
-export const createApp = ({ store, publicDir }: CreateAppOptions) => {
+const tokenSchema = z.object({
+  name: z.string().trim().min(1),
+  projectIds: z.array(z.string().trim().min(1)).min(1)
+});
+
+const updateTokenSchema = z.object({
+  name: z.string().trim().min(1).optional(),
+  projectIds: z.array(z.string().trim().min(1)).min(1).optional()
+});
+
+export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
   const app = express();
   app.disable("x-powered-by");
   app.use(cors());
@@ -94,10 +120,40 @@ export const createApp = ({ store, publicDir }: CreateAppOptions) => {
     });
   });
 
+  app.post("/api/auth/login", (req, res) => {
+    const { username, password } = loginSchema.parse(req.body);
+    const session = sessions.login(username, password);
+    if (!session) {
+      res.status(401).json({ error: "Invalid username or password" });
+      return;
+    }
+    setSessionCookie(res, session.cookie);
+    res.json({ authenticated: true, username: session.username });
+  });
+
+  app.post("/api/auth/logout", (req, res) => {
+    const session = sessionFromRequest(req, sessions);
+    if (session) {
+      sessions.logout(session.id);
+    }
+    setSessionCookie(res, sessions.clearCookie);
+    res.json({ authenticated: false });
+  });
+
+  app.get("/api/auth/me", (req, res) => {
+    const session = sessionFromRequest(req, sessions);
+    if (!session) {
+      res.json({ authenticated: false });
+      return;
+    }
+    res.json({ authenticated: true, username: session.username });
+  });
+
   app.get("/api/mcp-info", (_req, res) => {
     res.json({
       endpoint: "/mcp",
       transport: "streamable-http",
+      auth: "bearer",
       tools: [
         "list_projects",
         "create_project",
@@ -113,101 +169,178 @@ export const createApp = ({ store, publicDir }: CreateAppOptions) => {
     });
   });
 
-  app.get("/api/projects", (_req, res) => {
-    res.json({ items: store.listProjects() });
-  });
+  app.get(
+    "/api/projects",
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      res.json({ items: await store.listProjects(accessFromResponse(req)) });
+    })
+  );
 
   app.post(
     "/api/projects",
-    asyncHandler((req, res) => {
-      const item = store.createProject(projectSchema.parse(req.body));
+    requireAdmin(store, sessions),
+    asyncHandler(async (req, res) => {
+      const item = await store.createProject(projectSchema.parse(req.body));
       res.status(201).json({ item });
     })
   );
 
   app.patch(
     "/api/projects/:id",
-    asyncHandler((req, res) => {
-      const item = store.updateProject(routeParam(req.params.id), updateProjectSchema.parse(req.body));
+    requireAdmin(store, sessions),
+    asyncHandler(async (req, res) => {
+      const item = await store.updateProject(routeParam(req.params.id), updateProjectSchema.parse(req.body));
       res.json({ item });
     })
   );
 
-  app.get("/api/ideas", (req, res) => {
-    res.json({ items: store.listIdeas(queryParam(req.query.projectId)) });
-  });
+  app.get(
+    "/api/ideas",
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      res.json({ items: await store.listIdeas(accessFromResponse(req), queryParam(req.query.projectId)) });
+    })
+  );
 
   app.post(
     "/api/ideas",
-    asyncHandler((req, res) => {
-      const item = store.createIdea(ideaSchema.parse(req.body));
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      const item = await store.createIdea(accessFromResponse(req), ideaSchema.parse(req.body));
       res.status(201).json({ item });
     })
   );
 
   app.patch(
     "/api/ideas/:id",
-    asyncHandler((req, res) => {
-      const item = store.updateIdea(routeParam(req.params.id), updateIdeaSchema.parse(req.body));
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      const item = await store.updateIdea(
+        accessFromResponse(req),
+        routeParam(req.params.id),
+        updateIdeaSchema.parse(req.body)
+      );
       res.json({ item });
     })
   );
 
   app.post(
     "/api/ideas/:id/ready",
-    asyncHandler((req, res) => {
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
       const { available } = readySchema.parse(req.body ?? {});
-      const item = store.setIdeaBoardAvailability(routeParam(req.params.id), available);
+      const item = await store.setIdeaBoardAvailability(
+        accessFromResponse(req),
+        routeParam(req.params.id),
+        available
+      );
       res.json({ item });
     })
   );
 
   app.post(
     "/api/ideas/:id/sync-github",
+    requireAccess(store, sessions),
     asyncHandler(async (req, res) => {
+      const access = accessFromResponse(req);
       const id = routeParam(req.params.id);
-      const github = await maybeCreateGitHubIssue(store, id);
-      const card = store.createBoardCardFromIdea(id, github);
+      const github = await maybeCreateGitHubIssue(store, access, id);
+      const card = await store.createBoardCardFromIdea(access, id, github);
       res.json({ mode: github.githubMode, card });
     })
   );
 
-  app.get("/api/board", (req, res) => {
-    res.json({ columns: store.getBoardColumns(queryParam(req.query.projectId)) });
-  });
+  app.get(
+    "/api/board",
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      res.json({ columns: await store.getBoardColumns(accessFromResponse(req), queryParam(req.query.projectId)) });
+    })
+  );
 
   app.patch(
     "/api/board/:id",
-    asyncHandler((req, res) => {
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
       const { column } = moveCardSchema.parse(req.body);
-      const item = store.moveBoardCard(routeParam(req.params.id), column);
+      const item = await store.moveBoardCard(accessFromResponse(req), routeParam(req.params.id), column);
       res.json({ item });
     })
   );
 
-  app.get("/api/documents", (req, res) => {
-    res.json({ items: store.listDocuments(queryParam(req.query.projectId)) });
-  });
+  app.get(
+    "/api/documents",
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      res.json({ items: await store.listDocuments(accessFromResponse(req), queryParam(req.query.projectId)) });
+    })
+  );
 
   app.post(
     "/api/documents",
-    asyncHandler((req, res) => {
-      const item = store.createDocument(documentSchema.parse(req.body));
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      const item = await store.createDocument(accessFromResponse(req), documentSchema.parse(req.body));
       res.status(201).json({ item });
     })
   );
 
   app.patch(
     "/api/documents/:id",
-    asyncHandler((req, res) => {
-      const item = store.updateDocument(routeParam(req.params.id), updateDocumentSchema.parse(req.body));
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      const item = await store.updateDocument(
+        accessFromResponse(req),
+        routeParam(req.params.id),
+        updateDocumentSchema.parse(req.body)
+      );
       res.json({ item });
     })
   );
 
-  app.get("/api/activity", (_req, res) => {
-    res.json({ items: store.listActivity() });
-  });
+  app.get(
+    "/api/activity",
+    requireAdmin(store, sessions),
+    asyncHandler(async (req, res) => {
+      res.json({ items: await store.listActivity(accessFromResponse(req)) });
+    })
+  );
+
+  app.get(
+    "/api/tokens",
+    requireAdmin(store, sessions),
+    asyncHandler(async (_req, res) => {
+      res.json({ items: await store.listApiTokens() });
+    })
+  );
+
+  app.post(
+    "/api/tokens",
+    requireAdmin(store, sessions),
+    asyncHandler(async (req, res) => {
+      const created = await store.createApiToken(tokenSchema.parse(req.body));
+      res.status(201).json(created);
+    })
+  );
+
+  app.patch(
+    "/api/tokens/:id",
+    requireAdmin(store, sessions),
+    asyncHandler(async (req, res) => {
+      const item = await store.updateApiToken(routeParam(req.params.id), updateTokenSchema.parse(req.body));
+      res.json({ item });
+    })
+  );
+
+  app.post(
+    "/api/tokens/:id/revoke",
+    requireAdmin(store, sessions),
+    asyncHandler(async (req, res) => {
+      const item = await store.revokeApiToken(routeParam(req.params.id));
+      res.json({ item });
+    })
+  );
 
   app.use("/mcp", createMcpRouter(store));
 
@@ -228,6 +361,52 @@ const asyncHandler =
     Promise.resolve(handler(req, res, next)).catch(next);
   };
 
+const requireAccess = (store: BoardDataStore, sessions: AdminSessionManager): RequestHandler =>
+  asyncHandler(async (req, res, next) => {
+    const access = await getAccess(req, store, sessions);
+    if (!access) {
+      res.status(401).json({ error: "Authentication required" });
+      return;
+    }
+    res.locals.access = access;
+    next();
+  });
+
+const requireAdmin = (store: BoardDataStore, sessions: AdminSessionManager): RequestHandler =>
+  asyncHandler(async (req, res, next) => {
+    const access = await getAccess(req, store, sessions);
+    if (!access) {
+      res.status(401).json({ error: "Authentication required" });
+      return;
+    }
+    if (access.kind !== "admin") {
+      res.status(403).json({ error: "Admin access required" });
+      return;
+    }
+    res.locals.access = access;
+    next();
+  });
+
+const getAccess = async (
+  req: Request,
+  store: BoardDataStore,
+  sessions: AdminSessionManager
+): Promise<AccessContext | null> => {
+  const session = sessionFromRequest(req, sessions);
+  if (session) {
+    return adminAccess(session.username);
+  }
+
+  const token = parseBearerToken(req.headers.authorization);
+  if (!token) {
+    return null;
+  }
+  const authenticated = await store.authenticateApiToken(token);
+  return authenticated ? tokenAccess(authenticated.tokenId, authenticated.projectIds) : null;
+};
+
+const accessFromResponse = (req: Request): AccessContext => req.res?.locals.access as AccessContext;
+
 const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
   const message = error instanceof Error ? error.message : "Unknown error";
   if (error instanceof z.ZodError) {
@@ -236,6 +415,10 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
   }
   if (message.includes("not found")) {
     res.status(404).json({ error: message });
+    return;
+  }
+  if (message.includes("not allowed") || message.includes("not mapped") || message.includes("Admin access")) {
+    res.status(403).json({ error: message });
     return;
   }
   if (message.includes("Only ready ideas")) {
@@ -258,14 +441,14 @@ const queryParam = (value: unknown): string | undefined => {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 };
 
-const maybeCreateGitHubIssue = async (store: BoardStore, ideaId: string) => {
+const maybeCreateGitHubIssue = async (store: BoardDataStore, access: AccessContext, ideaId: string) => {
   const token = process.env.GITHUB_TOKEN;
   const repository = process.env.GITHUB_REPOSITORY;
   if (!token || !repository) {
     return { githubMode: "local" as const };
   }
 
-  const idea = store.getState().ideas.find((item) => item.id === ideaId);
+  const idea = (await store.getState(access)).ideas.find((item) => item.id === ideaId);
   if (!idea) {
     throw new Error(`Idea not found: ${ideaId}`);
   }
