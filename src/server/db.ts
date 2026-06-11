@@ -28,6 +28,8 @@ create table if not exists ideas (
   acceptance_criteria jsonb not null default '[]'::jsonb,
   github_issue_url text,
   github_issue_number integer,
+  repository_local_path text,
+  repository_remote_url text,
   created_at timestamptz not null,
   updated_at timestamptz not null,
   unique(project_id, task_number)
@@ -43,6 +45,8 @@ create table if not exists board_cards (
   branch_name text,
   github_issue_url text,
   github_issue_number integer,
+  repository_local_path text,
+  repository_remote_url text,
   labels jsonb not null default '[]'::jsonb,
   created_at timestamptz not null,
   updated_at timestamptz not null
@@ -88,6 +92,10 @@ create index if not exists documents_project_updated_idx on documents(project_id
 create index if not exists activity_events_created_idx on activity_events(created_at desc);
 
 alter table board_cards add column if not exists branch_name text;
+alter table ideas add column if not exists repository_local_path text;
+alter table ideas add column if not exists repository_remote_url text;
+alter table board_cards add column if not exists repository_local_path text;
+alter table board_cards add column if not exists repository_remote_url text;
 `;
 
 export const initializeDatabase = async (pool: Pick<Pool, "query">) => {

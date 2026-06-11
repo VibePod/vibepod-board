@@ -100,9 +100,18 @@ describe("MCP auth", () => {
 
     const updated = await handlers.update_board_card({
       id: mineCard.id,
-      branchName: "vp-task-create"
+      branchName: "vp-task-create",
+      details: "Implemented in vibepod-cli",
+      repositoryLocalPath: "/workspace/vibepod-cli",
+      repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git"
     });
-    expect(updated.item).toMatchObject({ id: mineCard.id, branchName: "vp-task-create" });
+    expect(updated.item).toMatchObject({
+      id: mineCard.id,
+      branchName: "vp-task-create",
+      details: "Implemented in vibepod-cli",
+      repositoryLocalPath: "/workspace/vibepod-cli",
+      repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git"
+    });
 
     await expect(
       handlers.update_board_card({ id: theirCard.id, branchName: "vp-task-cancel" })

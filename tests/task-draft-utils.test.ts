@@ -29,6 +29,8 @@ describe("task draft utilities", () => {
       description: "",
       labels: [],
       acceptanceCriteria: "",
+      repositoryLocalPath: "",
+      repositoryRemoteUrl: "",
       status: "idea"
     });
   });
@@ -41,7 +43,9 @@ describe("task draft utilities", () => {
           details: "Longer task description",
           status: "refining",
           labels: ["ui", "modal"],
-          acceptanceCriteria: ["Labels are selectable", "Criteria is readable"]
+          acceptanceCriteria: ["Labels are selectable", "Criteria is readable"],
+          repositoryLocalPath: "/workspace/vibepod-board",
+          repositoryRemoteUrl: "git@github.com:vibepod/vibepod-board.git"
         })
       )
     ).toMatchObject({
@@ -50,6 +54,8 @@ describe("task draft utilities", () => {
       description: "Short context\n\nLonger task description",
       labels: ["ui", "modal"],
       acceptanceCriteria: "Labels are selectable\nCriteria is readable",
+      repositoryLocalPath: "/workspace/vibepod-board",
+      repositoryRemoteUrl: "git@github.com:vibepod/vibepod-board.git",
       status: "refining"
     });
   });
@@ -61,6 +67,8 @@ describe("task draft utilities", () => {
         description: "One readable task description",
         labels: ["ui", "modal"],
         acceptanceCriteria: "Status and labels share a row\nCriteria uses a full width box",
+        repositoryLocalPath: "/workspace/vibepod-board",
+        repositoryRemoteUrl: "git@github.com:vibepod/vibepod-board.git",
         status: "ready"
       })
     ).toEqual({
@@ -71,7 +79,9 @@ describe("task draft utilities", () => {
       acceptanceCriteria: [
         "Status and labels share a row",
         "Criteria uses a full width box"
-      ]
+      ],
+      repositoryLocalPath: "/workspace/vibepod-board",
+      repositoryRemoteUrl: "git@github.com:vibepod/vibepod-board.git"
     });
   });
 });

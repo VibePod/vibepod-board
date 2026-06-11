@@ -493,6 +493,30 @@ body {
   white-space: normal;
 }
 
+.board-card-repository {
+  background: var(--app-surface-muted);
+  border: 1px solid var(--app-border-muted);
+  border-radius: 6px;
+  padding: 6px;
+}
+
+.board-card-repository-path,
+.board-card-repository-remote {
+  display: block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.board-card-repository-link {
+  align-items: center;
+  display: inline-flex;
+  font-size: 12px;
+  gap: 4px;
+  line-height: 1.25;
+  max-width: 100%;
+}
+
 .label-badge {
   background: var(--app-label-bg);
   border-color: var(--app-border-strong);
