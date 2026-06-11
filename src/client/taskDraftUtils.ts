@@ -9,6 +9,8 @@ export type TaskDraft = {
   description: string;
   labels: string[];
   acceptanceCriteria: string;
+  repositoryLocalPath: string;
+  repositoryRemoteUrl: string;
   status: IdeaStatus;
 };
 
@@ -17,6 +19,8 @@ export const emptyTaskDraft = (): TaskDraft => ({
   description: "",
   labels: [],
   acceptanceCriteria: "",
+  repositoryLocalPath: "",
+  repositoryRemoteUrl: "",
   status: "idea"
 });
 
@@ -29,6 +33,8 @@ export const taskToDraft = (idea: Idea, projectKey?: string): TaskDraft => ({
     .join("\n\n"),
   labels: [...idea.labels],
   acceptanceCriteria: formatListField(idea.acceptanceCriteria),
+  repositoryLocalPath: idea.repositoryLocalPath ?? "",
+  repositoryRemoteUrl: idea.repositoryRemoteUrl ?? "",
   status: idea.status
 });
 
@@ -37,5 +43,7 @@ export const taskDraftToIdeaPayload = (draft: TaskDraft) => ({
   summary: "",
   details: draft.description,
   labels: [...draft.labels],
-  acceptanceCriteria: parseListField(draft.acceptanceCriteria)
+  acceptanceCriteria: parseListField(draft.acceptanceCriteria),
+  repositoryLocalPath: draft.repositoryLocalPath,
+  repositoryRemoteUrl: draft.repositoryRemoteUrl
 });

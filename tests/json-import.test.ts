@@ -107,11 +107,27 @@ describe("JSON import", () => {
             status: "ready",
             labels: ["launch"],
             acceptanceCriteria: [],
+            repositoryLocalPath: "/workspace/vibepod-cli",
+            repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git",
             createdAt: timestamp,
             updatedAt: timestamp
           }
         ],
-        boardCards: [],
+        boardCards: [
+          {
+            id: "card-1",
+            projectId: "project-1",
+            ideaId: "idea-1",
+            title: "Publish",
+            details: "",
+            column: "ready",
+            labels: ["launch"],
+            repositoryLocalPath: "/workspace/vibepod-cli",
+            repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git",
+            createdAt: timestamp,
+            updatedAt: timestamp
+          }
+        ],
         documents: [],
         activity: []
       })}\n`,
@@ -121,7 +137,15 @@ describe("JSON import", () => {
     await importBoardJsonFile(pool, filePath);
 
     expect((await store.listProjects(admin))[0].id).toBe("project-1");
-    expect((await store.listIdeas(admin, "project-1"))[0].title).toBe("Publish");
+    expect((await store.listIdeas(admin, "project-1"))[0]).toMatchObject({
+      title: "Publish",
+      repositoryLocalPath: "/workspace/vibepod-cli",
+      repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git"
+    });
+    expect((await store.getBoardColumns(admin, "project-1")).ready[0]).toMatchObject({
+      repositoryLocalPath: "/workspace/vibepod-cli",
+      repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git"
+    });
   });
 
   it("refuses to import over existing board data", async () => {

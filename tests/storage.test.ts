@@ -154,6 +154,81 @@ describe("PostgresBoardStore", () => {
     );
   });
 
+  it("copies repository metadata from ready tasks onto board cards", async () => {
+    const project = await store.createProject({ title: "CLI", key: "CLI" });
+    const idea = await store.createIdea(admin, {
+      projectId: project.id,
+      title: "Persist lifecycle state",
+      details: "Write lifecycle files in the CLI repository.",
+      repositoryLocalPath: "/workspace/vibepod-cli",
+      repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git"
+    });
+
+    await store.markIdeaReady(admin, idea.id);
+    const [card] = (await store.getBoardColumns(admin, project.id)).ready;
+
+    expect(card).toMatchObject({
+      ideaId: idea.id,
+      details: "Write lifecycle files in the CLI repository.",
+      repositoryLocalPath: "/workspace/vibepod-cli",
+      repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git"
+    });
+  });
+
+  it("syncs edited task details and repository metadata to an existing board card", async () => {
+    const project = await store.createProject({ title: "CLI", key: "CLI" });
+    const idea = await store.createIdea(admin, {
+      projectId: project.id,
+      title: "Persist lifecycle state",
+      details: "Initial implementation details",
+      repositoryLocalPath: "/workspace/old",
+      repositoryRemoteUrl: "git@github.com:vibepod/old.git"
+    });
+    await store.markIdeaReady(admin, idea.id);
+    const [card] = (await store.getBoardColumns(admin, project.id)).ready;
+    await store.updateBoardCard(admin, card.id, { branchName: "vp-task-lifecycle-state" });
+
+    const updated = await store.updateIdea(admin, idea.id, {
+      details: "Updated implementation details",
+      repositoryLocalPath: "/workspace/vibepod-cli",
+      repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git"
+    });
+    const [updatedCard] = (await store.getBoardColumns(admin, project.id)).ready;
+
+    expect(updated).toMatchObject({
+      repositoryLocalPath: "/workspace/vibepod-cli",
+      repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git"
+    });
+    expect(updatedCard).toMatchObject({
+      branchName: "vp-task-lifecycle-state",
+      details: "Updated implementation details",
+      repositoryLocalPath: "/workspace/vibepod-cli",
+      repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git"
+    });
+  });
+
+  it("updates board card implementation details and repository metadata directly", async () => {
+    const project = await store.createProject({ title: "CLI", key: "CLI" });
+    const idea = await store.createIdea(admin, {
+      projectId: project.id,
+      title: "Persist lifecycle state"
+    });
+    await store.markIdeaReady(admin, idea.id);
+    const [card] = (await store.getBoardColumns(admin, project.id)).ready;
+
+    const updated = await store.updateBoardCard(admin, card.id, {
+      details: "Implemented in vibepod-cli",
+      repositoryLocalPath: "/workspace/vibepod-cli",
+      repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git"
+    });
+
+    expect(updated).toMatchObject({
+      details: "Implemented in vibepod-cli",
+      repositoryLocalPath: "/workspace/vibepod-cli",
+      repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git"
+    });
+  });
+
   it("stores execution plan documents linked to ideas and board cards", async () => {
     const idea = await store.createIdea(admin, { title: "MCP bridge", labels: ["mcp"] });
     const card = await store.createBoardCardFromIdea(admin, (await store.markIdeaReady(admin, idea.id)).id, {

@@ -89,7 +89,9 @@ export const createMcpServer = (store: BoardDataStore, access: AccessContext) =>
         summary: z.string().optional(),
         details: z.string().optional(),
         labels: z.array(z.string()).optional(),
-        acceptanceCriteria: z.array(z.string()).optional()
+        acceptanceCriteria: z.array(z.string()).optional(),
+        repositoryLocalPath: z.string().optional(),
+        repositoryRemoteUrl: z.string().optional()
       }
     },
     async (input) => jsonContent(await handlers.create_idea(input))
@@ -108,6 +110,8 @@ export const createMcpServer = (store: BoardDataStore, access: AccessContext) =>
         details: z.string().optional(),
         labels: z.array(z.string()).optional(),
         acceptanceCriteria: z.array(z.string()).optional(),
+        repositoryLocalPath: z.string().optional(),
+        repositoryRemoteUrl: z.string().optional(),
         status: z.enum(ideaStatuses).optional()
       }
     },
@@ -156,11 +160,14 @@ export const createMcpServer = (store: BoardDataStore, access: AccessContext) =>
     {
       title: "Update Board Card",
       description:
-        "Edit board-card metadata such as implementation branch. Only provided fields change.",
+        "Edit board-card metadata such as implementation branch and repository. Only provided fields change.",
       inputSchema: {
         id: z.string().min(1),
         column: z.enum(boardColumns).optional(),
-        branchName: z.string().optional()
+        branchName: z.string().optional(),
+        details: z.string().optional(),
+        repositoryLocalPath: z.string().optional(),
+        repositoryRemoteUrl: z.string().optional()
       }
     },
     async (input) => jsonContent(await handlers.update_board_card(input))

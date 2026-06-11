@@ -40,7 +40,9 @@ const ideaSchema = z.object({
   summary: z.string().optional().default(""),
   details: z.string().optional().default(""),
   labels: z.array(z.string()).optional().default([]),
-  acceptanceCriteria: z.array(z.string()).optional().default([])
+  acceptanceCriteria: z.array(z.string()).optional().default([]),
+  repositoryLocalPath: z.string().optional(),
+  repositoryRemoteUrl: z.string().optional()
 });
 
 const ideaStatusSchema = z.preprocess(
@@ -54,6 +56,8 @@ const updateIdeaSchema = z.object({
   details: z.string().optional(),
   labels: z.array(z.string()).optional(),
   acceptanceCriteria: z.array(z.string()).optional(),
+  repositoryLocalPath: z.string().optional(),
+  repositoryRemoteUrl: z.string().optional(),
   status: ideaStatusSchema.optional()
 });
 
@@ -63,7 +67,10 @@ const readySchema = z.object({
 
 const updateBoardCardSchema = z.object({
   column: z.enum(boardColumns).optional(),
-  branchName: z.string().optional()
+  branchName: z.string().optional(),
+  details: z.string().optional(),
+  repositoryLocalPath: z.string().optional(),
+  repositoryRemoteUrl: z.string().optional()
 });
 
 const projectKeySchema = z.string().trim().regex(/^[A-Z]{1,3}$/, "Project ID must be 1 to 3 capital letters");

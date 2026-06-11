@@ -61,4 +61,27 @@ describe("PostgreSQL schema", () => {
 
     expect(columns.rows.map((row) => row.column_name)).toContain("branch_name");
   });
+
+  it("stores repository metadata on ideas and board cards", async () => {
+    await initializeDatabase(pool);
+
+    const columns = await pool.query<{ table_name: string; column_name: string }>(
+      `select table_name, column_name
+       from information_schema.columns
+       where table_schema = 'public'
+         and table_name in ('ideas', 'board_cards')
+       order by table_name, ordinal_position`
+    );
+    const columnsByTable = new Map<string, string[]>();
+    for (const row of columns.rows) {
+      columnsByTable.set(row.table_name, [...(columnsByTable.get(row.table_name) ?? []), row.column_name]);
+    }
+
+    expect(columnsByTable.get("ideas")).toEqual(
+      expect.arrayContaining(["repository_local_path", "repository_remote_url"])
+    );
+    expect(columnsByTable.get("board_cards")).toEqual(
+      expect.arrayContaining(["repository_local_path", "repository_remote_url"])
+    );
+  });
 });

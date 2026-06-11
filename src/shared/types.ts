@@ -27,6 +27,8 @@ export type Idea = {
   acceptanceCriteria: string[];
   githubIssueUrl?: string;
   githubIssueNumber?: number;
+  repositoryLocalPath?: string;
+  repositoryRemoteUrl?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -41,6 +43,8 @@ export type BoardCard = {
   ideaId?: string;
   githubIssueUrl?: string;
   githubIssueNumber?: number;
+  repositoryLocalPath?: string;
+  repositoryRemoteUrl?: string;
   labels: string[];
   createdAt: string;
   updatedAt: string;
@@ -91,10 +95,22 @@ export type CreateIdeaInput = {
   details?: string;
   labels?: string[];
   acceptanceCriteria?: string[];
+  repositoryLocalPath?: string;
+  repositoryRemoteUrl?: string;
 };
 
 export type UpdateIdeaInput = Partial<
-  Pick<Idea, "title" | "summary" | "details" | "labels" | "acceptanceCriteria" | "status">
+  Pick<
+    Idea,
+    | "title"
+    | "summary"
+    | "details"
+    | "labels"
+    | "acceptanceCriteria"
+    | "status"
+    | "repositoryLocalPath"
+    | "repositoryRemoteUrl"
+  >
 >;
 
 export type CreateBoardCardOptions = {
@@ -104,7 +120,7 @@ export type CreateBoardCardOptions = {
 };
 
 export type UpdateBoardCardInput = Partial<
-  Pick<BoardCard, "column" | "branchName">
+  Pick<BoardCard, "column" | "branchName" | "details" | "repositoryLocalPath" | "repositoryRemoteUrl">
 >;
 
 export type CreateDocumentInput = {

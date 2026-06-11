@@ -254,6 +254,67 @@ describe("API", () => {
     expect(listed.body.columns.ready[0].branchName).toBe("vp-task-lifecycle-state");
   });
 
+  it("updates task repository metadata and syncs it to the board through the API", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+    const created = await agent
+      .post("/api/ideas")
+      .send({
+        title: "Lifecycle state",
+        details: "Initial task details",
+        repositoryLocalPath: "/workspace/old",
+        repositoryRemoteUrl: "git@github.com:vibepod/old.git"
+      })
+      .expect(201);
+
+    await agent.post(`/api/ideas/${created.body.item.id}/ready`).expect(200);
+
+    const updated = await agent
+      .patch(`/api/ideas/${created.body.item.id}`)
+      .send({
+        details: "Implemented in vibepod-cli",
+        repositoryLocalPath: "/workspace/vibepod-cli",
+        repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git"
+      })
+      .expect(200);
+    expect(updated.body.item).toMatchObject({
+      details: "Implemented in vibepod-cli",
+      repositoryLocalPath: "/workspace/vibepod-cli",
+      repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git"
+    });
+
+    const listed = await agent.get("/api/board").expect(200);
+    expect(listed.body.columns.ready[0]).toMatchObject({
+      details: "Implemented in vibepod-cli",
+      repositoryLocalPath: "/workspace/vibepod-cli",
+      repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git"
+    });
+  });
+
+  it("updates board card implementation repository metadata through the board API", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+    const created = await agent.post("/api/ideas").send({ title: "Lifecycle state" }).expect(201);
+    await agent.post(`/api/ideas/${created.body.item.id}/ready`).expect(200);
+    const board = await agent.get("/api/board").expect(200);
+    const cardId = board.body.columns.ready[0].id;
+
+    const updated = await agent
+      .patch(`/api/board/${cardId}`)
+      .send({
+        details: "Implemented in vibepod-cli",
+        repositoryLocalPath: "/workspace/vibepod-cli",
+        repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git"
+      })
+      .expect(200);
+
+    expect(updated.body.item).toMatchObject({
+      details: "Implemented in vibepod-cli",
+      repositoryLocalPath: "/workspace/vibepod-cli",
+      repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git"
+    });
+  });
+
   it("creates documents through the API", async () => {
     const { app } = createAuthedApp();
     const agent = await login(app);

@@ -88,6 +88,7 @@ import { formatTaskId } from "./taskIdentity.js";
 import { taskListCardView } from "./taskCardUtils.js";
 import { taskOverviewForIdea } from "./taskOverviewUtils.js";
 import { filterAndSortTasks, type TaskSortOption } from "./taskListUtils.js";
+import { githubRemoteToHttpsUrl } from "./repositoryUtils.js";
 import "./styles.css";
 
 type AppState = {
@@ -1180,6 +1181,9 @@ const App = () => {
                       const cardTaskId = linkedIdea
                         ? formatTaskId(selectedProject.key, linkedIdea.taskNumber)
                         : null;
+                      const repositoryUrl = card.repositoryRemoteUrl
+                        ? githubRemoteToHttpsUrl(card.repositoryRemoteUrl)
+                        : undefined;
                       return (
                         <Card
                           className="compact-card"
@@ -1226,6 +1230,32 @@ const App = () => {
                                   {card.branchName}
                                 </Badge>
                               </Group>
+                            )}
+                            {(card.repositoryLocalPath || card.repositoryRemoteUrl) && (
+                              <Stack className="board-card-repository" gap={4}>
+                                {card.repositoryLocalPath && (
+                                  <Code className="board-card-repository-path">
+                                    {card.repositoryLocalPath}
+                                  </Code>
+                                )}
+                                {card.repositoryRemoteUrl &&
+                                  (repositoryUrl ? (
+                                    <Anchor
+                                      className="board-card-repository-link"
+                                      href={repositoryUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      onClick={(event) => event.stopPropagation()}
+                                    >
+                                      <ExternalLink size={12} />
+                                      GitHub
+                                    </Anchor>
+                                  ) : (
+                                    <Text className="board-card-repository-remote" size="xs">
+                                      {card.repositoryRemoteUrl}
+                                    </Text>
+                                  ))}
+                              </Stack>
                             )}
                             {cardTaskId && (
                               <Group className="board-card-task-id" justify="flex-end">
@@ -1421,6 +1451,24 @@ const App = () => {
                   placeholder="Select or type labels"
                   clearable
                   splitChars={[","]}
+                />
+              </SimpleGrid>
+              <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+                <TextInput
+                  label="Repository Local Path"
+                  value={taskModal.draft.repositoryLocalPath}
+                  onChange={(event) =>
+                    updateTaskDraft({ repositoryLocalPath: event.target.value })
+                  }
+                  placeholder="/workspace/vibepod-cli"
+                />
+                <TextInput
+                  label="Repository Remote URL"
+                  value={taskModal.draft.repositoryRemoteUrl}
+                  onChange={(event) =>
+                    updateTaskDraft({ repositoryRemoteUrl: event.target.value })
+                  }
+                  placeholder="git@github.com:owner/repo.git"
                 />
               </SimpleGrid>
               <Textarea

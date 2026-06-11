@@ -119,6 +119,8 @@ type IdeaRow = {
   acceptance_criteria: unknown;
   github_issue_url: string | null;
   github_issue_number: number | null;
+  repository_local_path: string | null;
+  repository_remote_url: string | null;
   created_at: Date | string;
   updated_at: Date | string;
 };
@@ -133,6 +135,8 @@ type BoardCardRow = {
   branch_name: string | null;
   github_issue_url: string | null;
   github_issue_number: number | null;
+  repository_local_path: string | null;
+  repository_remote_url: string | null;
   labels: unknown;
   created_at: Date | string;
   updated_at: Date | string;
@@ -290,9 +294,10 @@ export class PostgresBoardStore implements BoardDataStore {
       const result = await client.query<IdeaRow>(
         `insert into ideas (
            id, project_id, task_number, title, summary, details, status, labels,
-           acceptance_criteria, created_at, updated_at
+           acceptance_criteria, github_issue_url, github_issue_number, repository_local_path,
+           repository_remote_url, created_at, updated_at
          )
-         values ($1, $2, $3, $4, $5, $6, 'idea', $7, $8, $9, $9)
+         values ($1, $2, $3, $4, $5, $6, 'idea', $7, $8, null, null, $9, $10, $11, $11)
          returning *`,
         [
           randomUUID(),
@@ -303,6 +308,8 @@ export class PostgresBoardStore implements BoardDataStore {
           input.details?.trim() ?? "",
           JSON.stringify(normalizeList(input.labels)),
           JSON.stringify(normalizeList(input.acceptanceCriteria)),
+          normalizeOptionalText(input.repositoryLocalPath) ?? null,
+          normalizeOptionalText(input.repositoryRemoteUrl) ?? null,
           timestamp
         ]
       );
@@ -335,6 +342,14 @@ export class PostgresBoardStore implements BoardDataStore {
         input.acceptanceCriteria !== undefined
           ? normalizeList(input.acceptanceCriteria)
           : current.acceptanceCriteria;
+      const repositoryLocalPath =
+        input.repositoryLocalPath !== undefined
+          ? normalizeOptionalText(input.repositoryLocalPath)
+          : current.repositoryLocalPath;
+      const repositoryRemoteUrl =
+        input.repositoryRemoteUrl !== undefined
+          ? normalizeOptionalText(input.repositoryRemoteUrl)
+          : current.repositoryRemoteUrl;
       let status = input.status ?? current.status;
       if (
         status === "idea" &&
@@ -352,7 +367,9 @@ export class PostgresBoardStore implements BoardDataStore {
              labels = $5,
              acceptance_criteria = $6,
              status = $7,
-             updated_at = $8
+             repository_local_path = $8,
+             repository_remote_url = $9,
+             updated_at = $10
          where id = $1
          returning *`,
         [
@@ -363,10 +380,13 @@ export class PostgresBoardStore implements BoardDataStore {
           JSON.stringify(labels),
           JSON.stringify(acceptanceCriteria),
           status,
+          repositoryLocalPath ?? null,
+          repositoryRemoteUrl ?? null,
           timestamp
         ]
       );
       const idea = ideaFromRow(result.rows[0]);
+      await this.syncBoardCardFromIdea(client, idea, timestamp);
       await this.addActivity(client, "idea.updated", `Updated idea: ${idea.title}`, timestamp);
       await client.query("commit");
       return idea;
@@ -500,15 +520,35 @@ export class PostgresBoardStore implements BoardDataStore {
         input.branchName !== undefined
           ? normalizeOptionalText(input.branchName)
           : current.branchName;
+      const details = input.details !== undefined ? input.details.trim() : current.details;
+      const repositoryLocalPath =
+        input.repositoryLocalPath !== undefined
+          ? normalizeOptionalText(input.repositoryLocalPath)
+          : current.repositoryLocalPath;
+      const repositoryRemoteUrl =
+        input.repositoryRemoteUrl !== undefined
+          ? normalizeOptionalText(input.repositoryRemoteUrl)
+          : current.repositoryRemoteUrl;
       const timestamp = nowIso();
       const result = await client.query<BoardCardRow>(
         `update board_cards
          set column_name = $2,
              branch_name = $3,
-             updated_at = $4
+             details = $4,
+             repository_local_path = $5,
+             repository_remote_url = $6,
+             updated_at = $7
          where id = $1
          returning *`,
-        [id, column, branchName ?? null, timestamp]
+        [
+          id,
+          column,
+          branchName ?? null,
+          details,
+          repositoryLocalPath ?? null,
+          repositoryRemoteUrl ?? null,
+          timestamp
+        ]
       );
       const card = boardCardFromRow(result.rows[0]);
       await this.addActivity(client, "board.updated", `Updated board card: ${card.title}`, timestamp);
@@ -939,12 +979,27 @@ export class PostgresBoardStore implements BoardDataStore {
         options.githubMode === "github" ? options.githubIssueNumber : existing.rows[0].github_issue_number;
       const updated = await queryable.query<BoardCardRow>(
         `update board_cards
-         set github_issue_url = $2,
-             github_issue_number = $3,
-             updated_at = $4
+         set title = $2,
+             details = $3,
+             labels = $4,
+             repository_local_path = $5,
+             repository_remote_url = $6,
+             github_issue_url = $7,
+             github_issue_number = $8,
+             updated_at = $9
          where id = $1
          returning *`,
-        [existing.rows[0].id, githubIssueUrl, githubIssueNumber, timestamp]
+        [
+          existing.rows[0].id,
+          idea.title,
+          boardCardDetailsForIdea(idea),
+          JSON.stringify(idea.labels),
+          idea.repositoryLocalPath ?? null,
+          idea.repositoryRemoteUrl ?? null,
+          githubIssueUrl,
+          githubIssueNumber,
+          timestamp
+        ]
       );
       if (options.githubMode === "github") {
         await this.applyIdeaGitHubIssue(queryable, idea.id, options, timestamp);
@@ -955,18 +1010,20 @@ export class PostgresBoardStore implements BoardDataStore {
     const created = await queryable.query<BoardCardRow>(
       `insert into board_cards (
          id, project_id, idea_id, title, details, column_name, branch_name, github_issue_url,
-         github_issue_number, labels, created_at, updated_at
+         github_issue_number, repository_local_path, repository_remote_url, labels, created_at, updated_at
        )
-       values ($1, $2, $3, $4, $5, 'ready', null, $6, $7, $8, $9, $9)
+       values ($1, $2, $3, $4, $5, 'ready', null, $6, $7, $8, $9, $10, $11, $11)
        returning *`,
       [
         randomUUID(),
         idea.projectId,
         idea.id,
         idea.title,
-        idea.details || idea.summary,
+        boardCardDetailsForIdea(idea),
         options.githubMode === "github" ? options.githubIssueUrl : null,
         options.githubMode === "github" ? options.githubIssueNumber : null,
+        idea.repositoryLocalPath ?? null,
+        idea.repositoryRemoteUrl ?? null,
         JSON.stringify(idea.labels),
         timestamp
       ]
@@ -977,6 +1034,32 @@ export class PostgresBoardStore implements BoardDataStore {
     const card = boardCardFromRow(created.rows[0]);
     await this.addActivity(queryable, "board.created", `Created board card: ${card.title}`, timestamp);
     return card;
+  }
+
+  private async syncBoardCardFromIdea(
+    queryable: Pick<Pool | PoolClient, "query">,
+    idea: Idea,
+    timestamp = nowIso()
+  ) {
+    await queryable.query(
+      `update board_cards
+       set title = $2,
+           details = $3,
+           labels = $4,
+           repository_local_path = $5,
+           repository_remote_url = $6,
+           updated_at = $7
+       where idea_id = $1`,
+      [
+        idea.id,
+        idea.title,
+        boardCardDetailsForIdea(idea),
+        JSON.stringify(idea.labels),
+        idea.repositoryLocalPath ?? null,
+        idea.repositoryRemoteUrl ?? null,
+        timestamp
+      ]
+    );
   }
 
   private async applyIdeaGitHubIssue(
@@ -1058,6 +1141,9 @@ const rowTimestamp = (value: Date | string): string =>
 const jsonStringArray = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 
+const boardCardDetailsForIdea = (idea: Pick<Idea, "details" | "summary">): string =>
+  idea.details || idea.summary;
+
 const projectFromRow = (row: ProjectRow): Project => ({
   id: row.id,
   key: row.key,
@@ -1079,6 +1165,8 @@ const ideaFromRow = (row: IdeaRow): Idea => ({
   acceptanceCriteria: jsonStringArray(row.acceptance_criteria),
   githubIssueUrl: row.github_issue_url ?? undefined,
   githubIssueNumber: row.github_issue_number ?? undefined,
+  repositoryLocalPath: row.repository_local_path ?? undefined,
+  repositoryRemoteUrl: row.repository_remote_url ?? undefined,
   createdAt: rowTimestamp(row.created_at),
   updatedAt: rowTimestamp(row.updated_at)
 });
@@ -1093,6 +1181,8 @@ const boardCardFromRow = (row: BoardCardRow): BoardCard => ({
   ideaId: row.idea_id ?? undefined,
   githubIssueUrl: row.github_issue_url ?? undefined,
   githubIssueNumber: row.github_issue_number ?? undefined,
+  repositoryLocalPath: row.repository_local_path ?? undefined,
+  repositoryRemoteUrl: row.repository_remote_url ?? undefined,
   labels: jsonStringArray(row.labels),
   createdAt: rowTimestamp(row.created_at),
   updatedAt: rowTimestamp(row.updated_at)
@@ -1198,6 +1288,8 @@ export class BoardStore {
       status: "idea",
       labels: normalizeList(input.labels),
       acceptanceCriteria: normalizeList(input.acceptanceCriteria),
+      repositoryLocalPath: normalizeOptionalText(input.repositoryLocalPath),
+      repositoryRemoteUrl: normalizeOptionalText(input.repositoryRemoteUrl),
       createdAt: timestamp,
       updatedAt: timestamp
     };
@@ -1232,11 +1324,18 @@ export class BoardStore {
         idea.status = "refining";
       }
     }
+    if (input.repositoryLocalPath !== undefined) {
+      idea.repositoryLocalPath = normalizeOptionalText(input.repositoryLocalPath);
+    }
+    if (input.repositoryRemoteUrl !== undefined) {
+      idea.repositoryRemoteUrl = normalizeOptionalText(input.repositoryRemoteUrl);
+    }
     if (input.status !== undefined) {
       idea.status = input.status;
     }
 
     idea.updatedAt = nowIso();
+    this.syncBoardCardFromIdea(idea, idea.updatedAt);
     this.addActivity("idea.updated", `Updated idea: ${idea.title}`);
     this.save();
     return clone(idea);
@@ -1281,6 +1380,7 @@ export class BoardStore {
   private ensureBoardCard(idea: Idea, options: CreateBoardCardOptions, timestamp = nowIso()): BoardCard {
     const existing = this.data.boardCards.find((card) => card.ideaId === idea.id);
     if (existing) {
+      this.syncBoardCardFromIdea(idea, timestamp);
       this.applyGitHubIssue(existing, options);
       this.applyGitHubIssue(idea, options);
       existing.updatedAt = timestamp;
@@ -1292,9 +1392,11 @@ export class BoardStore {
       id: randomUUID(),
       projectId: idea.projectId,
       title: idea.title,
-      details: idea.details || idea.summary,
+      details: boardCardDetailsForIdea(idea),
       column: "ready",
       ideaId: idea.id,
+      repositoryLocalPath: idea.repositoryLocalPath,
+      repositoryRemoteUrl: idea.repositoryRemoteUrl,
       labels: [...idea.labels],
       createdAt: timestamp,
       updatedAt: timestamp
@@ -1351,6 +1453,15 @@ export class BoardStore {
     }
     if (input.branchName !== undefined) {
       card.branchName = normalizeOptionalText(input.branchName);
+    }
+    if (input.details !== undefined) {
+      card.details = input.details.trim();
+    }
+    if (input.repositoryLocalPath !== undefined) {
+      card.repositoryLocalPath = normalizeOptionalText(input.repositoryLocalPath);
+    }
+    if (input.repositoryRemoteUrl !== undefined) {
+      card.repositoryRemoteUrl = normalizeOptionalText(input.repositoryRemoteUrl);
     }
     card.updatedAt = nowIso();
     this.addActivity("board.updated", `Updated board card: ${card.title}`);
@@ -1522,6 +1633,19 @@ export class BoardStore {
       throw new Error(`Document not found: ${id}`);
     }
     return document;
+  }
+
+  private syncBoardCardFromIdea(idea: Idea, timestamp = nowIso()) {
+    const card = this.data.boardCards.find((item) => item.ideaId === idea.id);
+    if (!card) {
+      return;
+    }
+    card.title = idea.title;
+    card.details = boardCardDetailsForIdea(idea);
+    card.labels = [...idea.labels];
+    card.repositoryLocalPath = idea.repositoryLocalPath;
+    card.repositoryRemoteUrl = idea.repositoryRemoteUrl;
+    card.updatedAt = timestamp;
   }
 
   private applyGitHubIssue(

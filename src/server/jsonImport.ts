@@ -99,9 +99,10 @@ export const importBoardJsonFile = async (
       await client.query(
         `insert into ideas (
            id, project_id, task_number, title, summary, details, status, labels,
-           acceptance_criteria, github_issue_url, github_issue_number, created_at, updated_at
+           acceptance_criteria, github_issue_url, github_issue_number, repository_local_path,
+           repository_remote_url, created_at, updated_at
          )
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
         [
           idea.id,
           idea.projectId,
@@ -114,6 +115,8 @@ export const importBoardJsonFile = async (
           JSON.stringify(idea.acceptanceCriteria),
           idea.githubIssueUrl ?? null,
           idea.githubIssueNumber ?? null,
+          idea.repositoryLocalPath ?? null,
+          idea.repositoryRemoteUrl ?? null,
           idea.createdAt,
           idea.updatedAt
         ]
@@ -124,9 +127,9 @@ export const importBoardJsonFile = async (
       await client.query(
         `insert into board_cards (
            id, project_id, idea_id, title, details, column_name, branch_name, github_issue_url,
-           github_issue_number, labels, created_at, updated_at
+           github_issue_number, repository_local_path, repository_remote_url, labels, created_at, updated_at
          )
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
         [
           card.id,
           card.projectId,
@@ -137,6 +140,8 @@ export const importBoardJsonFile = async (
           card.branchName ?? null,
           card.githubIssueUrl ?? null,
           card.githubIssueNumber ?? null,
+          card.repositoryLocalPath ?? null,
+          card.repositoryRemoteUrl ?? null,
           JSON.stringify(card.labels),
           card.createdAt,
           card.updatedAt

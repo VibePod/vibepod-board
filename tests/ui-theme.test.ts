@@ -55,4 +55,16 @@ describe("UI theme and card readability styles", () => {
     expect(compactCardBlock).toContain("className=\"board-card-branch\"");
     expect(styles).toContain(".board-card-branch");
   });
+
+  it("renders repository metadata on task forms and board cards", () => {
+    const compactCardBlock = clientEntry.match(/className="compact-card"[\s\S]*?<\/Card>/)?.[0] ?? "";
+
+    expect(clientEntry).toContain("label=\"Repository Local Path\"");
+    expect(clientEntry).toContain("label=\"Repository Remote URL\"");
+    expect(clientEntry).toContain("githubRemoteToHttpsUrl");
+    expect(compactCardBlock).toContain("card.repositoryLocalPath");
+    expect(compactCardBlock).toContain("card.repositoryRemoteUrl");
+    expect(compactCardBlock).toContain("className=\"board-card-repository\"");
+    expect(styles).toContain(".board-card-repository");
+  });
 });
