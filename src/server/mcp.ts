@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import * as z from "zod/v4";
 
-import { boardColumns, documentKinds } from "../shared/types.js";
+import { boardColumns, documentKinds, ideaStatuses } from "../shared/types.js";
 import { parseBearerToken } from "./auth.js";
 import { createMcpToolHandlers } from "./mcpTools.js";
 import { tokenAccess, type AccessContext, type BoardDataStore } from "./store.js";
@@ -96,6 +96,25 @@ export const createMcpServer = (store: BoardDataStore, access: AccessContext) =>
   );
 
   server.registerTool(
+    "update_idea",
+    {
+      title: "Update Idea",
+      description:
+        "Edit an existing idea's fields. Only provided fields change; omitted fields are left as-is.",
+      inputSchema: {
+        id: z.string().min(1),
+        title: z.string().min(1).optional(),
+        summary: z.string().optional(),
+        details: z.string().optional(),
+        labels: z.array(z.string()).optional(),
+        acceptanceCriteria: z.array(z.string()).optional(),
+        status: z.enum(ideaStatuses).optional()
+      }
+    },
+    async (input) => jsonContent(await handlers.update_idea(input))
+  );
+
+  server.registerTool(
     "mark_idea_ready",
     {
       title: "Mark Idea Ready",
@@ -147,6 +166,24 @@ export const createMcpServer = (store: BoardDataStore, access: AccessContext) =>
       }
     },
     async (input) => jsonContent(await handlers.create_document(input))
+  );
+
+  server.registerTool(
+    "update_document",
+    {
+      title: "Update Document",
+      description:
+        "Edit an existing document's fields. Only provided fields change; omitted fields are left as-is.",
+      inputSchema: {
+        id: z.string().min(1),
+        title: z.string().min(1).optional(),
+        kind: z.enum(documentKinds).optional(),
+        content: z.string().optional(),
+        linkedIdeaIds: z.array(z.string()).optional(),
+        linkedCardIds: z.array(z.string()).optional()
+      }
+    },
+    async (input) => jsonContent(await handlers.update_document(input))
   );
 
   server.registerTool(

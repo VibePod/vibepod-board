@@ -53,4 +53,30 @@ describe("MCP auth", () => {
     const listed = await handlers.list_ideas({});
     expect(listed).toEqual({ items: [expect.objectContaining({ title: "Visible" })] });
   });
+
+  it("edits ideas in mapped projects but rejects edits to others", async () => {
+    const appProject = await store.createProject({ key: "APP", title: "App" });
+    const apiProject = await store.createProject({ key: "API", title: "API" });
+    const mine = await store.createIdea(adminAccess("admin"), {
+      projectId: appProject.id,
+      title: "Editable"
+    });
+    const theirs = await store.createIdea(adminAccess("admin"), {
+      projectId: apiProject.id,
+      title: "Off limits"
+    });
+
+    const handlers = createMcpToolHandlers(store, tokenAccess("token-1", [appProject.id]));
+
+    const updated = await handlers.update_idea({
+      id: mine.id,
+      title: "Edited title",
+      labels: ["enhancement"]
+    });
+    expect(updated.item).toMatchObject({ title: "Edited title", labels: ["enhancement"] });
+
+    await expect(handlers.update_idea({ id: theirs.id, title: "Nope" })).rejects.toThrow(
+      "Token is not allowed to access project"
+    );
+  });
 });

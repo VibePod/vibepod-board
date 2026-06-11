@@ -86,10 +86,12 @@ Tools:
 - `create_project`
 - `list_ideas`
 - `create_idea`
+- `update_idea`
 - `mark_idea_ready`
 - `list_board`
 - `move_board_card`
 - `create_document`
+- `update_document`
 - `list_documents`
 
 Resource:
