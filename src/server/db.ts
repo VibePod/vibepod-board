@@ -40,6 +40,7 @@ create table if not exists board_cards (
   title text not null,
   details text not null default '',
   column_name text not null,
+  branch_name text,
   github_issue_url text,
   github_issue_number integer,
   labels jsonb not null default '[]'::jsonb,
@@ -85,6 +86,8 @@ create index if not exists ideas_project_updated_idx on ideas(project_id, update
 create index if not exists board_cards_project_updated_idx on board_cards(project_id, updated_at desc);
 create index if not exists documents_project_updated_idx on documents(project_id, updated_at desc);
 create index if not exists activity_events_created_idx on activity_events(created_at desc);
+
+alter table board_cards add column if not exists branch_name text;
 `;
 
 export const initializeDatabase = async (pool: Pick<Pool, "query">) => {

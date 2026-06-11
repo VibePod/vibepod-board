@@ -37,6 +37,7 @@ export type BoardCard = {
   title: string;
   details: string;
   column: BoardColumn;
+  branchName?: string;
   ideaId?: string;
   githubIssueUrl?: string;
   githubIssueNumber?: number;
@@ -101,6 +102,10 @@ export type CreateBoardCardOptions = {
   githubIssueUrl?: string;
   githubIssueNumber?: number;
 };
+
+export type UpdateBoardCardInput = Partial<
+  Pick<BoardCard, "column" | "branchName">
+>;
 
 export type CreateDocumentInput = {
   projectId?: string;
