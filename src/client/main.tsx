@@ -32,6 +32,7 @@ import {
   ExternalLink,
   FileText,
   FolderKanban,
+  GitBranch,
   KeyRound,
   ListChecks,
   LogOut,
@@ -1214,6 +1215,18 @@ const App = () => {
                           <Stack gap="xs">
                             <Title order={4}>{card.title}</Title>
                             {labelBadges(card.labels, "xs")}
+                            {card.branchName && (
+                              <Group className="board-card-branch" justify="flex-start">
+                                <Badge
+                                  leftSection={<GitBranch size={12} aria-hidden />}
+                                  variant="light"
+                                  color="teal"
+                                  size="sm"
+                                >
+                                  {card.branchName}
+                                </Badge>
+                              </Group>
+                            )}
                             {cardTaskId && (
                               <Group className="board-card-task-id" justify="flex-end">
                                 <Badge variant="light" color="gray" size="sm">

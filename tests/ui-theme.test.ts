@@ -47,4 +47,12 @@ describe("UI theme and card readability styles", () => {
     expect(styles).toContain(".board-card-task-id");
     expect(compactCardBlock).not.toContain("{columnLabels[column]}");
   });
+
+  it("renders implementation branch names on board cards", () => {
+    const compactCardBlock = clientEntry.match(/className="compact-card"[\s\S]*?<\/Card>/)?.[0] ?? "";
+
+    expect(compactCardBlock).toContain("card.branchName");
+    expect(compactCardBlock).toContain("className=\"board-card-branch\"");
+    expect(styles).toContain(".board-card-branch");
+  });
 });

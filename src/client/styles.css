@@ -478,6 +478,21 @@ body {
   min-height: 22px;
 }
 
+.board-card-branch {
+  min-height: 22px;
+}
+
+.board-card-branch .mantine-Badge-root {
+  height: auto;
+  max-width: 100%;
+  min-height: 22px;
+}
+
+.board-card-branch .mantine-Badge-label {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .label-badge {
   background: var(--app-label-bg);
   border-color: var(--app-border-strong);
