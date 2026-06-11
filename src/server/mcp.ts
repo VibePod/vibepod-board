@@ -152,6 +152,21 @@ export const createMcpServer = (store: BoardDataStore, access: AccessContext) =>
   );
 
   server.registerTool(
+    "update_board_card",
+    {
+      title: "Update Board Card",
+      description:
+        "Edit board-card metadata such as implementation branch. Only provided fields change.",
+      inputSchema: {
+        id: z.string().min(1),
+        column: z.enum(boardColumns).optional(),
+        branchName: z.string().optional()
+      }
+    },
+    async (input) => jsonContent(await handlers.update_board_card(input))
+  );
+
+  server.registerTool(
     "create_document",
     {
       title: "Create Document",

@@ -13,6 +13,7 @@ import type {
   PlanDocument,
   Project,
   UpdateApiTokenInput,
+  UpdateBoardCardInput,
   UpdateDocumentInput,
   UpdateIdeaInput,
   UpdateProjectInput
@@ -58,6 +59,7 @@ export interface BoardDataStore {
   ): Promise<BoardCard>;
   listBoardCards(access: AccessContext, projectId?: string): Promise<BoardCard[]>;
   getBoardColumns(access: AccessContext, projectId?: string): Promise<BoardColumns>;
+  updateBoardCard(access: AccessContext, id: string, input: UpdateBoardCardInput): Promise<BoardCard>;
   moveBoardCard(access: AccessContext, id: string, column: BoardColumn): Promise<BoardCard>;
   listDocuments(access: AccessContext, projectId?: string): Promise<PlanDocument[]>;
   createDocument(access: AccessContext, input: CreateDocumentInput): Promise<PlanDocument>;

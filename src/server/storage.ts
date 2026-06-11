@@ -20,6 +20,7 @@ import {
   type PlanDocument,
   type Project,
   type UpdateApiTokenInput,
+  type UpdateBoardCardInput,
   type UpdateDocumentInput,
   type UpdateIdeaInput,
   type UpdateProjectInput
@@ -72,6 +73,14 @@ const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const normalizeList = (items: string[] | undefined): string[] =>
   [...new Set((items ?? []).map((item) => item.trim()).filter(Boolean))];
 
+const normalizeOptionalText = (value: string | undefined): string | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+};
+
 const assertTitle = (title: string | undefined, entity: string) => {
   if (!title?.trim()) {
     throw new Error(`${entity} title is required`);
@@ -121,6 +130,7 @@ type BoardCardRow = {
   title: string;
   details: string;
   column_name: BoardColumn;
+  branch_name: string | null;
   github_issue_url: string | null;
   github_issue_number: number | null;
   labels: unknown;
@@ -473,6 +483,43 @@ export class PostgresBoardStore implements BoardDataStore {
       columns[column].sort(sortUpdatedDesc);
     }
     return columns;
+  }
+
+  async updateBoardCard(
+    access: AccessContext,
+    id: string,
+    input: UpdateBoardCardInput
+  ): Promise<BoardCard> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const current = await this.requireBoardCard(client, id);
+      assertCanAccessProject(access, current.projectId);
+      const column = input.column ?? current.column;
+      const branchName =
+        input.branchName !== undefined
+          ? normalizeOptionalText(input.branchName)
+          : current.branchName;
+      const timestamp = nowIso();
+      const result = await client.query<BoardCardRow>(
+        `update board_cards
+         set column_name = $2,
+             branch_name = $3,
+             updated_at = $4
+         where id = $1
+         returning *`,
+        [id, column, branchName ?? null, timestamp]
+      );
+      const card = boardCardFromRow(result.rows[0]);
+      await this.addActivity(client, "board.updated", `Updated board card: ${card.title}`, timestamp);
+      await client.query("commit");
+      return card;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async moveBoardCard(access: AccessContext, id: string, column: BoardColumn): Promise<BoardCard> {
@@ -907,10 +954,10 @@ export class PostgresBoardStore implements BoardDataStore {
 
     const created = await queryable.query<BoardCardRow>(
       `insert into board_cards (
-         id, project_id, idea_id, title, details, column_name, github_issue_url,
+         id, project_id, idea_id, title, details, column_name, branch_name, github_issue_url,
          github_issue_number, labels, created_at, updated_at
        )
-       values ($1, $2, $3, $4, $5, 'ready', $6, $7, $8, $9, $9)
+       values ($1, $2, $3, $4, $5, 'ready', null, $6, $7, $8, $9, $9)
        returning *`,
       [
         randomUUID(),
@@ -1042,6 +1089,7 @@ const boardCardFromRow = (row: BoardCardRow): BoardCard => ({
   title: row.title,
   details: row.details,
   column: row.column_name,
+  branchName: row.branch_name ?? undefined,
   ideaId: row.idea_id ?? undefined,
   githubIssueUrl: row.github_issue_url ?? undefined,
   githubIssueNumber: row.github_issue_number ?? undefined,
@@ -1292,6 +1340,20 @@ export class BoardStore {
     card.column = column;
     card.updatedAt = nowIso();
     this.addActivity("board.moved", `Moved card to ${column}: ${card.title}`);
+    this.save();
+    return clone(card);
+  }
+
+  updateBoardCard(id: string, input: UpdateBoardCardInput): BoardCard {
+    const card = this.requireBoardCard(id);
+    if (input.column !== undefined) {
+      card.column = input.column;
+    }
+    if (input.branchName !== undefined) {
+      card.branchName = normalizeOptionalText(input.branchName);
+    }
+    card.updatedAt = nowIso();
+    this.addActivity("board.updated", `Updated board card: ${card.title}`);
     this.save();
     return clone(card);
   }

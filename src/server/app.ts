@@ -61,8 +61,9 @@ const readySchema = z.object({
   available: z.boolean().optional().default(true)
 });
 
-const moveCardSchema = z.object({
-  column: z.enum(boardColumns)
+const updateBoardCardSchema = z.object({
+  column: z.enum(boardColumns).optional(),
+  branchName: z.string().optional()
 });
 
 const projectKeySchema = z.string().trim().regex(/^[A-Z]{1,3}$/, "Project ID must be 1 to 3 capital letters");
@@ -162,6 +163,7 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
         "mark_idea_ready",
         "list_board",
         "move_board_card",
+        "update_board_card",
         "create_document",
         "list_documents"
       ],
@@ -263,8 +265,8 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
     "/api/board/:id",
     requireAccess(store, sessions),
     asyncHandler(async (req, res) => {
-      const { column } = moveCardSchema.parse(req.body);
-      const item = await store.moveBoardCard(accessFromResponse(req), routeParam(req.params.id), column);
+      const input = updateBoardCardSchema.parse(req.body);
+      const item = await store.updateBoardCard(accessFromResponse(req), routeParam(req.params.id), input);
       res.json({ item });
     })
   );

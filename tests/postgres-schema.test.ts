@@ -48,4 +48,17 @@ describe("PostgreSQL schema", () => {
       await created.end();
     }
   });
+
+  it("stores branch names on board cards", async () => {
+    await initializeDatabase(pool);
+
+    const columns = await pool.query<{ column_name: string }>(
+      `select column_name
+       from information_schema.columns
+       where table_schema = 'public' and table_name = 'board_cards'
+       order by ordinal_position`
+    );
+
+    expect(columns.rows.map((row) => row.column_name)).toContain("branch_name");
+  });
 });

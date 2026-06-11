@@ -4,6 +4,7 @@ import type {
   CreateIdeaInput,
   CreateProjectInput,
   UpdateDocumentInput,
+  UpdateBoardCardInput,
   UpdateIdeaInput
 } from "../shared/types.js";
 import { isAdminAccess, type AccessContext, type BoardDataStore } from "./store.js";
@@ -36,6 +37,10 @@ export const createMcpToolHandlers = (store: BoardDataStore, access: AccessConte
   },
   async move_board_card(input: { id: string; column: BoardColumn }) {
     return { item: await store.moveBoardCard(access, input.id, input.column) };
+  },
+  async update_board_card(input: { id: string } & UpdateBoardCardInput) {
+    const { id, ...changes } = input;
+    return { item: await store.updateBoardCard(access, id, changes) };
   },
   async create_document(input: CreateDocumentInput) {
     return { item: await store.createDocument(access, input) };

@@ -135,6 +135,25 @@ describe("PostgresBoardStore", () => {
     expect((await store.moveBoardCard(admin, card.id, "planned")).column).toBe("planned");
   });
 
+  it("stores the implementation branch name on board cards", async () => {
+    const project = await store.createProject({ title: "CLI", key: "CLI" });
+    const idea = await store.createIdea(admin, {
+      projectId: project.id,
+      title: "Persist lifecycle state"
+    });
+    await store.markIdeaReady(admin, idea.id);
+    const [card] = (await store.getBoardColumns(admin, project.id)).ready;
+
+    const updated = await store.updateBoardCard(admin, card.id, {
+      branchName: "vp-task-lifecycle-state"
+    });
+
+    expect(updated.branchName).toBe("vp-task-lifecycle-state");
+    expect((await store.getBoardColumns(admin, project.id)).ready[0].branchName).toBe(
+      "vp-task-lifecycle-state"
+    );
+  });
+
   it("stores execution plan documents linked to ideas and board cards", async () => {
     const idea = await store.createIdea(admin, { title: "MCP bridge", labels: ["mcp"] });
     const card = await store.createBoardCardFromIdea(admin, (await store.markIdeaReady(admin, idea.id)).id, {

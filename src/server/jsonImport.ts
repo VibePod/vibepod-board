@@ -123,10 +123,10 @@ export const importBoardJsonFile = async (
     for (const card of data.boardCards) {
       await client.query(
         `insert into board_cards (
-           id, project_id, idea_id, title, details, column_name, github_issue_url,
+           id, project_id, idea_id, title, details, column_name, branch_name, github_issue_url,
            github_issue_number, labels, created_at, updated_at
          )
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
         [
           card.id,
           card.projectId,
@@ -134,6 +134,7 @@ export const importBoardJsonFile = async (
           card.title,
           card.details,
           card.column,
+          card.branchName ?? null,
           card.githubIssueUrl ?? null,
           card.githubIssueNumber ?? null,
           JSON.stringify(card.labels),

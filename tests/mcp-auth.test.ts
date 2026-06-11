@@ -79,4 +79,33 @@ describe("MCP auth", () => {
       "Token is not allowed to access project"
     );
   });
+
+  it("updates board card branch names in mapped projects", async () => {
+    const appProject = await store.createProject({ key: "APP", title: "App" });
+    const apiProject = await store.createProject({ key: "API", title: "API" });
+    const mine = await store.createIdea(adminAccess("admin"), {
+      projectId: appProject.id,
+      title: "Editable card"
+    });
+    const theirs = await store.createIdea(adminAccess("admin"), {
+      projectId: apiProject.id,
+      title: "Off limits card"
+    });
+    await store.markIdeaReady(adminAccess("admin"), mine.id);
+    await store.markIdeaReady(adminAccess("admin"), theirs.id);
+    const mineCard = (await store.getBoardColumns(adminAccess("admin"), appProject.id)).ready[0];
+    const theirCard = (await store.getBoardColumns(adminAccess("admin"), apiProject.id)).ready[0];
+
+    const handlers = createMcpToolHandlers(store, tokenAccess("token-1", [appProject.id]));
+
+    const updated = await handlers.update_board_card({
+      id: mineCard.id,
+      branchName: "vp-task-create"
+    });
+    expect(updated.item).toMatchObject({ id: mineCard.id, branchName: "vp-task-create" });
+
+    await expect(
+      handlers.update_board_card({ id: theirCard.id, branchName: "vp-task-cancel" })
+    ).rejects.toThrow("Token is not allowed to access project");
+  });
 });
