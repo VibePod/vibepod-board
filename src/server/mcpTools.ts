@@ -1,4 +1,11 @@
-import type { BoardColumn, CreateDocumentInput, CreateIdeaInput, CreateProjectInput } from "../shared/types.js";
+import type {
+  BoardColumn,
+  CreateDocumentInput,
+  CreateIdeaInput,
+  CreateProjectInput,
+  UpdateDocumentInput,
+  UpdateIdeaInput
+} from "../shared/types.js";
 import { isAdminAccess, type AccessContext, type BoardDataStore } from "./store.js";
 
 export const createMcpToolHandlers = (store: BoardDataStore, access: AccessContext) => ({
@@ -17,6 +24,10 @@ export const createMcpToolHandlers = (store: BoardDataStore, access: AccessConte
   async create_idea(input: CreateIdeaInput) {
     return { item: await store.createIdea(access, input) };
   },
+  async update_idea(input: { id: string } & UpdateIdeaInput) {
+    const { id, ...changes } = input;
+    return { item: await store.updateIdea(access, id, changes) };
+  },
   async mark_idea_ready(input: { id: string }) {
     return { item: await store.markIdeaReady(access, input.id) };
   },
@@ -28,6 +39,10 @@ export const createMcpToolHandlers = (store: BoardDataStore, access: AccessConte
   },
   async create_document(input: CreateDocumentInput) {
     return { item: await store.createDocument(access, input) };
+  },
+  async update_document(input: { id: string } & UpdateDocumentInput) {
+    const { id, ...changes } = input;
+    return { item: await store.updateDocument(access, id, changes) };
   },
   async list_documents(input: { projectId?: string }) {
     return { items: await store.listDocuments(access, input.projectId) };
