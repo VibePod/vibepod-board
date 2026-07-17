@@ -68,4 +68,22 @@ describe("task list utilities", () => {
 
     expect(filterAndSortTasks(tasks, { sort: "title_asc" }).map((item) => item.id)).toEqual(["a", "b"]);
   });
+
+  it("sorts by rating high to low with unrated last", () => {
+    const tasks = [
+      task({ id: "unrated", title: "Unrated", createdAt: "2026-04-01T00:00:00.000Z" }),
+      task({ id: "low", title: "Low", createdAt: "2026-03-01T00:00:00.000Z", readinessScore: 3 }),
+      task({ id: "high", title: "High", createdAt: "2026-01-01T00:00:00.000Z", readinessScore: 9 }),
+      task({ id: "mid-new", title: "Mid new", createdAt: "2026-05-01T00:00:00.000Z", readinessScore: 5 }),
+      task({ id: "mid-old", title: "Mid old", createdAt: "2026-02-01T00:00:00.000Z", readinessScore: 5 })
+    ];
+
+    expect(filterAndSortTasks(tasks, { sort: "rating_desc" }).map((item) => item.id)).toEqual([
+      "high",
+      "mid-new",
+      "mid-old",
+      "low",
+      "unrated"
+    ]);
+  });
 });

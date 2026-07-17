@@ -3,6 +3,7 @@ import type {
   CreateDocumentInput,
   CreateIdeaInput,
   CreateProjectInput,
+  SetCardReadinessInput,
   UpdateDocumentInput,
   UpdateBoardCardInput,
   UpdateIdeaInput
@@ -41,6 +42,17 @@ export const createMcpToolHandlers = (store: BoardDataStore, access: AccessConte
   async update_board_card(input: { id: string } & UpdateBoardCardInput) {
     const { id, ...changes } = input;
     return { item: await store.updateBoardCard(access, id, changes) };
+  },
+  async set_card_readiness(input: { id: string } & SetCardReadinessInput) {
+    const { id, ...changes } = input;
+    return { item: await store.setCardReadiness(access, id, changes) };
+  },
+  async set_idea_readiness(input: { id: string } & SetCardReadinessInput) {
+    const { id, ...changes } = input;
+    return { item: await store.setIdeaReadiness(access, id, changes) };
+  },
+  async list_idea_readiness(input: { id: string }) {
+    return { items: await store.listIdeaReadiness(access, input.id) };
   },
   async create_document(input: CreateDocumentInput) {
     return { item: await store.createDocument(access, input) };

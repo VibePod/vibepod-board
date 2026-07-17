@@ -36,6 +36,7 @@ const emptyData = (): BoardData => ({
   projects: [],
   ideas: [],
   boardCards: [],
+  readinessEvents: [],
   documents: [],
   activity: []
 });

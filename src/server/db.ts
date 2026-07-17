@@ -96,6 +96,29 @@ alter table ideas add column if not exists repository_local_path text;
 alter table ideas add column if not exists repository_remote_url text;
 alter table board_cards add column if not exists repository_local_path text;
 alter table board_cards add column if not exists repository_remote_url text;
+alter table board_cards add column if not exists readiness_score integer;
+alter table board_cards add column if not exists readiness_reason text;
+alter table board_cards add column if not exists readiness_evaluated_at timestamptz;
+alter table ideas add column if not exists readiness_score integer;
+alter table ideas add column if not exists readiness_reason text;
+alter table ideas add column if not exists readiness_evaluated_at timestamptz;
+
+create table if not exists idea_readiness_events (
+  id text primary key,
+  idea_id text not null references ideas(id) on delete cascade,
+  score integer not null,
+  reason text not null,
+  created_at timestamptz not null
+);
+create index if not exists idea_readiness_events_idea_idx
+  on idea_readiness_events(idea_id, created_at desc);
+
+insert into idea_readiness_events (id, idea_id, score, reason, created_at)
+select md5(random()::text || id), id, readiness_score,
+       coalesce(readiness_reason, ''), coalesce(readiness_evaluated_at, now())
+from ideas
+where readiness_score is not null
+  and not exists (select 1 from idea_readiness_events e where e.idea_id = ideas.id);
 `;
 
 export const initializeDatabase = async (pool: Pick<Pool, "query">) => {

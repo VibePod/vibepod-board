@@ -174,6 +174,48 @@ export const createMcpServer = (store: BoardDataStore, access: AccessContext) =>
   );
 
   server.registerTool(
+    "set_card_readiness",
+    {
+      title: "Set Card Readiness",
+      description:
+        "Record an LLM-evaluated readiness score (1-10) with a short reason on a board card. Does not change updated_at, so a later content edit marks the score stale.",
+      inputSchema: {
+        id: z.string().min(1),
+        score: z.number().int().min(1).max(10),
+        reason: z.string().min(1)
+      }
+    },
+    async (input) => jsonContent(await handlers.set_card_readiness(input))
+  );
+
+  server.registerTool(
+    "set_idea_readiness",
+    {
+      title: "Set Idea Readiness",
+      description:
+        "Record an LLM-evaluated readiness score (1-10) with a short reason on an idea; mirrors onto its linked board card. Does not change updated_at, so a later content edit marks the score stale.",
+      inputSchema: {
+        id: z.string().min(1),
+        score: z.number().int().min(1).max(10),
+        reason: z.string().min(1)
+      }
+    },
+    async (input) => jsonContent(await handlers.set_idea_readiness(input))
+  );
+
+  server.registerTool(
+    "list_idea_readiness",
+    {
+      title: "List Idea Readiness History",
+      description: "List an idea's readiness rating history, newest first (score, reason, date).",
+      inputSchema: {
+        id: z.string().min(1)
+      }
+    },
+    async ({ id }) => jsonContent(await handlers.list_idea_readiness({ id }))
+  );
+
+  server.registerTool(
     "create_document",
     {
       title: "Create Document",

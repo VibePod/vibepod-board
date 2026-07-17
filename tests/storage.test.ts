@@ -261,4 +261,56 @@ describe("PostgresBoardStore", () => {
     expect(scopedState.projects.map((item) => item.id)).toEqual([project.id]);
     expect(scopedState.ideas.map((item) => item.title)).toEqual(["Scoped task"]);
   });
+
+  it("sets readiness on a board card without bumping updated_at", async () => {
+    const project = await store.createProject({ key: "APP", title: "App" });
+    const idea = await store.createIdea(admin, { projectId: project.id, title: "Scored card" });
+    await store.markIdeaReady(admin, idea.id);
+    const card = (await store.getBoardColumns(admin, project.id)).ready[0];
+
+    const scored = await store.setCardReadiness(admin, card.id, {
+      score: 7,
+      reason: "Clear scope, acceptance criteria present"
+    });
+
+    expect(scored.readinessScore).toBe(7);
+    expect(scored.readinessReason).toBe("Clear scope, acceptance criteria present");
+    expect(scored.readinessEvaluatedAt).toBeDefined();
+    expect(scored.updatedAt).toBe(card.updatedAt);
+    expect(scored.readinessEvaluatedAt! >= scored.updatedAt).toBe(true);
+  });
+
+  it("rejects invalid readiness scores and empty reasons", async () => {
+    const project = await store.createProject({ key: "APP", title: "App" });
+    const idea = await store.createIdea(admin, { projectId: project.id, title: "Card" });
+    await store.markIdeaReady(admin, idea.id);
+    const card = (await store.getBoardColumns(admin, project.id)).ready[0];
+
+    await expect(store.setCardReadiness(admin, card.id, { score: 0, reason: "r" })).rejects.toThrow(
+      "Readiness score must be an integer from 1 to 10"
+    );
+    await expect(store.setCardReadiness(admin, card.id, { score: 11, reason: "r" })).rejects.toThrow(
+      "Readiness score must be an integer from 1 to 10"
+    );
+    await expect(store.setCardReadiness(admin, card.id, { score: 6.5, reason: "r" })).rejects.toThrow(
+      "Readiness score must be an integer from 1 to 10"
+    );
+    await expect(store.setCardReadiness(admin, card.id, { score: 5, reason: "  " })).rejects.toThrow(
+      "Readiness reason is required"
+    );
+  });
+
+  it("marks readiness stale after a content edit but not after re-evaluation", async () => {
+    const project = await store.createProject({ key: "APP", title: "App" });
+    const idea = await store.createIdea(admin, { projectId: project.id, title: "Card" });
+    await store.markIdeaReady(admin, idea.id);
+    const card = (await store.getBoardColumns(admin, project.id)).ready[0];
+
+    const scored = await store.setCardReadiness(admin, card.id, { score: 4, reason: "No repo set" });
+    const edited = await store.updateBoardCard(admin, card.id, { details: "Now with repo info" });
+
+    expect(edited.updatedAt > scored.readinessEvaluatedAt!).toBe(true);
+    expect(edited.readinessScore).toBe(4);
+    expect(edited.readinessReason).toBe("No repo set");
+  });
 });

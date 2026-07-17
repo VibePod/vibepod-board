@@ -64,7 +64,8 @@ import {
   type Idea,
   type IdeaStatus,
   type PlanDocument,
-  type Project
+  type Project,
+  type ReadinessEvent
 } from "../shared/types.js";
 import vibepodIconUrl from "./assets/icon.png";
 import {
@@ -85,7 +86,7 @@ import {
   type TaskDraft
 } from "./taskDraftUtils.js";
 import { formatTaskId } from "./taskIdentity.js";
-import { taskListCardView } from "./taskCardUtils.js";
+import { isCardReadinessStale, isReadinessStale, readinessColor, taskListCardView } from "./taskCardUtils.js";
 import { taskOverviewForIdea } from "./taskOverviewUtils.js";
 import { filterAndSortTasks, type TaskSortOption } from "./taskListUtils.js";
 import { githubRemoteToHttpsUrl } from "./repositoryUtils.js";
@@ -132,6 +133,12 @@ type TaskModalState = {
 
 type TaskViewModalState = {
   ideaId: string;
+  card: BoardCard;
+};
+
+type ReadinessModalState = {
+  ideaId: string;
+  ideaTitle: string;
 };
 
 type NoteModalState = {
@@ -261,6 +268,9 @@ const App = () => {
   const [projectModal, setProjectModal] = useState<ProjectModalState | null>(null);
   const [taskModal, setTaskModal] = useState<TaskModalState | null>(null);
   const [taskViewModal, setTaskViewModal] = useState<TaskViewModalState | null>(null);
+  const [readinessModal, setReadinessModal] = useState<ReadinessModalState | null>(null);
+  const [readinessEvents, setReadinessEvents] = useState<ReadinessEvent[] | null>(null);
+  const [readinessError, setReadinessError] = useState("");
   const [noteModal, setNoteModal] = useState<NoteModalState | null>(null);
   const [taskSort, setTaskSort] = useState<TaskSortOption>("created_desc");
   const [taskStatusFilter, setTaskStatusFilter] = useState<IdeaStatus | "">("");
@@ -399,7 +409,34 @@ const App = () => {
   }, []);
 
   useEffect(() => {
-    if (!isMcpGuideOpen && !isTokenManagerOpen && !projectModal && !taskModal && !taskViewModal && !noteModal) {
+    if (!readinessModal) {
+      setReadinessEvents(null);
+      setReadinessError("");
+      return;
+    }
+    let cancelled = false;
+    api<{ items: ReadinessEvent[] }>(`/api/ideas/${readinessModal.ideaId}/readiness`)
+      .then((response) => {
+        if (!cancelled) setReadinessEvents(response.items);
+      })
+      .catch((requestError: Error) => {
+        if (!cancelled) setReadinessError(requestError.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [readinessModal]);
+
+  useEffect(() => {
+    if (
+      !isMcpGuideOpen &&
+      !isTokenManagerOpen &&
+      !projectModal &&
+      !taskModal &&
+      !taskViewModal &&
+      !noteModal &&
+      !readinessModal
+    ) {
       return;
     }
 
@@ -411,12 +448,13 @@ const App = () => {
         setTaskModal(null);
         setTaskViewModal(null);
         setNoteModal(null);
+        setReadinessModal(null);
       }
     };
 
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [isMcpGuideOpen, isTokenManagerOpen, projectModal, taskModal, taskViewModal, noteModal]);
+  }, [isMcpGuideOpen, isTokenManagerOpen, projectModal, taskModal, taskViewModal, noteModal, readinessModal]);
 
   const selectedProject = state.projects.find((project) => project.id === selectedProjectId);
   const projectIdeas = selectedProject ? state.ideas.filter((idea) => idea.projectId === selectedProject.id) : [];
@@ -430,6 +468,8 @@ const App = () => {
   const taskViewProject = taskViewIdea
     ? state.projects.find((project) => project.id === taskViewIdea.projectId) ?? null
     : null;
+  const taskViewCard = taskViewModal?.card ?? null;
+  const ideaById = new Map(state.ideas.map((idea) => [idea.id, idea]));
   const taskOverview = taskViewIdea && taskViewProject ? taskOverviewForIdea(taskViewIdea, taskViewProject.key) : null;
   const taskLabelOptions = Array.from(new Set(projectIdeas.flatMap((idea) => idea.labels))).sort((a, b) =>
     a.localeCompare(b)
@@ -680,7 +720,7 @@ const App = () => {
       setError("Task details are not available for this board card.");
       return;
     }
-    setTaskViewModal({ ideaId: idea.id });
+    setTaskViewModal({ ideaId: idea.id, card });
   };
 
   const moveCard = async (card: BoardCard, column: BoardColumn) => {
@@ -1043,7 +1083,8 @@ const App = () => {
                     { value: "created_desc", label: "Latest added" },
                     { value: "updated_desc", label: "Recently updated" },
                     { value: "title_asc", label: "Title A-Z" },
-                    { value: "status_asc", label: "Status" }
+                    { value: "status_asc", label: "Status" },
+                    { value: "rating_desc", label: "Rating" }
                   ]}
                 />
                 <Select
@@ -1108,6 +1149,22 @@ const App = () => {
                           <Title order={3}>{taskCard.title}</Title>
                         </Group>
                         {labelBadges(taskCard.labels)}
+                        {idea.readinessScore !== undefined && (
+                          <Badge
+                            variant="light"
+                            color={isReadinessStale(idea) ? "gray" : readinessColor(idea.readinessScore)}
+                            size="sm"
+                            opacity={isReadinessStale(idea) ? 0.6 : 1}
+                            mt="xs"
+                            style={{ cursor: "pointer" }}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setReadinessModal({ ideaId: idea.id, ideaTitle: idea.title });
+                            }}
+                          >
+                            {idea.readinessScore}/10{isReadinessStale(idea) ? " · stale" : ""}
+                          </Badge>
+                        )}
                       </Box>
                       {statusBadge(taskCard.status)}
                     </Group>
@@ -1219,6 +1276,25 @@ const App = () => {
                           <Stack gap="xs">
                             <Title order={4}>{card.title}</Title>
                             {labelBadges(card.labels, "xs")}
+                            {card.readinessScore !== undefined && (
+                              <Group className="board-card-readiness" justify="flex-start">
+                                <Badge
+                                  variant="light"
+                                  color={isCardReadinessStale(card, ideaById) ? "gray" : readinessColor(card.readinessScore)}
+                                  size="sm"
+                                  opacity={isCardReadinessStale(card, ideaById) ? 0.6 : 1}
+                                  style={{ cursor: "pointer" }}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    if (card.ideaId) {
+                                      setReadinessModal({ ideaId: card.ideaId, ideaTitle: card.title });
+                                    }
+                                  }}
+                                >
+                                  {card.readinessScore}/10{isCardReadinessStale(card, ideaById) ? " · stale" : ""}
+                                </Badge>
+                              </Group>
+                            )}
                             {card.branchName && (
                               <Group className="board-card-branch" justify="flex-start">
                                 <Badge
@@ -1350,7 +1426,7 @@ const App = () => {
         onClose={() => setTaskViewModal(null)}
         title="Task Overview"
         centered
-        size="lg"
+        size="xl"
         classNames={{ body: "task-overview-modal-body" }}
       >
         {taskOverview && taskViewIdea && (
@@ -1370,7 +1446,7 @@ const App = () => {
               <Text size="xs" fw={700} tt="uppercase" c="dimmed">
                 Description
               </Text>
-              <Text className="overview-text">{taskOverview.description}</Text>
+              <Text className="overview-text">{taskViewCard?.details?.trim() || taskOverview.description}</Text>
             </Paper>
 
             <Paper className="overview-section" withBorder radius="md" p="md">
@@ -1409,6 +1485,53 @@ const App = () => {
                 Edit Task
               </Button>
             </Group>
+          </Stack>
+        )}
+      </Modal>
+
+      <Modal
+        opened={!!readinessModal}
+        onClose={() => setReadinessModal(null)}
+        title={readinessModal ? `Rating History — ${readinessModal.ideaTitle}` : "Rating History"}
+        centered
+        size="lg"
+      >
+        {readinessError && <Text c="red">{readinessError}</Text>}
+        {!readinessError && readinessEvents === null && <Text c="dimmed">Loading…</Text>}
+        {!readinessError && readinessEvents !== null && readinessEvents.length === 0 && (
+          <Text c="dimmed">No ratings yet.</Text>
+        )}
+        {!readinessError && readinessEvents !== null && readinessEvents.length > 0 && (
+          <Stack gap="sm">
+            {readinessEvents.map((event, index) => {
+              const latest = index === 0;
+              const ratedIdea = readinessModal ? ideaById.get(readinessModal.ideaId) : undefined;
+              const stale = latest && ratedIdea !== undefined && isReadinessStale(ratedIdea);
+              return (
+                <Paper
+                  key={event.id}
+                  withBorder
+                  radius="md"
+                  p="md"
+                  style={latest ? { borderColor: "var(--mantine-color-blue-5)" } : undefined}
+                >
+                  <Group align="center" justify="space-between" mb={4}>
+                    <Badge
+                      variant="light"
+                      color={stale ? "gray" : readinessColor(event.score)}
+                      opacity={stale ? 0.6 : 1}
+                    >
+                      {event.score}/10{stale ? " · stale" : ""}
+                    </Badge>
+                    <Text size="xs" c="dimmed">
+                      {latest ? "Latest · " : ""}
+                      {new Date(event.createdAt).toLocaleString()}
+                    </Text>
+                  </Group>
+                  <Text className="overview-text">{event.reason}</Text>
+                </Paper>
+              );
+            })}
           </Stack>
         )}
       </Modal>

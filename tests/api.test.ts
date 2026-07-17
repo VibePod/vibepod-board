@@ -331,4 +331,95 @@ describe("API", () => {
     expect(response.body.item.title).toBe("Execution plan");
     expect(response.body.item.kind).toBe("execution_plan");
   });
+
+  it("sets board card readiness through the API", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+
+    const project = await agent.post("/api/projects").send({ title: "App", key: "APP" }).expect(201);
+    const idea = await agent
+      .post("/api/ideas")
+      .send({ projectId: project.body.item.id, title: "Scored" })
+      .expect(201);
+    await agent.post(`/api/ideas/${idea.body.item.id}/ready`).expect(200);
+    const board = await agent.get("/api/board").expect(200);
+    const card = board.body.columns.ready[0];
+
+    const response = await agent
+      .post(`/api/board/${card.id}/readiness`)
+      .send({ score: 8, reason: "Acceptance criteria and repo present" })
+      .expect(200);
+
+    expect(response.body.item).toMatchObject({
+      id: card.id,
+      readinessScore: 8,
+      readinessReason: "Acceptance criteria and repo present"
+    });
+    expect(response.body.item.readinessEvaluatedAt).toBeDefined();
+    expect(response.body.item.updatedAt).toBe(card.updatedAt);
+
+    await agent.post(`/api/board/${card.id}/readiness`).send({ score: 42, reason: "r" }).expect(400);
+    await agent.post(`/api/board/${card.id}/readiness`).send({ score: 5 }).expect(400);
+    await request(app)
+      .post(`/api/board/${card.id}/readiness`)
+      .send({ score: 5, reason: "r" })
+      .expect(401);
+  });
+
+  it("sets idea readiness through the API and mirrors it onto the linked card", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+
+    const project = await agent.post("/api/projects").send({ title: "App", key: "APP" }).expect(201);
+    const idea = await agent
+      .post("/api/ideas")
+      .send({ projectId: project.body.item.id, title: "Scored idea" })
+      .expect(201);
+    await agent.post(`/api/ideas/${idea.body.item.id}/ready`).expect(200);
+
+    const response = await agent
+      .post(`/api/ideas/${idea.body.item.id}/readiness`)
+      .send({ score: 6, reason: "Reasonable" })
+      .expect(200);
+
+    expect(response.body.item).toMatchObject({
+      id: idea.body.item.id,
+      readinessScore: 6,
+      readinessReason: "Reasonable"
+    });
+    expect(response.body.item.readinessEvaluatedAt).toBeDefined();
+
+    const board = await agent.get("/api/board").expect(200);
+    const card = board.body.columns.ready[0];
+    expect(card.readinessScore).toBe(6);
+    expect(card.readinessReason).toBe("Reasonable");
+
+    await agent.post(`/api/ideas/${idea.body.item.id}/readiness`).send({ score: 99, reason: "x" }).expect(400);
+    await request(app)
+      .post(`/api/ideas/${idea.body.item.id}/readiness`)
+      .send({ score: 5, reason: "r" })
+      .expect(401);
+  });
+
+  it("lists idea readiness history newest-first", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+
+    const project = await agent.post("/api/projects").send({ title: "App", key: "APP" }).expect(201);
+    const idea = await agent
+      .post("/api/ideas")
+      .send({ projectId: project.body.item.id, title: "Tracked" })
+      .expect(201);
+
+    await agent.post(`/api/ideas/${idea.body.item.id}/readiness`).send({ score: 4, reason: "Rough" }).expect(200);
+    await agent.post(`/api/ideas/${idea.body.item.id}/readiness`).send({ score: 8, reason: "Refined" }).expect(200);
+
+    const history = await agent.get(`/api/ideas/${idea.body.item.id}/readiness`).expect(200);
+    expect(history.body.items).toHaveLength(2);
+    expect(history.body.items[0]).toMatchObject({ score: 8, reason: "Refined" });
+    expect(history.body.items[1]).toMatchObject({ score: 4, reason: "Rough" });
+    expect(history.body.items[0].createdAt).toBeDefined();
+
+    await request(app).get(`/api/ideas/${idea.body.item.id}/readiness`).expect(401);
+  });
 });

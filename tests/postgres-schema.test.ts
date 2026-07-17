@@ -35,6 +35,7 @@ describe("PostgreSQL schema", () => {
       "api_tokens",
       "board_cards",
       "documents",
+      "idea_readiness_events",
       "ideas",
       "projects"
     ]);
@@ -83,5 +84,51 @@ describe("PostgreSQL schema", () => {
     expect(columnsByTable.get("board_cards")).toEqual(
       expect.arrayContaining(["repository_local_path", "repository_remote_url"])
     );
+  });
+
+  it("stores readiness fields on board cards", async () => {
+    await initializeDatabase(pool);
+
+    const columns = await pool.query<{ column_name: string }>(
+      `select column_name
+       from information_schema.columns
+       where table_schema = 'public' and table_name = 'board_cards'
+       order by ordinal_position`
+    );
+
+    const names = columns.rows.map((row) => row.column_name);
+    expect(names).toContain("readiness_score");
+    expect(names).toContain("readiness_reason");
+    expect(names).toContain("readiness_evaluated_at");
+  });
+
+  it("stores idea readiness events", async () => {
+    await initializeDatabase(pool);
+
+    const columns = await pool.query<{ column_name: string }>(
+      `select column_name
+       from information_schema.columns
+       where table_schema = 'public' and table_name = 'idea_readiness_events'
+       order by ordinal_position`
+    );
+
+    const names = columns.rows.map((row) => row.column_name);
+    expect(names).toEqual(expect.arrayContaining(["id", "idea_id", "score", "reason", "created_at"]));
+  });
+
+  it("stores readiness fields on ideas", async () => {
+    await initializeDatabase(pool);
+
+    const columns = await pool.query<{ column_name: string }>(
+      `select column_name
+       from information_schema.columns
+       where table_schema = 'public' and table_name = 'ideas'
+       order by ordinal_position`
+    );
+
+    const names = columns.rows.map((row) => row.column_name);
+    expect(names).toContain("readiness_score");
+    expect(names).toContain("readiness_reason");
+    expect(names).toContain("readiness_evaluated_at");
   });
 });
