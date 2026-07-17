@@ -96,6 +96,12 @@ alter table ideas add column if not exists repository_local_path text;
 alter table ideas add column if not exists repository_remote_url text;
 alter table board_cards add column if not exists repository_local_path text;
 alter table board_cards add column if not exists repository_remote_url text;
+alter table board_cards add column if not exists readiness_score integer;
+alter table board_cards add column if not exists readiness_reason text;
+alter table board_cards add column if not exists readiness_evaluated_at timestamptz;
+alter table ideas add column if not exists readiness_score integer;
+alter table ideas add column if not exists readiness_reason text;
+alter table ideas add column if not exists readiness_evaluated_at timestamptz;
 `;
 
 export const initializeDatabase = async (pool: Pick<Pool, "query">) => {

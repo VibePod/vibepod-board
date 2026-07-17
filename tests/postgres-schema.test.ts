@@ -84,4 +84,36 @@ describe("PostgreSQL schema", () => {
       expect.arrayContaining(["repository_local_path", "repository_remote_url"])
     );
   });
+
+  it("stores readiness fields on board cards", async () => {
+    await initializeDatabase(pool);
+
+    const columns = await pool.query<{ column_name: string }>(
+      `select column_name
+       from information_schema.columns
+       where table_schema = 'public' and table_name = 'board_cards'
+       order by ordinal_position`
+    );
+
+    const names = columns.rows.map((row) => row.column_name);
+    expect(names).toContain("readiness_score");
+    expect(names).toContain("readiness_reason");
+    expect(names).toContain("readiness_evaluated_at");
+  });
+
+  it("stores readiness fields on ideas", async () => {
+    await initializeDatabase(pool);
+
+    const columns = await pool.query<{ column_name: string }>(
+      `select column_name
+       from information_schema.columns
+       where table_schema = 'public' and table_name = 'ideas'
+       order by ordinal_position`
+    );
+
+    const names = columns.rows.map((row) => row.column_name);
+    expect(names).toContain("readiness_score");
+    expect(names).toContain("readiness_reason");
+    expect(names).toContain("readiness_evaluated_at");
+  });
 });

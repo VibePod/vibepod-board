@@ -29,6 +29,9 @@ export type Idea = {
   githubIssueNumber?: number;
   repositoryLocalPath?: string;
   repositoryRemoteUrl?: string;
+  readinessScore?: number;
+  readinessReason?: string;
+  readinessEvaluatedAt?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -46,6 +49,9 @@ export type BoardCard = {
   repositoryLocalPath?: string;
   repositoryRemoteUrl?: string;
   labels: string[];
+  readinessScore?: number;
+  readinessReason?: string;
+  readinessEvaluatedAt?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -122,6 +128,11 @@ export type CreateBoardCardOptions = {
 export type UpdateBoardCardInput = Partial<
   Pick<BoardCard, "column" | "branchName" | "details" | "repositoryLocalPath" | "repositoryRemoteUrl">
 >;
+
+export type SetCardReadinessInput = {
+  score: number;
+  reason: string;
+};
 
 export type CreateDocumentInput = {
   projectId?: string;

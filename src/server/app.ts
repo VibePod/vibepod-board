@@ -73,6 +73,11 @@ const updateBoardCardSchema = z.object({
   repositoryRemoteUrl: z.string().optional()
 });
 
+const readinessSchema = z.object({
+  score: z.number().int().min(1).max(10),
+  reason: z.string().trim().min(1)
+});
+
 const projectKeySchema = z.string().trim().regex(/^[A-Z]{1,3}$/, "Project ID must be 1 to 3 capital letters");
 
 const projectSchema = z.object({
@@ -274,6 +279,26 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
     asyncHandler(async (req, res) => {
       const input = updateBoardCardSchema.parse(req.body);
       const item = await store.updateBoardCard(accessFromResponse(req), routeParam(req.params.id), input);
+      res.json({ item });
+    })
+  );
+
+  app.post(
+    "/api/board/:id/readiness",
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      const input = readinessSchema.parse(req.body);
+      const item = await store.setCardReadiness(accessFromResponse(req), routeParam(req.params.id), input);
+      res.json({ item });
+    })
+  );
+
+  app.post(
+    "/api/ideas/:id/readiness",
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      const input = readinessSchema.parse(req.body);
+      const item = await store.setIdeaReadiness(accessFromResponse(req), routeParam(req.params.id), input);
       res.json({ item });
     })
   );

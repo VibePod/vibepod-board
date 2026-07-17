@@ -211,3 +211,26 @@ docker compose up --build
 ```
 
 Ready tasks appear on the board first. The optional sync endpoint can then attach GitHub issue metadata.
+
+## Readiness Evaluation (External Agent)
+
+Board cards carry an optional LLM-evaluated readiness score (integer 1-10) with a short
+rationale. The board only stores and displays the score - evaluation is done by an external
+agent (for example a Claude Code session or a scheduled vibepod task) through MCP.
+
+The evaluation loop:
+
+1. Call `list_board` for the project.
+2. Select cards that are unscored (`readinessScore` absent) or stale
+   (`updatedAt > readinessEvaluatedAt`; the UI shows these dimmed with a "stale" marker).
+3. Score each card 1-10 for **spec completeness** - how ready it is for an agent to pick up:
+   - Scope is clearly bounded (what is in, what is out).
+   - Acceptance criteria or testable outcomes are stated.
+   - Repository and branch information is set.
+   - No unresolved decisions (phrases like "TBD" or "decide in PR" lower the score).
+4. Call `set_card_readiness` with `{ id, score, reason }` where `reason` is one or two
+   sentences naming what is missing (or confirming completeness).
+
+Setting readiness never changes the card's `updated_at`, so a fresh evaluation is never
+immediately stale; any later content edit or column move marks the score stale until the
+next evaluation pass.

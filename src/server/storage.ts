@@ -19,6 +19,7 @@ import {
   type Idea,
   type PlanDocument,
   type Project,
+  type SetCardReadinessInput,
   type UpdateApiTokenInput,
   type UpdateBoardCardInput,
   type UpdateDocumentInput,
@@ -81,6 +82,17 @@ const normalizeOptionalText = (value: string | undefined): string | undefined =>
   return trimmed || undefined;
 };
 
+const normalizeReadinessInput = (input: SetCardReadinessInput): { score: number; reason: string } => {
+  if (!Number.isInteger(input.score) || input.score < 1 || input.score > 10) {
+    throw new Error("Readiness score must be an integer from 1 to 10");
+  }
+  const reason = input.reason?.trim() ?? "";
+  if (!reason) {
+    throw new Error("Readiness reason is required");
+  }
+  return { score: input.score, reason };
+};
+
 const assertTitle = (title: string | undefined, entity: string) => {
   if (!title?.trim()) {
     throw new Error(`${entity} title is required`);
@@ -121,6 +133,9 @@ type IdeaRow = {
   github_issue_number: number | null;
   repository_local_path: string | null;
   repository_remote_url: string | null;
+  readiness_score: number | null;
+  readiness_reason: string | null;
+  readiness_evaluated_at: Date | string | null;
   created_at: Date | string;
   updated_at: Date | string;
 };
@@ -138,6 +153,9 @@ type BoardCardRow = {
   repository_local_path: string | null;
   repository_remote_url: string | null;
   labels: unknown;
+  readiness_score: number | null;
+  readiness_reason: string | null;
+  readiness_evaluated_at: Date | string | null;
   created_at: Date | string;
   updated_at: Date | string;
 };
@@ -588,6 +606,90 @@ export class PostgresBoardStore implements BoardDataStore {
     }
   }
 
+  async setCardReadiness(
+    access: AccessContext,
+    id: string,
+    input: SetCardReadinessInput
+  ): Promise<BoardCard> {
+    const existing = await this.pool.query<BoardCardRow>(
+      "select * from board_cards where id = $1",
+      [id]
+    );
+    const row = existing.rows[0];
+    if (!row) {
+      throw new Error(`Board card not found: ${id}`);
+    }
+    assertCanAccessProject(access, row.project_id);
+
+    if (row.idea_id) {
+      await this.setIdeaReadiness(access, row.idea_id, input);
+      const reread = await this.pool.query<BoardCardRow>(
+        "select * from board_cards where id = $1",
+        [id]
+      );
+      return boardCardFromRow(reread.rows[0]);
+    }
+
+    const { score, reason } = normalizeReadinessInput(input);
+    const timestamp = nowIso();
+    const result = await this.pool.query<BoardCardRow>(
+      `update board_cards
+       set readiness_score = $2,
+           readiness_reason = $3,
+           readiness_evaluated_at = $4
+       where id = $1
+       returning *`,
+      [id, score, reason, timestamp]
+    );
+    return boardCardFromRow(result.rows[0]);
+  }
+
+  async setIdeaReadiness(
+    access: AccessContext,
+    id: string,
+    input: SetCardReadinessInput
+  ): Promise<Idea> {
+    const { score, reason } = normalizeReadinessInput(input);
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const current = await this.requireIdea(client, id);
+      assertCanAccessProject(access, current.projectId);
+      const timestamp = nowIso();
+      const result = await client.query<IdeaRow>(
+        `update ideas
+         set readiness_score = $2,
+             readiness_reason = $3,
+             readiness_evaluated_at = $4
+         where id = $1
+         returning *`,
+        [id, score, reason, timestamp]
+      );
+      await client.query(
+        `update board_cards
+         set readiness_score = $2,
+             readiness_reason = $3,
+             readiness_evaluated_at = $4
+         where idea_id = $1`,
+        [id, score, reason, timestamp]
+      );
+      const idea = ideaFromRow(result.rows[0]);
+      await this.addActivity(
+        client,
+        "idea.readiness",
+        `Set readiness ${score}/10: ${idea.title}`,
+        timestamp
+      );
+      await client.query("commit");
+      return idea;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async listDocuments(access: AccessContext, projectId?: string): Promise<PlanDocument[]> {
     if (projectId) {
       const project = await this.requireProject(this.pool, projectId);
@@ -1010,9 +1112,10 @@ export class PostgresBoardStore implements BoardDataStore {
     const created = await queryable.query<BoardCardRow>(
       `insert into board_cards (
          id, project_id, idea_id, title, details, column_name, branch_name, github_issue_url,
-         github_issue_number, repository_local_path, repository_remote_url, labels, created_at, updated_at
+         github_issue_number, repository_local_path, repository_remote_url, labels,
+         readiness_score, readiness_reason, readiness_evaluated_at, created_at, updated_at
        )
-       values ($1, $2, $3, $4, $5, 'ready', null, $6, $7, $8, $9, $10, $11, $11)
+       values ($1, $2, $3, $4, $5, 'ready', null, $6, $7, $8, $9, $10, $12, $13, $14, $11, $11)
        returning *`,
       [
         randomUUID(),
@@ -1025,7 +1128,10 @@ export class PostgresBoardStore implements BoardDataStore {
         idea.repositoryLocalPath ?? null,
         idea.repositoryRemoteUrl ?? null,
         JSON.stringify(idea.labels),
-        timestamp
+        timestamp,
+        idea.readinessScore ?? null,
+        idea.readinessReason ?? null,
+        idea.readinessEvaluatedAt ?? null
       ]
     );
     if (options.githubMode === "github") {
@@ -1167,6 +1273,9 @@ const ideaFromRow = (row: IdeaRow): Idea => ({
   githubIssueNumber: row.github_issue_number ?? undefined,
   repositoryLocalPath: row.repository_local_path ?? undefined,
   repositoryRemoteUrl: row.repository_remote_url ?? undefined,
+  readinessScore: row.readiness_score ?? undefined,
+  readinessReason: row.readiness_reason ?? undefined,
+  readinessEvaluatedAt: row.readiness_evaluated_at ? rowTimestamp(row.readiness_evaluated_at) : undefined,
   createdAt: rowTimestamp(row.created_at),
   updatedAt: rowTimestamp(row.updated_at)
 });
@@ -1184,6 +1293,9 @@ const boardCardFromRow = (row: BoardCardRow): BoardCard => ({
   repositoryLocalPath: row.repository_local_path ?? undefined,
   repositoryRemoteUrl: row.repository_remote_url ?? undefined,
   labels: jsonStringArray(row.labels),
+  readinessScore: row.readiness_score ?? undefined,
+  readinessReason: row.readiness_reason ?? undefined,
+  readinessEvaluatedAt: row.readiness_evaluated_at ? rowTimestamp(row.readiness_evaluated_at) : undefined,
   createdAt: rowTimestamp(row.created_at),
   updatedAt: rowTimestamp(row.updated_at)
 });
@@ -1398,6 +1510,9 @@ export class BoardStore {
       repositoryLocalPath: idea.repositoryLocalPath,
       repositoryRemoteUrl: idea.repositoryRemoteUrl,
       labels: [...idea.labels],
+      readinessScore: idea.readinessScore,
+      readinessReason: idea.readinessReason,
+      readinessEvaluatedAt: idea.readinessEvaluatedAt,
       createdAt: timestamp,
       updatedAt: timestamp
     };
@@ -1467,6 +1582,39 @@ export class BoardStore {
     this.addActivity("board.updated", `Updated board card: ${card.title}`);
     this.save();
     return clone(card);
+  }
+
+  setCardReadiness(id: string, input: SetCardReadinessInput): BoardCard {
+    const card = this.requireBoardCard(id);
+    if (card.ideaId) {
+      this.setIdeaReadiness(card.ideaId, input);
+      return clone(this.requireBoardCard(id));
+    }
+    const { score, reason } = normalizeReadinessInput(input);
+    card.readinessScore = score;
+    card.readinessReason = reason;
+    card.readinessEvaluatedAt = nowIso();
+    this.addActivity("board.readiness", `Set readiness ${score}/10: ${card.title}`);
+    this.save();
+    return clone(card);
+  }
+
+  setIdeaReadiness(id: string, input: SetCardReadinessInput): Idea {
+    const { score, reason } = normalizeReadinessInput(input);
+    const idea = this.requireIdea(id);
+    const timestamp = nowIso();
+    idea.readinessScore = score;
+    idea.readinessReason = reason;
+    idea.readinessEvaluatedAt = timestamp;
+    const card = this.data.boardCards.find((item) => item.ideaId === idea.id);
+    if (card) {
+      card.readinessScore = score;
+      card.readinessReason = reason;
+      card.readinessEvaluatedAt = timestamp;
+    }
+    this.addActivity("idea.readiness", `Set readiness ${score}/10: ${idea.title}`);
+    this.save();
+    return clone(idea);
   }
 
   listDocuments(projectId?: string): PlanDocument[] {

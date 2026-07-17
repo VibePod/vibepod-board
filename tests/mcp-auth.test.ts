@@ -117,4 +117,38 @@ describe("MCP auth", () => {
       handlers.update_board_card({ id: theirCard.id, branchName: "vp-task-cancel" })
     ).rejects.toThrow("Token is not allowed to access project");
   });
+
+  it("sets card readiness in mapped projects only", async () => {
+    const appProject = await store.createProject({ key: "APP", title: "App" });
+    const apiProject = await store.createProject({ key: "API", title: "API" });
+    const mine = await store.createIdea(adminAccess("admin"), {
+      projectId: appProject.id,
+      title: "Scored card"
+    });
+    const theirs = await store.createIdea(adminAccess("admin"), {
+      projectId: apiProject.id,
+      title: "Off limits card"
+    });
+    await store.markIdeaReady(adminAccess("admin"), mine.id);
+    await store.markIdeaReady(adminAccess("admin"), theirs.id);
+    const mineCard = (await store.getBoardColumns(adminAccess("admin"), appProject.id)).ready[0];
+    const theirCard = (await store.getBoardColumns(adminAccess("admin"), apiProject.id)).ready[0];
+
+    const handlers = createMcpToolHandlers(store, tokenAccess("token-1", [appProject.id]));
+
+    const scored = await handlers.set_card_readiness({
+      id: mineCard.id,
+      score: 3,
+      reason: "No acceptance criteria, repository unset"
+    });
+    expect(scored.item).toMatchObject({
+      id: mineCard.id,
+      readinessScore: 3,
+      readinessReason: "No acceptance criteria, repository unset"
+    });
+
+    await expect(
+      handlers.set_card_readiness({ id: theirCard.id, score: 5, reason: "r" })
+    ).rejects.toThrow("Token is not allowed to access project");
+  });
 });

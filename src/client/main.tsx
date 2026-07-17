@@ -24,6 +24,7 @@ import {
   TextInput,
   ThemeIcon,
   Title,
+  Tooltip,
   useMantineColorScheme
 } from "@mantine/core";
 import "@mantine/core/styles.css";
@@ -85,7 +86,7 @@ import {
   type TaskDraft
 } from "./taskDraftUtils.js";
 import { formatTaskId } from "./taskIdentity.js";
-import { taskListCardView } from "./taskCardUtils.js";
+import { isCardReadinessStale, isReadinessStale, readinessColor, taskListCardView } from "./taskCardUtils.js";
 import { taskOverviewForIdea } from "./taskOverviewUtils.js";
 import { filterAndSortTasks, type TaskSortOption } from "./taskListUtils.js";
 import { githubRemoteToHttpsUrl } from "./repositoryUtils.js";
@@ -132,6 +133,7 @@ type TaskModalState = {
 
 type TaskViewModalState = {
   ideaId: string;
+  card: BoardCard;
 };
 
 type NoteModalState = {
@@ -430,6 +432,8 @@ const App = () => {
   const taskViewProject = taskViewIdea
     ? state.projects.find((project) => project.id === taskViewIdea.projectId) ?? null
     : null;
+  const taskViewCard = taskViewModal?.card ?? null;
+  const ideaById = new Map(state.ideas.map((idea) => [idea.id, idea]));
   const taskOverview = taskViewIdea && taskViewProject ? taskOverviewForIdea(taskViewIdea, taskViewProject.key) : null;
   const taskLabelOptions = Array.from(new Set(projectIdeas.flatMap((idea) => idea.labels))).sort((a, b) =>
     a.localeCompare(b)
@@ -680,7 +684,7 @@ const App = () => {
       setError("Task details are not available for this board card.");
       return;
     }
-    setTaskViewModal({ ideaId: idea.id });
+    setTaskViewModal({ ideaId: idea.id, card });
   };
 
   const moveCard = async (card: BoardCard, column: BoardColumn) => {
@@ -1108,6 +1112,17 @@ const App = () => {
                           <Title order={3}>{taskCard.title}</Title>
                         </Group>
                         {labelBadges(taskCard.labels)}
+                        {idea.readinessScore !== undefined && (
+                          <Badge
+                            variant="light"
+                            color={isReadinessStale(idea) ? "gray" : readinessColor(idea.readinessScore)}
+                            size="sm"
+                            opacity={isReadinessStale(idea) ? 0.6 : 1}
+                            mt="xs"
+                          >
+                            {idea.readinessScore}/10{isReadinessStale(idea) ? " · stale" : ""}
+                          </Badge>
+                        )}
                       </Box>
                       {statusBadge(taskCard.status)}
                     </Group>
@@ -1219,6 +1234,33 @@ const App = () => {
                           <Stack gap="xs">
                             <Title order={4}>{card.title}</Title>
                             {labelBadges(card.labels, "xs")}
+                            {card.readinessScore !== undefined && (
+                              <Group className="board-card-readiness" justify="flex-start">
+                                <Tooltip
+                                  label={
+                                    isCardReadinessStale(card, ideaById)
+                                      ? `${card.readinessReason ?? ""} (card changed after evaluation on ${new Date(
+                                          card.readinessEvaluatedAt ?? ""
+                                        ).toLocaleString()})`
+                                      : `${card.readinessReason ?? ""} (evaluated ${new Date(
+                                          card.readinessEvaluatedAt ?? ""
+                                        ).toLocaleString()})`
+                                  }
+                                  multiline
+                                  maw={320}
+                                  withArrow
+                                >
+                                  <Badge
+                                    variant="light"
+                                    color={isCardReadinessStale(card, ideaById) ? "gray" : readinessColor(card.readinessScore)}
+                                    size="sm"
+                                    opacity={isCardReadinessStale(card, ideaById) ? 0.6 : 1}
+                                  >
+                                    {card.readinessScore}/10{isCardReadinessStale(card, ideaById) ? " · stale" : ""}
+                                  </Badge>
+                                </Tooltip>
+                              </Group>
+                            )}
                             {card.branchName && (
                               <Group className="board-card-branch" justify="flex-start">
                                 <Badge
@@ -1350,7 +1392,7 @@ const App = () => {
         onClose={() => setTaskViewModal(null)}
         title="Task Overview"
         centered
-        size="lg"
+        size="xl"
         classNames={{ body: "task-overview-modal-body" }}
       >
         {taskOverview && taskViewIdea && (
@@ -1366,11 +1408,37 @@ const App = () => {
               {labelBadges(taskOverview.labels)}
             </Stack>
 
+            {taskViewIdea?.readinessScore !== undefined && (
+              <Paper className="overview-section" withBorder radius="md" p="md">
+                <Group align="center" justify="space-between" mb="xs">
+                  <Text size="xs" fw={700} tt="uppercase" c="dimmed">
+                    Confidence
+                  </Text>
+                  <Badge
+                    variant="light"
+                    color={isReadinessStale(taskViewIdea) ? "gray" : readinessColor(taskViewIdea.readinessScore)}
+                    opacity={isReadinessStale(taskViewIdea) ? 0.6 : 1}
+                  >
+                    {taskViewIdea.readinessScore}/10{isReadinessStale(taskViewIdea) ? " · stale" : ""}
+                  </Badge>
+                </Group>
+                {taskViewIdea.readinessReason && (
+                  <Text className="overview-text">{taskViewIdea.readinessReason}</Text>
+                )}
+                {taskViewIdea.readinessEvaluatedAt && (
+                  <Text size="xs" c="dimmed" mt="xs">
+                    {isReadinessStale(taskViewIdea) ? "Idea changed after evaluation on " : "Evaluated "}
+                    {new Date(taskViewIdea.readinessEvaluatedAt).toLocaleString()}
+                  </Text>
+                )}
+              </Paper>
+            )}
+
             <Paper className="overview-section" withBorder radius="md" p="md">
               <Text size="xs" fw={700} tt="uppercase" c="dimmed">
                 Description
               </Text>
-              <Text className="overview-text">{taskOverview.description}</Text>
+              <Text className="overview-text">{taskViewCard?.details?.trim() || taskOverview.description}</Text>
             </Paper>
 
             <Paper className="overview-section" withBorder radius="md" p="md">
