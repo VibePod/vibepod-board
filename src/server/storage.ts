@@ -19,6 +19,7 @@ import {
   type Idea,
   type PlanDocument,
   type Project,
+  type ReadinessEvent,
   type SetCardReadinessInput,
   type UpdateApiTokenInput,
   type UpdateBoardCardInput,
@@ -42,6 +43,7 @@ const emptyData = (): BoardData => ({
   projects: [],
   ideas: [],
   boardCards: [],
+  readinessEvents: [],
   documents: [],
   activity: []
 });
@@ -140,6 +142,14 @@ type IdeaRow = {
   updated_at: Date | string;
 };
 
+type ReadinessEventRow = {
+  id: string;
+  idea_id: string;
+  score: number;
+  reason: string;
+  created_at: Date | string;
+};
+
 type BoardCardRow = {
   id: string;
   project_id: string;
@@ -191,11 +201,19 @@ export class PostgresBoardStore implements BoardDataStore {
   constructor(private readonly pool: Pool) {}
 
   async getState(access: AccessContext): Promise<BoardData> {
+    const ideas = await this.listIdeas(access);
+    const events = ideas.length
+      ? await this.pool.query<ReadinessEventRow>(
+          "select * from idea_readiness_events where idea_id = any($1::text[]) order by created_at desc",
+          [ideas.map((idea) => idea.id)]
+        )
+      : { rows: [] as ReadinessEventRow[] };
     return {
       schemaVersion: 3,
       projects: await this.listProjects(access),
-      ideas: await this.listIdeas(access),
+      ideas,
       boardCards: await this.listBoardCards(access),
+      readinessEvents: events.rows.map(readinessEventFromRow),
       documents: await this.listDocuments(access),
       activity: await this.listActivity(access)
     };
@@ -673,6 +691,11 @@ export class PostgresBoardStore implements BoardDataStore {
          where idea_id = $1`,
         [id, score, reason, timestamp]
       );
+      await client.query(
+        `insert into idea_readiness_events (id, idea_id, score, reason, created_at)
+         values ($1, $2, $3, $4, $5)`,
+        [randomUUID(), id, score, reason, timestamp]
+      );
       const idea = ideaFromRow(result.rows[0]);
       await this.addActivity(
         client,
@@ -688,6 +711,16 @@ export class PostgresBoardStore implements BoardDataStore {
     } finally {
       client.release();
     }
+  }
+
+  async listIdeaReadiness(access: AccessContext, id: string): Promise<ReadinessEvent[]> {
+    const idea = await this.requireIdea(this.pool, id);
+    assertCanAccessProject(access, idea.projectId);
+    const result = await this.pool.query<ReadinessEventRow>(
+      "select * from idea_readiness_events where idea_id = $1 order by created_at desc",
+      [id]
+    );
+    return result.rows.map(readinessEventFromRow);
   }
 
   async listDocuments(access: AccessContext, projectId?: string): Promise<PlanDocument[]> {
@@ -1280,6 +1313,14 @@ const ideaFromRow = (row: IdeaRow): Idea => ({
   updatedAt: rowTimestamp(row.updated_at)
 });
 
+const readinessEventFromRow = (row: ReadinessEventRow): ReadinessEvent => ({
+  id: row.id,
+  ideaId: row.idea_id,
+  score: row.score,
+  reason: row.reason,
+  createdAt: rowTimestamp(row.created_at)
+});
+
 const boardCardFromRow = (row: BoardCardRow): BoardCard => ({
   id: row.id,
   projectId: row.project_id,
@@ -1612,9 +1653,23 @@ export class BoardStore {
       card.readinessReason = reason;
       card.readinessEvaluatedAt = timestamp;
     }
+    this.data.readinessEvents.push({
+      id: randomUUID(),
+      ideaId: idea.id,
+      score,
+      reason,
+      createdAt: timestamp
+    });
     this.addActivity("idea.readiness", `Set readiness ${score}/10: ${idea.title}`);
     this.save();
     return clone(idea);
+  }
+
+  listIdeaReadiness(id: string): ReadinessEvent[] {
+    const idea = this.requireIdea(id);
+    // Events are append-only, so insertion order is chronological; reverse for a
+    // stable newest-first list even when timestamps collide within the same ms.
+    return clone(this.data.readinessEvents.filter((event) => event.ideaId === idea.id)).reverse();
   }
 
   listDocuments(projectId?: string): PlanDocument[] {
@@ -1688,6 +1743,7 @@ export class BoardStore {
       projects: normalizedProjects.projects,
       ideas: (parsed.ideas ?? []) as Idea[],
       boardCards: (parsed.boardCards ?? []) as BoardCard[],
+      readinessEvents: (parsed.readinessEvents ?? []) as ReadinessEvent[],
       documents: (parsed.documents ?? []) as PlanDocument[],
       activity: parsed.activity ?? []
     };
@@ -1695,12 +1751,29 @@ export class BoardStore {
     const ownershipMigrated = migrateProjectOwnership(data);
     const statusMigrated = normalizeIdeaStatuses(data);
     const taskNumberMigrated = normalizeIdeaTaskNumbers(data);
+    let readinessBackfilled = false;
+    for (const idea of data.ideas) {
+      if (
+        idea.readinessScore !== undefined &&
+        !data.readinessEvents.some((event) => event.ideaId === idea.id)
+      ) {
+        data.readinessEvents.push({
+          id: randomUUID(),
+          ideaId: idea.id,
+          score: idea.readinessScore,
+          reason: idea.readinessReason ?? "",
+          createdAt: idea.readinessEvaluatedAt ?? nowIso()
+        });
+        readinessBackfilled = true;
+      }
+    }
     const migrated =
       parsed.schemaVersion !== 3 ||
       normalizedProjects.migrated ||
       ownershipMigrated ||
       statusMigrated ||
-      taskNumberMigrated;
+      taskNumberMigrated ||
+      readinessBackfilled;
 
     return { data, migrated };
   }

@@ -400,4 +400,26 @@ describe("API", () => {
       .send({ score: 5, reason: "r" })
       .expect(401);
   });
+
+  it("lists idea readiness history newest-first", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+
+    const project = await agent.post("/api/projects").send({ title: "App", key: "APP" }).expect(201);
+    const idea = await agent
+      .post("/api/ideas")
+      .send({ projectId: project.body.item.id, title: "Tracked" })
+      .expect(201);
+
+    await agent.post(`/api/ideas/${idea.body.item.id}/readiness`).send({ score: 4, reason: "Rough" }).expect(200);
+    await agent.post(`/api/ideas/${idea.body.item.id}/readiness`).send({ score: 8, reason: "Refined" }).expect(200);
+
+    const history = await agent.get(`/api/ideas/${idea.body.item.id}/readiness`).expect(200);
+    expect(history.body.items).toHaveLength(2);
+    expect(history.body.items[0]).toMatchObject({ score: 8, reason: "Refined" });
+    expect(history.body.items[1]).toMatchObject({ score: 4, reason: "Rough" });
+    expect(history.body.items[0].createdAt).toBeDefined();
+
+    await request(app).get(`/api/ideas/${idea.body.item.id}/readiness`).expect(401);
+  });
 });

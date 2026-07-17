@@ -93,6 +93,37 @@ describe("BoardStore readiness", () => {
     expect(updatedIdea.readinessReason).toBe("Some risk");
   });
 
+  it("appends a readiness event on every call and lists newest-first", () => {
+    const project = store.createProject({ key: "HST", title: "History" });
+    const idea = store.createIdea({ projectId: project.id, title: "Tracked" });
+
+    store.setIdeaReadiness(idea.id, { score: 4, reason: "Rough" });
+    store.setIdeaReadiness(idea.id, { score: 4, reason: "Rough" });
+    store.setIdeaReadiness(idea.id, { score: 8, reason: "Refined" });
+
+    const events = store.listIdeaReadiness(idea.id);
+    expect(events).toHaveLength(3);
+    expect(events[0].score).toBe(8);
+    expect(events[0].reason).toBe("Refined");
+    expect(events[1].score).toBe(4);
+    expect(events.every((e) => e.ideaId === idea.id)).toBe(true);
+    expect(events[0].createdAt >= events[2].createdAt).toBe(true);
+
+    const updated = store.listIdeas(project.id).find((i) => i.id === idea.id)!;
+    expect(updated.readinessScore).toBe(8);
+  });
+
+  it("scopes history to the idea", () => {
+    const project = store.createProject({ key: "SCP", title: "Scope" });
+    const a = store.createIdea({ projectId: project.id, title: "A" });
+    const b = store.createIdea({ projectId: project.id, title: "B" });
+    store.setIdeaReadiness(a.id, { score: 5, reason: "a" });
+    store.setIdeaReadiness(b.id, { score: 6, reason: "b" });
+
+    expect(store.listIdeaReadiness(a.id)).toHaveLength(1);
+    expect(store.listIdeaReadiness(a.id)[0].reason).toBe("a");
+  });
+
   it("carries idea readiness onto a card created at promotion time", () => {
     const project = store.createProject({ key: "CRY", title: "Carry" });
     const idea = store.createIdea({ projectId: project.id, title: "Scored then promoted" });

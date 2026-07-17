@@ -56,6 +56,14 @@ export type BoardCard = {
   updatedAt: string;
 };
 
+export type ReadinessEvent = {
+  id: string;
+  ideaId: string;
+  score: number;
+  reason: string;
+  createdAt: string;
+};
+
 export type BoardColumns = Record<BoardColumn, BoardCard[]>;
 
 export type PlanDocument = {
@@ -82,6 +90,7 @@ export type BoardData = {
   projects: Project[];
   ideas: Idea[];
   boardCards: BoardCard[];
+  readinessEvents: ReadinessEvent[];
   documents: PlanDocument[];
   activity: ActivityEvent[];
 };

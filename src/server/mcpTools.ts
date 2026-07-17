@@ -51,6 +51,9 @@ export const createMcpToolHandlers = (store: BoardDataStore, access: AccessConte
     const { id, ...changes } = input;
     return { item: await store.setIdeaReadiness(access, id, changes) };
   },
+  async list_idea_readiness(input: { id: string }) {
+    return { items: await store.listIdeaReadiness(access, input.id) };
+  },
   async create_document(input: CreateDocumentInput) {
     return { item: await store.createDocument(access, input) };
   },

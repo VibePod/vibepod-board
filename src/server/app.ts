@@ -304,6 +304,15 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
   );
 
   app.get(
+    "/api/ideas/:id/readiness",
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      const items = await store.listIdeaReadiness(accessFromResponse(req), routeParam(req.params.id));
+      res.json({ items });
+    })
+  );
+
+  app.get(
     "/api/documents",
     requireAccess(store, sessions),
     asyncHandler(async (req, res) => {

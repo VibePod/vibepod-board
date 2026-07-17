@@ -12,6 +12,7 @@ import type {
   Idea,
   PlanDocument,
   Project,
+  ReadinessEvent,
   SetCardReadinessInput,
   UpdateApiTokenInput,
   UpdateBoardCardInput,
@@ -64,6 +65,7 @@ export interface BoardDataStore {
   moveBoardCard(access: AccessContext, id: string, column: BoardColumn): Promise<BoardCard>;
   setCardReadiness(access: AccessContext, id: string, input: SetCardReadinessInput): Promise<BoardCard>;
   setIdeaReadiness(access: AccessContext, id: string, input: SetCardReadinessInput): Promise<Idea>;
+  listIdeaReadiness(access: AccessContext, id: string): Promise<ReadinessEvent[]>;
   listDocuments(access: AccessContext, projectId?: string): Promise<PlanDocument[]>;
   createDocument(access: AccessContext, input: CreateDocumentInput): Promise<PlanDocument>;
   updateDocument(access: AccessContext, id: string, input: UpdateDocumentInput): Promise<PlanDocument>;

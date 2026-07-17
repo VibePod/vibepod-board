@@ -24,7 +24,6 @@ import {
   TextInput,
   ThemeIcon,
   Title,
-  Tooltip,
   useMantineColorScheme
 } from "@mantine/core";
 import "@mantine/core/styles.css";
@@ -65,7 +64,8 @@ import {
   type Idea,
   type IdeaStatus,
   type PlanDocument,
-  type Project
+  type Project,
+  type ReadinessEvent
 } from "../shared/types.js";
 import vibepodIconUrl from "./assets/icon.png";
 import {
@@ -134,6 +134,11 @@ type TaskModalState = {
 type TaskViewModalState = {
   ideaId: string;
   card: BoardCard;
+};
+
+type ReadinessModalState = {
+  ideaId: string;
+  ideaTitle: string;
 };
 
 type NoteModalState = {
@@ -263,6 +268,9 @@ const App = () => {
   const [projectModal, setProjectModal] = useState<ProjectModalState | null>(null);
   const [taskModal, setTaskModal] = useState<TaskModalState | null>(null);
   const [taskViewModal, setTaskViewModal] = useState<TaskViewModalState | null>(null);
+  const [readinessModal, setReadinessModal] = useState<ReadinessModalState | null>(null);
+  const [readinessEvents, setReadinessEvents] = useState<ReadinessEvent[] | null>(null);
+  const [readinessError, setReadinessError] = useState("");
   const [noteModal, setNoteModal] = useState<NoteModalState | null>(null);
   const [taskSort, setTaskSort] = useState<TaskSortOption>("created_desc");
   const [taskStatusFilter, setTaskStatusFilter] = useState<IdeaStatus | "">("");
@@ -401,7 +409,34 @@ const App = () => {
   }, []);
 
   useEffect(() => {
-    if (!isMcpGuideOpen && !isTokenManagerOpen && !projectModal && !taskModal && !taskViewModal && !noteModal) {
+    if (!readinessModal) {
+      setReadinessEvents(null);
+      setReadinessError("");
+      return;
+    }
+    let cancelled = false;
+    api<{ items: ReadinessEvent[] }>(`/api/ideas/${readinessModal.ideaId}/readiness`)
+      .then((response) => {
+        if (!cancelled) setReadinessEvents(response.items);
+      })
+      .catch((requestError: Error) => {
+        if (!cancelled) setReadinessError(requestError.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [readinessModal]);
+
+  useEffect(() => {
+    if (
+      !isMcpGuideOpen &&
+      !isTokenManagerOpen &&
+      !projectModal &&
+      !taskModal &&
+      !taskViewModal &&
+      !noteModal &&
+      !readinessModal
+    ) {
       return;
     }
 
@@ -413,12 +448,13 @@ const App = () => {
         setTaskModal(null);
         setTaskViewModal(null);
         setNoteModal(null);
+        setReadinessModal(null);
       }
     };
 
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [isMcpGuideOpen, isTokenManagerOpen, projectModal, taskModal, taskViewModal, noteModal]);
+  }, [isMcpGuideOpen, isTokenManagerOpen, projectModal, taskModal, taskViewModal, noteModal, readinessModal]);
 
   const selectedProject = state.projects.find((project) => project.id === selectedProjectId);
   const projectIdeas = selectedProject ? state.ideas.filter((idea) => idea.projectId === selectedProject.id) : [];
@@ -1047,7 +1083,8 @@ const App = () => {
                     { value: "created_desc", label: "Latest added" },
                     { value: "updated_desc", label: "Recently updated" },
                     { value: "title_asc", label: "Title A-Z" },
-                    { value: "status_asc", label: "Status" }
+                    { value: "status_asc", label: "Status" },
+                    { value: "rating_desc", label: "Rating" }
                   ]}
                 />
                 <Select
@@ -1119,6 +1156,11 @@ const App = () => {
                             size="sm"
                             opacity={isReadinessStale(idea) ? 0.6 : 1}
                             mt="xs"
+                            style={{ cursor: "pointer" }}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setReadinessModal({ ideaId: idea.id, ideaTitle: idea.title });
+                            }}
                           >
                             {idea.readinessScore}/10{isReadinessStale(idea) ? " · stale" : ""}
                           </Badge>
@@ -1236,29 +1278,21 @@ const App = () => {
                             {labelBadges(card.labels, "xs")}
                             {card.readinessScore !== undefined && (
                               <Group className="board-card-readiness" justify="flex-start">
-                                <Tooltip
-                                  label={
-                                    isCardReadinessStale(card, ideaById)
-                                      ? `${card.readinessReason ?? ""} (card changed after evaluation on ${new Date(
-                                          card.readinessEvaluatedAt ?? ""
-                                        ).toLocaleString()})`
-                                      : `${card.readinessReason ?? ""} (evaluated ${new Date(
-                                          card.readinessEvaluatedAt ?? ""
-                                        ).toLocaleString()})`
-                                  }
-                                  multiline
-                                  maw={320}
-                                  withArrow
+                                <Badge
+                                  variant="light"
+                                  color={isCardReadinessStale(card, ideaById) ? "gray" : readinessColor(card.readinessScore)}
+                                  size="sm"
+                                  opacity={isCardReadinessStale(card, ideaById) ? 0.6 : 1}
+                                  style={{ cursor: "pointer" }}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    if (card.ideaId) {
+                                      setReadinessModal({ ideaId: card.ideaId, ideaTitle: card.title });
+                                    }
+                                  }}
                                 >
-                                  <Badge
-                                    variant="light"
-                                    color={isCardReadinessStale(card, ideaById) ? "gray" : readinessColor(card.readinessScore)}
-                                    size="sm"
-                                    opacity={isCardReadinessStale(card, ideaById) ? 0.6 : 1}
-                                  >
-                                    {card.readinessScore}/10{isCardReadinessStale(card, ideaById) ? " · stale" : ""}
-                                  </Badge>
-                                </Tooltip>
+                                  {card.readinessScore}/10{isCardReadinessStale(card, ideaById) ? " · stale" : ""}
+                                </Badge>
                               </Group>
                             )}
                             {card.branchName && (
@@ -1408,32 +1442,6 @@ const App = () => {
               {labelBadges(taskOverview.labels)}
             </Stack>
 
-            {taskViewIdea?.readinessScore !== undefined && (
-              <Paper className="overview-section" withBorder radius="md" p="md">
-                <Group align="center" justify="space-between" mb="xs">
-                  <Text size="xs" fw={700} tt="uppercase" c="dimmed">
-                    Confidence
-                  </Text>
-                  <Badge
-                    variant="light"
-                    color={isReadinessStale(taskViewIdea) ? "gray" : readinessColor(taskViewIdea.readinessScore)}
-                    opacity={isReadinessStale(taskViewIdea) ? 0.6 : 1}
-                  >
-                    {taskViewIdea.readinessScore}/10{isReadinessStale(taskViewIdea) ? " · stale" : ""}
-                  </Badge>
-                </Group>
-                {taskViewIdea.readinessReason && (
-                  <Text className="overview-text">{taskViewIdea.readinessReason}</Text>
-                )}
-                {taskViewIdea.readinessEvaluatedAt && (
-                  <Text size="xs" c="dimmed" mt="xs">
-                    {isReadinessStale(taskViewIdea) ? "Idea changed after evaluation on " : "Evaluated "}
-                    {new Date(taskViewIdea.readinessEvaluatedAt).toLocaleString()}
-                  </Text>
-                )}
-              </Paper>
-            )}
-
             <Paper className="overview-section" withBorder radius="md" p="md">
               <Text size="xs" fw={700} tt="uppercase" c="dimmed">
                 Description
@@ -1477,6 +1485,53 @@ const App = () => {
                 Edit Task
               </Button>
             </Group>
+          </Stack>
+        )}
+      </Modal>
+
+      <Modal
+        opened={!!readinessModal}
+        onClose={() => setReadinessModal(null)}
+        title={readinessModal ? `Rating History — ${readinessModal.ideaTitle}` : "Rating History"}
+        centered
+        size="lg"
+      >
+        {readinessError && <Text c="red">{readinessError}</Text>}
+        {!readinessError && readinessEvents === null && <Text c="dimmed">Loading…</Text>}
+        {!readinessError && readinessEvents !== null && readinessEvents.length === 0 && (
+          <Text c="dimmed">No ratings yet.</Text>
+        )}
+        {!readinessError && readinessEvents !== null && readinessEvents.length > 0 && (
+          <Stack gap="sm">
+            {readinessEvents.map((event, index) => {
+              const latest = index === 0;
+              const ratedIdea = readinessModal ? ideaById.get(readinessModal.ideaId) : undefined;
+              const stale = latest && ratedIdea !== undefined && isReadinessStale(ratedIdea);
+              return (
+                <Paper
+                  key={event.id}
+                  withBorder
+                  radius="md"
+                  p="md"
+                  style={latest ? { borderColor: "var(--mantine-color-blue-5)" } : undefined}
+                >
+                  <Group align="center" justify="space-between" mb={4}>
+                    <Badge
+                      variant="light"
+                      color={stale ? "gray" : readinessColor(event.score)}
+                      opacity={stale ? 0.6 : 1}
+                    >
+                      {event.score}/10{stale ? " · stale" : ""}
+                    </Badge>
+                    <Text size="xs" c="dimmed">
+                      {latest ? "Latest · " : ""}
+                      {new Date(event.createdAt).toLocaleString()}
+                    </Text>
+                  </Group>
+                  <Text className="overview-text">{event.reason}</Text>
+                </Paper>
+              );
+            })}
           </Stack>
         )}
       </Modal>

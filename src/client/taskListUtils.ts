@@ -1,6 +1,6 @@
 import type { Idea, IdeaStatus } from "../shared/types.js";
 
-export const taskSortOptions = ["created_desc", "updated_desc", "title_asc", "status_asc"] as const;
+export const taskSortOptions = ["created_desc", "updated_desc", "title_asc", "status_asc", "rating_desc"] as const;
 
 export type TaskSortOption = (typeof taskSortOptions)[number];
 
@@ -45,6 +45,12 @@ const compareTasks = (a: Idea, b: Idea, sort: TaskSortOption) => {
   }
   if (sort === "status_asc") {
     return a.status.localeCompare(b.status) || b.createdAt.localeCompare(a.createdAt);
+  }
+  if (sort === "rating_desc") {
+    // Highest rating first; unrated tasks sink to the bottom; ties fall back to newest created.
+    const aScore = a.readinessScore ?? -1;
+    const bScore = b.readinessScore ?? -1;
+    return bScore - aScore || b.createdAt.localeCompare(a.createdAt);
   }
   return b.createdAt.localeCompare(a.createdAt) || b.updatedAt.localeCompare(a.updatedAt);
 };

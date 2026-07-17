@@ -204,6 +204,18 @@ export const createMcpServer = (store: BoardDataStore, access: AccessContext) =>
   );
 
   server.registerTool(
+    "list_idea_readiness",
+    {
+      title: "List Idea Readiness History",
+      description: "List an idea's readiness rating history, newest first (score, reason, date).",
+      inputSchema: {
+        id: z.string().min(1)
+      }
+    },
+    async ({ id }) => jsonContent(await handlers.list_idea_readiness({ id }))
+  );
+
+  server.registerTool(
     "create_document",
     {
       title: "Create Document",
