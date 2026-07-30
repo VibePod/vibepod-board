@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   emptyTaskDraft,
   taskDraftToIdeaPayload,
-  taskToDraft
+  taskToDraft,
 } from "../src/client/taskDraftUtils.js";
 import type { Idea } from "../src/shared/types.js";
 
@@ -19,7 +19,7 @@ const task = (patch: Partial<Idea> = {}): Idea => ({
   acceptanceCriteria: [],
   createdAt: "2026-06-04T00:00:00.000Z",
   updatedAt: "2026-06-04T00:00:00.000Z",
-  ...patch
+  ...patch,
 });
 
 describe("task draft utilities", () => {
@@ -31,7 +31,7 @@ describe("task draft utilities", () => {
       acceptanceCriteria: "",
       repositoryLocalPath: "",
       repositoryRemoteUrl: "",
-      status: "idea"
+      status: "idea",
     });
   });
 
@@ -45,9 +45,9 @@ describe("task draft utilities", () => {
           labels: ["ui", "modal"],
           acceptanceCriteria: ["Labels are selectable", "Criteria is readable"],
           repositoryLocalPath: "/workspace/vibepod-board",
-          repositoryRemoteUrl: "git@github.com:vibepod/vibepod-board.git"
-        })
-      )
+          repositoryRemoteUrl: "git@github.com:vibepod/vibepod-board.git",
+        }),
+      ),
     ).toMatchObject({
       id: "idea-1",
       title: "Design modal",
@@ -56,7 +56,7 @@ describe("task draft utilities", () => {
       acceptanceCriteria: "Labels are selectable\nCriteria is readable",
       repositoryLocalPath: "/workspace/vibepod-board",
       repositoryRemoteUrl: "git@github.com:vibepod/vibepod-board.git",
-      status: "refining"
+      status: "refining",
     });
   });
 
@@ -66,11 +66,12 @@ describe("task draft utilities", () => {
         title: "Improve task modal",
         description: "One readable task description",
         labels: ["ui", "modal"],
-        acceptanceCriteria: "Status and labels share a row\nCriteria uses a full width box",
+        acceptanceCriteria:
+          "Status and labels share a row\nCriteria uses a full width box",
         repositoryLocalPath: "/workspace/vibepod-board",
         repositoryRemoteUrl: "git@github.com:vibepod/vibepod-board.git",
-        status: "ready"
-      })
+        status: "ready",
+      }),
     ).toEqual({
       title: "Improve task modal",
       summary: "",
@@ -78,10 +79,10 @@ describe("task draft utilities", () => {
       labels: ["ui", "modal"],
       acceptanceCriteria: [
         "Status and labels share a row",
-        "Criteria uses a full width box"
+        "Criteria uses a full width box",
       ],
       repositoryLocalPath: "/workspace/vibepod-board",
-      repositoryRemoteUrl: "git@github.com:vibepod/vibepod-board.git"
+      repositoryRemoteUrl: "git@github.com:vibepod/vibepod-board.git",
     });
   });
 });

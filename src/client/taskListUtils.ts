@@ -1,6 +1,12 @@
 import type { Idea, IdeaStatus } from "../shared/types.js";
 
-export const taskSortOptions = ["created_desc", "updated_desc", "title_asc", "status_asc", "rating_desc"] as const;
+export const taskSortOptions = [
+  "created_desc",
+  "updated_desc",
+  "title_asc",
+  "status_asc",
+  "rating_desc",
+] as const;
 
 export type TaskSortOption = (typeof taskSortOptions)[number];
 
@@ -11,7 +17,10 @@ export type TaskListFilters = {
   search?: string;
 };
 
-export const filterAndSortTasks = (tasks: Idea[], filters: TaskListFilters): Idea[] => {
+export const filterAndSortTasks = (
+  tasks: Idea[],
+  filters: TaskListFilters,
+): Idea[] => {
   const search = filters.search?.trim().toLocaleLowerCase() ?? "";
   const label = filters.label?.trim() ?? "";
   const status = filters.status ?? "";
@@ -38,13 +47,20 @@ export const filterAndSortTasks = (tasks: Idea[], filters: TaskListFilters): Ide
 
 const compareTasks = (a: Idea, b: Idea, sort: TaskSortOption) => {
   if (sort === "updated_desc") {
-    return b.updatedAt.localeCompare(a.updatedAt) || b.createdAt.localeCompare(a.createdAt);
+    return (
+      b.updatedAt.localeCompare(a.updatedAt) ||
+      b.createdAt.localeCompare(a.createdAt)
+    );
   }
   if (sort === "title_asc") {
-    return a.title.localeCompare(b.title) || b.createdAt.localeCompare(a.createdAt);
+    return (
+      a.title.localeCompare(b.title) || b.createdAt.localeCompare(a.createdAt)
+    );
   }
   if (sort === "status_asc") {
-    return a.status.localeCompare(b.status) || b.createdAt.localeCompare(a.createdAt);
+    return (
+      a.status.localeCompare(b.status) || b.createdAt.localeCompare(a.createdAt)
+    );
   }
   if (sort === "rating_desc") {
     // Highest rating first; unrated tasks sink to the bottom; ties fall back to newest created.
@@ -52,5 +68,8 @@ const compareTasks = (a: Idea, b: Idea, sort: TaskSortOption) => {
     const bScore = b.readinessScore ?? -1;
     return bScore - aScore || b.createdAt.localeCompare(a.createdAt);
   }
-  return b.createdAt.localeCompare(a.createdAt) || b.updatedAt.localeCompare(a.updatedAt);
+  return (
+    b.createdAt.localeCompare(a.createdAt) ||
+    b.updatedAt.localeCompare(a.updatedAt)
+  );
 };

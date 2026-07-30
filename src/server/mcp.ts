@@ -1,26 +1,33 @@
-import { Router } from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { Router } from "express";
 import * as z from "zod/v4";
 
 import { boardColumns, documentKinds, ideaStatuses } from "../shared/types.js";
 import { parseBearerToken } from "./auth.js";
 import { createMcpToolHandlers } from "./mcpTools.js";
-import { tokenAccess, type AccessContext, type BoardDataStore } from "./store.js";
+import {
+  type AccessContext,
+  type BoardDataStore,
+  tokenAccess,
+} from "./store.js";
 
 const jsonContent = (value: unknown) => ({
   content: [
     {
       type: "text" as const,
-      text: JSON.stringify(value, null, 2)
-    }
-  ]
+      text: JSON.stringify(value, null, 2),
+    },
+  ],
 });
 
-export const createMcpServer = (store: BoardDataStore, access: AccessContext) => {
+export const createMcpServer = (
+  store: BoardDataStore,
+  access: AccessContext,
+) => {
   const server = new McpServer({
     name: "vibepod-board",
-    version: "0.1.0"
+    version: "0.1.0",
   });
   const handlers = createMcpToolHandlers(store, access);
 
@@ -30,40 +37,41 @@ export const createMcpServer = (store: BoardDataStore, access: AccessContext) =>
     {
       title: "VibePod Board State",
       description: "Full scoped vibepod-board state as JSON.",
-      mimeType: "application/json"
+      mimeType: "application/json",
     },
     async (uri) => ({
       contents: [
         {
           uri: uri.href,
           mimeType: "application/json",
-          text: JSON.stringify(await handlers.read_state(), null, 2)
-        }
-      ]
-    })
+          text: JSON.stringify(await handlers.read_state(), null, 2),
+        },
+      ],
+    }),
   );
 
   server.registerTool(
     "list_projects",
     {
       title: "List Projects",
-      description: "List projects that contain tasks, board cards, and notes."
+      description: "List projects that contain tasks, board cards, and notes.",
     },
-    async () => jsonContent(await handlers.list_projects())
+    async () => jsonContent(await handlers.list_projects()),
   );
 
   server.registerTool(
     "create_project",
     {
       title: "Create Project",
-      description: "Create a project container for tasks, board cards, and notes.",
+      description:
+        "Create a project container for tasks, board cards, and notes.",
       inputSchema: {
         key: z.string().regex(/^[A-Z]{1,3}$/),
         title: z.string().min(1),
-        summary: z.string().optional()
-      }
+        summary: z.string().optional(),
+      },
     },
-    async (input) => jsonContent(await handlers.create_project(input))
+    async (input) => jsonContent(await handlers.create_project(input)),
   );
 
   server.registerTool(
@@ -72,10 +80,11 @@ export const createMcpServer = (store: BoardDataStore, access: AccessContext) =>
       title: "List Ideas",
       description: "List ideas with refinement and readiness state.",
       inputSchema: {
-        projectId: z.string().optional()
-      }
+        projectId: z.string().optional(),
+      },
     },
-    async ({ projectId }) => jsonContent(await handlers.list_ideas({ projectId }))
+    async ({ projectId }) =>
+      jsonContent(await handlers.list_ideas({ projectId })),
   );
 
   server.registerTool(
@@ -91,10 +100,10 @@ export const createMcpServer = (store: BoardDataStore, access: AccessContext) =>
         labels: z.array(z.string()).optional(),
         acceptanceCriteria: z.array(z.string()).optional(),
         repositoryLocalPath: z.string().optional(),
-        repositoryRemoteUrl: z.string().optional()
-      }
+        repositoryRemoteUrl: z.string().optional(),
+      },
     },
-    async (input) => jsonContent(await handlers.create_idea(input))
+    async (input) => jsonContent(await handlers.create_idea(input)),
   );
 
   server.registerTool(
@@ -112,10 +121,10 @@ export const createMcpServer = (store: BoardDataStore, access: AccessContext) =>
         acceptanceCriteria: z.array(z.string()).optional(),
         repositoryLocalPath: z.string().optional(),
         repositoryRemoteUrl: z.string().optional(),
-        status: z.enum(ideaStatuses).optional()
-      }
+        status: z.enum(ideaStatuses).optional(),
+      },
     },
-    async (input) => jsonContent(await handlers.update_idea(input))
+    async (input) => jsonContent(await handlers.update_idea(input)),
   );
 
   server.registerTool(
@@ -124,10 +133,10 @@ export const createMcpServer = (store: BoardDataStore, access: AccessContext) =>
       title: "Mark Idea Ready",
       description: "Mark an idea as ready and available on the Kanban board.",
       inputSchema: {
-        id: z.string().min(1)
-      }
+        id: z.string().min(1),
+      },
     },
-    async ({ id }) => jsonContent(await handlers.mark_idea_ready({ id }))
+    async ({ id }) => jsonContent(await handlers.mark_idea_ready({ id })),
   );
 
   server.registerTool(
@@ -136,10 +145,11 @@ export const createMcpServer = (store: BoardDataStore, access: AccessContext) =>
       title: "List Board",
       description: "Read the Kanban board columns.",
       inputSchema: {
-        projectId: z.string().optional()
-      }
+        projectId: z.string().optional(),
+      },
     },
-    async ({ projectId }) => jsonContent(await handlers.list_board({ projectId }))
+    async ({ projectId }) =>
+      jsonContent(await handlers.list_board({ projectId })),
   );
 
   server.registerTool(
@@ -149,10 +159,11 @@ export const createMcpServer = (store: BoardDataStore, access: AccessContext) =>
       description: "Move a board card to another Kanban column.",
       inputSchema: {
         id: z.string().min(1),
-        column: z.enum(boardColumns)
-      }
+        column: z.enum(boardColumns),
+      },
     },
-    async ({ id, column }) => jsonContent(await handlers.move_board_card({ id, column }))
+    async ({ id, column }) =>
+      jsonContent(await handlers.move_board_card({ id, column })),
   );
 
   server.registerTool(
@@ -167,10 +178,10 @@ export const createMcpServer = (store: BoardDataStore, access: AccessContext) =>
         branchName: z.string().optional(),
         details: z.string().optional(),
         repositoryLocalPath: z.string().optional(),
-        repositoryRemoteUrl: z.string().optional()
-      }
+        repositoryRemoteUrl: z.string().optional(),
+      },
     },
-    async (input) => jsonContent(await handlers.update_board_card(input))
+    async (input) => jsonContent(await handlers.update_board_card(input)),
   );
 
   server.registerTool(
@@ -182,10 +193,10 @@ export const createMcpServer = (store: BoardDataStore, access: AccessContext) =>
       inputSchema: {
         id: z.string().min(1),
         score: z.number().int().min(1).max(10),
-        reason: z.string().min(1)
-      }
+        reason: z.string().min(1),
+      },
     },
-    async (input) => jsonContent(await handlers.set_card_readiness(input))
+    async (input) => jsonContent(await handlers.set_card_readiness(input)),
   );
 
   server.registerTool(
@@ -197,22 +208,23 @@ export const createMcpServer = (store: BoardDataStore, access: AccessContext) =>
       inputSchema: {
         id: z.string().min(1),
         score: z.number().int().min(1).max(10),
-        reason: z.string().min(1)
-      }
+        reason: z.string().min(1),
+      },
     },
-    async (input) => jsonContent(await handlers.set_idea_readiness(input))
+    async (input) => jsonContent(await handlers.set_idea_readiness(input)),
   );
 
   server.registerTool(
     "list_idea_readiness",
     {
       title: "List Idea Readiness History",
-      description: "List an idea's readiness rating history, newest first (score, reason, date).",
+      description:
+        "List an idea's readiness rating history, newest first (score, reason, date).",
       inputSchema: {
-        id: z.string().min(1)
-      }
+        id: z.string().min(1),
+      },
     },
-    async ({ id }) => jsonContent(await handlers.list_idea_readiness({ id }))
+    async ({ id }) => jsonContent(await handlers.list_idea_readiness({ id })),
   );
 
   server.registerTool(
@@ -226,10 +238,10 @@ export const createMcpServer = (store: BoardDataStore, access: AccessContext) =>
         kind: z.enum(documentKinds).optional(),
         content: z.string().optional(),
         linkedIdeaIds: z.array(z.string()).optional(),
-        linkedCardIds: z.array(z.string()).optional()
-      }
+        linkedCardIds: z.array(z.string()).optional(),
+      },
     },
-    async (input) => jsonContent(await handlers.create_document(input))
+    async (input) => jsonContent(await handlers.create_document(input)),
   );
 
   server.registerTool(
@@ -244,10 +256,10 @@ export const createMcpServer = (store: BoardDataStore, access: AccessContext) =>
         kind: z.enum(documentKinds).optional(),
         content: z.string().optional(),
         linkedIdeaIds: z.array(z.string()).optional(),
-        linkedCardIds: z.array(z.string()).optional()
-      }
+        linkedCardIds: z.array(z.string()).optional(),
+      },
     },
-    async (input) => jsonContent(await handlers.update_document(input))
+    async (input) => jsonContent(await handlers.update_document(input)),
   );
 
   server.registerTool(
@@ -256,10 +268,11 @@ export const createMcpServer = (store: BoardDataStore, access: AccessContext) =>
       title: "List Documents",
       description: "List execution plans and other planning documents.",
       inputSchema: {
-        projectId: z.string().optional()
-      }
+        projectId: z.string().optional(),
+      },
     },
-    async ({ projectId }) => jsonContent(await handlers.list_documents({ projectId }))
+    async ({ projectId }) =>
+      jsonContent(await handlers.list_documents({ projectId })),
   );
 
   return server;
@@ -280,9 +293,12 @@ export const createMcpRouter = (store: BoardDataStore) => {
       return;
     }
 
-    const server = createMcpServer(store, tokenAccess(authenticated.tokenId, authenticated.projectIds));
+    const server = createMcpServer(
+      store,
+      tokenAccess(authenticated.tokenId, authenticated.projectIds),
+    );
     const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined
+      sessionIdGenerator: undefined,
     });
 
     try {
@@ -294,9 +310,10 @@ export const createMcpRouter = (store: BoardDataStore) => {
           jsonrpc: "2.0",
           error: {
             code: -32603,
-            message: error instanceof Error ? error.message : "Internal server error"
+            message:
+              error instanceof Error ? error.message : "Internal server error",
           },
-          id: null
+          id: null,
         });
       }
     } finally {
@@ -310,9 +327,9 @@ export const createMcpRouter = (store: BoardDataStore) => {
       jsonrpc: "2.0",
       error: {
         code: -32000,
-        message: "Method not allowed."
+        message: "Method not allowed.",
       },
-      id: null
+      id: null,
     });
   });
 
@@ -321,9 +338,9 @@ export const createMcpRouter = (store: BoardDataStore) => {
       jsonrpc: "2.0",
       error: {
         code: -32000,
-        message: "Method not allowed."
+        message: "Method not allowed.",
       },
-      id: null
+      id: null,
     });
   });
 

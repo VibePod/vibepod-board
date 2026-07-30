@@ -18,7 +18,7 @@ import type {
   UpdateBoardCardInput,
   UpdateDocumentInput,
   UpdateIdeaInput,
-  UpdateProjectInput
+  UpdateProjectInput,
 } from "../shared/types.js";
 
 export type AdminAccess = {
@@ -51,57 +51,116 @@ export interface BoardDataStore {
   updateProject(id: string, input: UpdateProjectInput): Promise<Project>;
   listIdeas(access: AccessContext, projectId?: string): Promise<Idea[]>;
   createIdea(access: AccessContext, input: CreateIdeaInput): Promise<Idea>;
-  updateIdea(access: AccessContext, id: string, input: UpdateIdeaInput): Promise<Idea>;
+  updateIdea(
+    access: AccessContext,
+    id: string,
+    input: UpdateIdeaInput,
+  ): Promise<Idea>;
   markIdeaReady(access: AccessContext, id: string): Promise<Idea>;
-  setIdeaBoardAvailability(access: AccessContext, id: string, available: boolean): Promise<Idea>;
+  setIdeaBoardAvailability(
+    access: AccessContext,
+    id: string,
+    available: boolean,
+  ): Promise<Idea>;
   createBoardCardFromIdea(
     access: AccessContext,
     id: string,
-    options: CreateBoardCardOptions
+    options: CreateBoardCardOptions,
   ): Promise<BoardCard>;
-  listBoardCards(access: AccessContext, projectId?: string): Promise<BoardCard[]>;
-  getBoardColumns(access: AccessContext, projectId?: string): Promise<BoardColumns>;
-  updateBoardCard(access: AccessContext, id: string, input: UpdateBoardCardInput): Promise<BoardCard>;
-  moveBoardCard(access: AccessContext, id: string, column: BoardColumn): Promise<BoardCard>;
-  setCardReadiness(access: AccessContext, id: string, input: SetCardReadinessInput): Promise<BoardCard>;
-  setIdeaReadiness(access: AccessContext, id: string, input: SetCardReadinessInput): Promise<Idea>;
-  listIdeaReadiness(access: AccessContext, id: string): Promise<ReadinessEvent[]>;
-  listDocuments(access: AccessContext, projectId?: string): Promise<PlanDocument[]>;
-  createDocument(access: AccessContext, input: CreateDocumentInput): Promise<PlanDocument>;
-  updateDocument(access: AccessContext, id: string, input: UpdateDocumentInput): Promise<PlanDocument>;
+  listBoardCards(
+    access: AccessContext,
+    projectId?: string,
+  ): Promise<BoardCard[]>;
+  getBoardColumns(
+    access: AccessContext,
+    projectId?: string,
+  ): Promise<BoardColumns>;
+  updateBoardCard(
+    access: AccessContext,
+    id: string,
+    input: UpdateBoardCardInput,
+  ): Promise<BoardCard>;
+  moveBoardCard(
+    access: AccessContext,
+    id: string,
+    column: BoardColumn,
+  ): Promise<BoardCard>;
+  setCardReadiness(
+    access: AccessContext,
+    id: string,
+    input: SetCardReadinessInput,
+  ): Promise<BoardCard>;
+  setIdeaReadiness(
+    access: AccessContext,
+    id: string,
+    input: SetCardReadinessInput,
+  ): Promise<Idea>;
+  listIdeaReadiness(
+    access: AccessContext,
+    id: string,
+  ): Promise<ReadinessEvent[]>;
+  listDocuments(
+    access: AccessContext,
+    projectId?: string,
+  ): Promise<PlanDocument[]>;
+  createDocument(
+    access: AccessContext,
+    input: CreateDocumentInput,
+  ): Promise<PlanDocument>;
+  updateDocument(
+    access: AccessContext,
+    id: string,
+    input: UpdateDocumentInput,
+  ): Promise<PlanDocument>;
   listActivity(access: AccessContext): Promise<BoardData["activity"]>;
   listApiTokens(): Promise<ApiTokenSummary[]>;
   createApiToken(input: CreateApiTokenInput): Promise<CreatedApiToken>;
-  updateApiToken(id: string, input: UpdateApiTokenInput): Promise<ApiTokenSummary>;
+  updateApiToken(
+    id: string,
+    input: UpdateApiTokenInput,
+  ): Promise<ApiTokenSummary>;
   revokeApiToken(id: string): Promise<ApiTokenSummary>;
   authenticateApiToken(token: string): Promise<AuthenticatedToken | null>;
 }
 
-export const adminAccess = (username: string): AdminAccess => ({ kind: "admin", username });
-
-export const tokenAccess = (tokenId: string, projectIds: string[]): TokenAccess => ({
-  kind: "token",
-  tokenId,
-  projectIds
+export const adminAccess = (username: string): AdminAccess => ({
+  kind: "admin",
+  username,
 });
 
-export const isAdminAccess = (access: AccessContext): access is AdminAccess => access.kind === "admin";
+export const tokenAccess = (
+  tokenId: string,
+  projectIds: string[],
+): TokenAccess => ({
+  kind: "token",
+  tokenId,
+  projectIds,
+});
 
-export const assertCanAccessProject = (access: AccessContext, projectId: string) => {
+export const isAdminAccess = (access: AccessContext): access is AdminAccess =>
+  access.kind === "admin";
+
+export const assertCanAccessProject = (
+  access: AccessContext,
+  projectId: string,
+) => {
   if (access.kind === "admin" || access.projectIds.includes(projectId)) {
     return;
   }
   throw new Error(`Token is not allowed to access project: ${projectId}`);
 };
 
-export const filterProjectIds = (access: AccessContext, projectIds: string[]): string[] =>
+export const filterProjectIds = (
+  access: AccessContext,
+  projectIds: string[],
+): string[] =>
   access.kind === "admin"
     ? projectIds
     : projectIds.filter((projectId) => access.projectIds.includes(projectId));
 
 export const defaultProjectIdForCreate = (
   access: AccessContext,
-  requestedProjectId: string | undefined
+  requestedProjectId: string | undefined,
 ): string | undefined => {
   if (access.kind === "admin") {
     return requestedProjectId;

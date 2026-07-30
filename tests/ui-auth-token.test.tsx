@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import React from "react";
+
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,8 +15,8 @@ beforeEach(() => {
       removeEventListener: vi.fn(),
       addListener: vi.fn(),
       removeListener: vi.fn(),
-      dispatchEvent: vi.fn()
-    }))
+      dispatchEvent: vi.fn(),
+    })),
   });
   class ResizeObserverStub {
     observe = vi.fn();
@@ -45,11 +45,11 @@ describe("admin auth UI", () => {
         if (path === "/api/auth/me") {
           return new Response(JSON.stringify({ authenticated: false }), {
             status: 200,
-            headers: { "Content-Type": "application/json" }
+            headers: { "Content-Type": "application/json" },
           });
         }
         return new Response("{}", { status: 404 });
-      })
+      }),
     );
 
     const AppShell = await loadAppShell();
@@ -64,10 +64,13 @@ describe("admin auth UI", () => {
       "fetch",
       vi.fn(async (path: string) => {
         if (path === "/api/auth/me") {
-          return new Response(JSON.stringify({ authenticated: true, username: "admin" }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" }
-          });
+          return new Response(
+            JSON.stringify({ authenticated: true, username: "admin" }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
         }
         if (path === "/api/projects") {
           return new Response(
@@ -79,45 +82,57 @@ describe("admin auth UI", () => {
                   title: "App",
                   summary: "",
                   createdAt: "",
-                  updatedAt: ""
-                }
-              ]
+                  updatedAt: "",
+                },
+              ],
             }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
+            { status: 200, headers: { "Content-Type": "application/json" } },
           );
         }
         if (path === "/api/ideas") {
           return new Response(JSON.stringify({ items: [] }), {
             status: 200,
-            headers: { "Content-Type": "application/json" }
+            headers: { "Content-Type": "application/json" },
           });
         }
         if (path === "/api/board") {
           return new Response(
-            JSON.stringify({ columns: { ready: [], planned: [], in_progress: [], review: [], done: [] } }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
+            JSON.stringify({
+              columns: {
+                ready: [],
+                planned: [],
+                in_progress: [],
+                review: [],
+                done: [],
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
           );
         }
         if (path === "/api/documents") {
           return new Response(JSON.stringify({ items: [] }), {
             status: 200,
-            headers: { "Content-Type": "application/json" }
+            headers: { "Content-Type": "application/json" },
           });
         }
         if (path === "/api/tokens") {
           return new Response(JSON.stringify({ items: [] }), {
             status: 200,
-            headers: { "Content-Type": "application/json" }
+            headers: { "Content-Type": "application/json" },
           });
         }
         return new Response("{}", { status: 404 });
-      })
+      }),
     );
 
     const AppShell = await loadAppShell();
     render(<AppShell />);
-    await userEvent.click(await screen.findByRole("button", { name: "API Tokens" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: "API Tokens" }),
+    );
 
-    expect(await screen.findByRole("button", { name: "Create Token" })).toBeTruthy();
+    expect(
+      await screen.findByRole("button", { name: "Create Token" }),
+    ).toBeTruthy();
   });
 });

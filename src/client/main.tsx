@@ -10,9 +10,9 @@ import {
   Code,
   createTheme,
   Group,
-  MultiSelect,
   MantineProvider,
   Modal,
+  MultiSelect,
   Paper,
   Select,
   SimpleGrid,
@@ -24,7 +24,7 @@ import {
   TextInput,
   ThemeIcon,
   Title,
-  useMantineColorScheme
+  useMantineColorScheme,
 } from "@mantine/core";
 import "@mantine/core/styles.css";
 import {
@@ -38,58 +38,65 @@ import {
   LogOut,
   Moon,
   Pencil,
-  Plus,
   PlugZap,
+  Plus,
   RefreshCcw,
   Save,
-  Sun
+  Sun,
 } from "lucide-react";
-import React, { type FormEvent, type ReactNode, useEffect, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-
-import { endpointOptions, integrationExamples } from "../shared/integrationExamples.js";
-import { integrationExamplesForToken } from "../shared/integrationExamples.js";
+import {
+  endpointOptions,
+  integrationExamples,
+  integrationExamplesForToken,
+} from "../shared/integrationExamples.js";
 import {
   type ApiTokenSummary,
   type AuthMeResponse,
-  boardColumns,
-  type CreateApiTokenInput,
-  type CreatedApiTokenResponse,
-  documentKinds,
-  ideaStatuses,
   type BoardCard,
   type BoardColumn,
   type BoardColumns,
+  boardColumns,
+  type CreateApiTokenInput,
+  type CreatedApiTokenResponse,
   type DocumentKind,
+  documentKinds,
   type Idea,
   type IdeaStatus,
+  ideaStatuses,
   type PlanDocument,
   type Project,
-  type ReadinessEvent
+  type ReadinessEvent,
 } from "../shared/types.js";
 import vibepodIconUrl from "./assets/icon.png";
 import {
   navigationForProjectSelection,
   projectSelectorOptions,
-  shouldShowProjectSidebar
+  shouldShowProjectSidebar,
 } from "./layoutNavigation.js";
 import {
   formatNavigationPath,
-  parseNavigationPath,
   type NavigationState,
-  type NavigationView
+  type NavigationView,
+  parseNavigationPath,
 } from "./navigation.js";
+import { githubRemoteToHttpsUrl } from "./repositoryUtils.js";
+import {
+  isCardReadinessStale,
+  isReadinessStale,
+  readinessColor,
+  taskListCardView,
+} from "./taskCardUtils.js";
 import {
   emptyTaskDraft,
+  type TaskDraft,
   taskDraftToIdeaPayload,
   taskToDraft,
-  type TaskDraft
 } from "./taskDraftUtils.js";
 import { formatTaskId } from "./taskIdentity.js";
-import { isCardReadinessStale, isReadinessStale, readinessColor, taskListCardView } from "./taskCardUtils.js";
-import { taskOverviewForIdea } from "./taskOverviewUtils.js";
 import { filterAndSortTasks, type TaskSortOption } from "./taskListUtils.js";
-import { githubRemoteToHttpsUrl } from "./repositoryUtils.js";
+import { taskOverviewForIdea } from "./taskOverviewUtils.js";
 import "./styles.css";
 
 type AppState = {
@@ -161,7 +168,7 @@ const emptyColumns: BoardColumns = {
   planned: [],
   in_progress: [],
   review: [],
-  done: []
+  done: [],
 };
 
 const columnLabels: Record<BoardColumn, string> = {
@@ -169,30 +176,30 @@ const columnLabels: Record<BoardColumn, string> = {
   planned: "Planned",
   in_progress: "In Progress",
   review: "Review",
-  done: "Done"
+  done: "Done",
 };
 
 const emptyProjectDraft = (): ProjectDraft => ({
   key: "",
   title: "",
-  summary: ""
+  summary: "",
 });
 
 const emptyNoteDraft = (): NoteDraft => ({
   title: "",
   kind: "notes",
   content: "",
-  linkedIdeaId: ""
+  linkedIdeaId: "",
 });
 
 const emptyLoginDraft = (): LoginDraft => ({
   username: "",
-  password: ""
+  password: "",
 });
 
 const emptyTokenDraft = (): CreateApiTokenInput => ({
   name: "",
-  projectIds: []
+  projectIds: [],
 });
 
 const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
@@ -201,11 +208,13 @@ const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
     credentials: "include",
     headers: {
       "Content-Type": "application/json",
-      ...init?.headers
-    }
+      ...init?.headers,
+    },
   });
   if (!response.ok) {
-    const error = (await response.json().catch(() => ({}))) as { error?: string };
+    const error = (await response.json().catch(() => ({}))) as {
+      error?: string;
+    };
     throw new Error(error.error ?? `Request failed: ${response.status}`);
   }
   return (await response.json()) as T;
@@ -219,11 +228,11 @@ const appTheme = createTheme({
   black: "#1f2937",
   white: "#ffffff",
   fontFamily:
-    "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
+    'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   headings: {
     fontFamily:
-      "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
-    fontWeight: "700"
+      'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    fontWeight: "700",
   },
   colors: {
     teal: [
@@ -236,7 +245,7 @@ const appTheme = createTheme({
       "#247f73",
       "#1d665d",
       "#194f49",
-      "#113b36"
+      "#113b36",
     ],
     slate: [
       "#f8fafc",
@@ -248,9 +257,9 @@ const appTheme = createTheme({
       "#475569",
       "#334155",
       "#1f2937",
-      "#0f172a"
-    ]
-  }
+      "#0f172a",
+    ],
+  },
 });
 
 const App = () => {
@@ -261,15 +270,26 @@ const App = () => {
     projects: [],
     ideas: [],
     columns: emptyColumns,
-    documents: []
+    documents: [],
   });
-  const [activeView, setActiveView] = useState<ActiveView>(initialNavigation.activeView);
-  const [selectedProjectId, setSelectedProjectId] = useState<string>(initialNavigation.selectedProjectId);
-  const [projectModal, setProjectModal] = useState<ProjectModalState | null>(null);
+  const [activeView, setActiveView] = useState<ActiveView>(
+    initialNavigation.activeView,
+  );
+  const [selectedProjectId, setSelectedProjectId] = useState<string>(
+    initialNavigation.selectedProjectId,
+  );
+  const [projectModal, setProjectModal] = useState<ProjectModalState | null>(
+    null,
+  );
   const [taskModal, setTaskModal] = useState<TaskModalState | null>(null);
-  const [taskViewModal, setTaskViewModal] = useState<TaskViewModalState | null>(null);
-  const [readinessModal, setReadinessModal] = useState<ReadinessModalState | null>(null);
-  const [readinessEvents, setReadinessEvents] = useState<ReadinessEvent[] | null>(null);
+  const [taskViewModal, setTaskViewModal] = useState<TaskViewModalState | null>(
+    null,
+  );
+  const [readinessModal, setReadinessModal] =
+    useState<ReadinessModalState | null>(null);
+  const [readinessEvents, setReadinessEvents] = useState<
+    ReadinessEvent[] | null
+  >(null);
   const [readinessError, setReadinessError] = useState("");
   const [noteModal, setNoteModal] = useState<NoteModalState | null>(null);
   const [taskSort, setTaskSort] = useState<TaskSortOption>("created_desc");
@@ -277,14 +297,18 @@ const App = () => {
   const [taskLabelFilter, setTaskLabelFilter] = useState("");
   const [taskSearch, setTaskSearch] = useState("");
   const [draggingCardId, setDraggingCardId] = useState("");
-  const [dragOverColumn, setDragOverColumn] = useState<BoardColumn | null>(null);
+  const [dragOverColumn, setDragOverColumn] = useState<BoardColumn | null>(
+    null,
+  );
   const [error, setError] = useState<string>("");
   const [isLoading, setIsLoading] = useState(true);
   const [isMcpGuideOpen, setIsMcpGuideOpen] = useState(false);
   const [isTokenManagerOpen, setIsTokenManagerOpen] = useState(false);
   const [tokens, setTokens] = useState<ApiTokenSummary[]>([]);
   const [createdToken, setCreatedToken] = useState<CreatedTokenState>(null);
-  const [tokenDraft, setTokenDraft] = useState<CreateApiTokenInput>(emptyTokenDraft());
+  const [tokenDraft, setTokenDraft] = useState<CreateApiTokenInput>(
+    emptyTokenDraft(),
+  );
 
   const loadState = async () => {
     setError("");
@@ -292,13 +316,13 @@ const App = () => {
       api<{ items: Project[] }>("/api/projects"),
       api<{ items: Idea[] }>("/api/ideas"),
       api<{ columns: BoardColumns }>("/api/board"),
-      api<{ items: PlanDocument[] }>("/api/documents")
+      api<{ items: PlanDocument[] }>("/api/documents"),
     ]);
     setState({
       projects: projects.items,
       ideas: ideas.items,
       columns: board.columns,
-      documents: documents.items
+      documents: documents.items,
     });
     setIsLoading(false);
   };
@@ -309,9 +333,12 @@ const App = () => {
     try {
       const me = await api<AuthMeResponse>("/api/auth/login", {
         method: "POST",
-        body: JSON.stringify(loginDraft)
+        body: JSON.stringify(loginDraft),
       });
-      setAuth({ status: "authenticated", username: me.username ?? loginDraft.username });
+      setAuth({
+        status: "authenticated",
+        username: me.username ?? loginDraft.username,
+      });
       setLoginDraft(emptyLoginDraft());
       setIsLoading(true);
       await loadState();
@@ -321,7 +348,9 @@ const App = () => {
   };
 
   const logoutAdmin = async () => {
-    await api<AuthMeResponse>("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    await api<AuthMeResponse>("/api/auth/logout", { method: "POST" }).catch(
+      () => undefined,
+    );
     setAuth({ status: "unauthenticated" });
     setState({ projects: [], ideas: [], columns: emptyColumns, documents: [] });
     setSelectedProjectId("");
@@ -352,7 +381,7 @@ const App = () => {
     try {
       const created = await api<CreatedApiTokenResponse>("/api/tokens", {
         method: "POST",
-        body: JSON.stringify(tokenDraft)
+        body: JSON.stringify(tokenDraft),
       });
       setCreatedToken({ name: created.item.name, token: created.token });
       setTokenDraft(emptyTokenDraft());
@@ -368,6 +397,7 @@ const App = () => {
     await loadTokens();
   };
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: bootstrap must run once on mount only
   useEffect(() => {
     const bootstrap = async () => {
       try {
@@ -392,7 +422,7 @@ const App = () => {
   useEffect(() => {
     const normalizedPath = formatNavigationPath({
       activeView: initialNavigation.activeView,
-      selectedProjectId: initialNavigation.selectedProjectId
+      selectedProjectId: initialNavigation.selectedProjectId,
     });
     if (window.location.pathname !== normalizedPath) {
       window.history.replaceState(null, "", normalizedPath);
@@ -405,7 +435,8 @@ const App = () => {
     };
 
     window.addEventListener("popstate", updateNavigationFromUrl);
-    return () => window.removeEventListener("popstate", updateNavigationFromUrl);
+    return () =>
+      window.removeEventListener("popstate", updateNavigationFromUrl);
   }, []);
 
   useEffect(() => {
@@ -415,7 +446,9 @@ const App = () => {
       return;
     }
     let cancelled = false;
-    api<{ items: ReadinessEvent[] }>(`/api/ideas/${readinessModal.ideaId}/readiness`)
+    api<{ items: ReadinessEvent[] }>(
+      `/api/ideas/${readinessModal.ideaId}/readiness`,
+    )
       .then((response) => {
         if (!cancelled) setReadinessEvents(response.items);
       })
@@ -454,36 +487,60 @@ const App = () => {
 
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [isMcpGuideOpen, isTokenManagerOpen, projectModal, taskModal, taskViewModal, noteModal, readinessModal]);
+  }, [
+    isMcpGuideOpen,
+    isTokenManagerOpen,
+    projectModal,
+    taskModal,
+    taskViewModal,
+    noteModal,
+    readinessModal,
+  ]);
 
-  const selectedProject = state.projects.find((project) => project.id === selectedProjectId);
-  const projectIdeas = selectedProject ? state.ideas.filter((idea) => idea.projectId === selectedProject.id) : [];
-  const projectColumns = selectedProject ? filterColumnsByProject(state.columns, selectedProject.id) : emptyColumns;
+  const selectedProject = state.projects.find(
+    (project) => project.id === selectedProjectId,
+  );
+  const projectIdeas = selectedProject
+    ? state.ideas.filter((idea) => idea.projectId === selectedProject.id)
+    : [];
+  const projectColumns = selectedProject
+    ? filterColumnsByProject(state.columns, selectedProject.id)
+    : emptyColumns;
   const projectDocuments = selectedProject
-    ? state.documents.filter((document) => document.projectId === selectedProject.id)
+    ? state.documents.filter(
+        (document) => document.projectId === selectedProject.id,
+      )
     : [];
   const taskViewIdea = taskViewModal
-    ? state.ideas.find((idea) => idea.id === taskViewModal.ideaId) ?? null
+    ? (state.ideas.find((idea) => idea.id === taskViewModal.ideaId) ?? null)
     : null;
   const taskViewProject = taskViewIdea
-    ? state.projects.find((project) => project.id === taskViewIdea.projectId) ?? null
+    ? (state.projects.find(
+        (project) => project.id === taskViewIdea.projectId,
+      ) ?? null)
     : null;
   const taskViewCard = taskViewModal?.card ?? null;
   const ideaById = new Map(state.ideas.map((idea) => [idea.id, idea]));
-  const taskOverview = taskViewIdea && taskViewProject ? taskOverviewForIdea(taskViewIdea, taskViewProject.key) : null;
-  const taskLabelOptions = Array.from(new Set(projectIdeas.flatMap((idea) => idea.labels))).sort((a, b) =>
-    a.localeCompare(b)
-  );
+  const taskOverview =
+    taskViewIdea && taskViewProject
+      ? taskOverviewForIdea(taskViewIdea, taskViewProject.key)
+      : null;
+  const taskLabelOptions = Array.from(
+    new Set(projectIdeas.flatMap((idea) => idea.labels)),
+  ).sort((a, b) => a.localeCompare(b));
   const taskModalLabelOptions = Array.from(
-    new Set([...taskLabelOptions, ...(taskModal?.draft.labels ?? [])])
+    new Set([...taskLabelOptions, ...(taskModal?.draft.labels ?? [])]),
   ).sort((a, b) => a.localeCompare(b));
   const visibleProjectIdeas = filterAndSortTasks(projectIdeas, {
     sort: taskSort,
     status: taskStatusFilter,
     label: taskLabelFilter,
-    search: taskSearch
+    search: taskSearch,
   });
-  const showProjectSidebar = shouldShowProjectSidebar(activeView, !!selectedProject);
+  const showProjectSidebar = shouldShowProjectSidebar(
+    activeView,
+    !!selectedProject,
+  );
   const projectOptions = projectSelectorOptions(state.projects);
   const isDarkTheme = colorScheme === "dark";
 
@@ -503,7 +560,10 @@ const App = () => {
     return (
       <main className="login-shell">
         <Paper className="login-panel" withBorder radius="md" p="xl">
-          <form className="modal-form" onSubmit={(event) => void loginAdmin(event)}>
+          <form
+            className="modal-form"
+            onSubmit={(event) => void loginAdmin(event)}
+          >
             <Stack gap="md">
               <Group gap="sm">
                 <ThemeIcon variant="light" color="teal" size={42} radius="md">
@@ -523,7 +583,12 @@ const App = () => {
                 label="Username"
                 aria-label="Username"
                 value={loginDraft.username}
-                onChange={(event) => setLoginDraft((current) => ({ ...current, username: event.target.value }))}
+                onChange={(event) =>
+                  setLoginDraft((current) => ({
+                    ...current,
+                    username: event.target.value,
+                  }))
+                }
                 required
               />
               <TextInput
@@ -531,7 +596,12 @@ const App = () => {
                 aria-label="Password"
                 type="password"
                 value={loginDraft.password}
-                onChange={(event) => setLoginDraft((current) => ({ ...current, password: event.target.value }))}
+                onChange={(event) =>
+                  setLoginDraft((current) => ({
+                    ...current,
+                    password: event.target.value,
+                  }))
+                }
                 required
               />
               <Button type="submit" leftSection={<KeyRound size={16} />}>
@@ -560,7 +630,10 @@ const App = () => {
     navigateTo(navigationForProjectSelection(activeView, projectId));
   };
 
-  const openProject = (project: Project, view: Exclude<ActiveView, "projects"> = "ideas") => {
+  const openProject = (
+    project: Project,
+    view: Exclude<ActiveView, "projects"> = "ideas",
+  ) => {
     navigateTo({ activeView: view, selectedProjectId: project.id });
   };
 
@@ -579,14 +652,14 @@ const App = () => {
         id: project.id,
         key: project.key,
         title: project.title,
-        summary: project.summary
-      }
+        summary: project.summary,
+      },
     });
   };
 
   const updateProjectDraft = (patch: Partial<ProjectDraft>) => {
     setProjectModal((current) =>
-      current ? { ...current, draft: { ...current.draft, ...patch } } : current
+      current ? { ...current, draft: { ...current.draft, ...patch } } : current,
     );
   };
 
@@ -599,19 +672,19 @@ const App = () => {
     const payload = {
       key: projectModal.draft.key,
       title: projectModal.draft.title,
-      summary: projectModal.draft.summary
+      summary: projectModal.draft.summary,
     };
 
     try {
       if (projectModal.mode === "create") {
         await api<{ item: Project }>("/api/projects", {
           method: "POST",
-          body: JSON.stringify(payload)
+          body: JSON.stringify(payload),
         });
       } else if (projectModal.draft.id) {
         await api(`/api/projects/${projectModal.draft.id}`, {
           method: "PATCH",
-          body: JSON.stringify(payload)
+          body: JSON.stringify(payload),
         });
       }
       setProjectModal(null);
@@ -633,13 +706,13 @@ const App = () => {
     const project = state.projects.find((item) => item.id === idea.projectId);
     setTaskModal({
       mode: "edit",
-      draft: taskToDraft(idea, project?.key)
+      draft: taskToDraft(idea, project?.key),
     });
   };
 
   const updateTaskDraft = (patch: Partial<TaskDraft>) => {
     setTaskModal((current) =>
-      current ? { ...current, draft: { ...current.draft, ...patch } } : current
+      current ? { ...current, draft: { ...current.draft, ...patch } } : current,
     );
   };
 
@@ -656,13 +729,13 @@ const App = () => {
         method: "POST",
         body: JSON.stringify({
           ...payload,
-          projectId: selectedProject?.id
-        })
+          projectId: selectedProject?.id,
+        }),
       });
       if (taskModal.draft.status !== "idea") {
         await api(`/api/ideas/${created.item.id}`, {
           method: "PATCH",
-          body: JSON.stringify({ status: taskModal.draft.status })
+          body: JSON.stringify({ status: taskModal.draft.status }),
         });
       }
     } else if (taskModal.draft.id) {
@@ -670,8 +743,8 @@ const App = () => {
         method: "PATCH",
         body: JSON.stringify({
           ...payload,
-          status: taskModal.draft.status
-        })
+          status: taskModal.draft.status,
+        }),
       });
     }
     setTaskModal(null);
@@ -694,14 +767,14 @@ const App = () => {
         title: document.title,
         kind: document.kind,
         content: document.content,
-        linkedIdeaId: document.linkedIdeaIds[0] ?? ""
-      }
+        linkedIdeaId: document.linkedIdeaIds[0] ?? "",
+      },
     });
   };
 
   const updateNoteDraft = (patch: Partial<NoteDraft>) => {
     setNoteModal((current) =>
-      current ? { ...current, draft: { ...current.draft, ...patch } } : current
+      current ? { ...current, draft: { ...current.draft, ...patch } } : current,
     );
   };
 
@@ -709,7 +782,7 @@ const App = () => {
     setError("");
     await api(`/api/ideas/${idea.id}/ready`, {
       method: "POST",
-      body: JSON.stringify({ available })
+      body: JSON.stringify({ available }),
     });
     await loadState();
   };
@@ -727,7 +800,7 @@ const App = () => {
     setError("");
     await api(`/api/board/${card.id}`, {
       method: "PATCH",
-      body: JSON.stringify({ column })
+      body: JSON.stringify({ column }),
     });
     await loadState();
   };
@@ -755,18 +828,20 @@ const App = () => {
       title: noteModal.draft.title,
       content: noteModal.draft.content,
       kind: noteModal.draft.kind,
-      linkedIdeaIds: noteModal.draft.linkedIdeaId ? [noteModal.draft.linkedIdeaId] : []
+      linkedIdeaIds: noteModal.draft.linkedIdeaId
+        ? [noteModal.draft.linkedIdeaId]
+        : [],
     };
 
     if (noteModal.mode === "create") {
       await api("/api/documents", {
         method: "POST",
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
       });
     } else if (noteModal.draft.id) {
       await api(`/api/documents/${noteModal.draft.id}`, {
         method: "PATCH",
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
       });
     }
     setNoteModal(null);
@@ -774,11 +849,16 @@ const App = () => {
   };
 
   return (
-    <main className={`shell ${activeView === "projects" ? "home-shell" : "project-shell"}`}>
+    <main
+      className={`shell ${activeView === "projects" ? "home-shell" : "project-shell"}`}
+    >
       <header className="app-topbar">
         <a
           className="app-brand"
-          href={formatNavigationPath({ activeView: "projects", selectedProjectId: "" })}
+          href={formatNavigationPath({
+            activeView: "projects",
+            selectedProjectId: "",
+          })}
           onClick={(event) => {
             event.preventDefault();
             returnToProjects();
@@ -792,7 +872,9 @@ const App = () => {
         <Select
           className="project-jump"
           aria-label="Project"
-          placeholder={state.projects.length > 0 ? "Select project" : "No projects"}
+          placeholder={
+            state.projects.length > 0 ? "Select project" : "No projects"
+          }
           value={selectedProject?.id ?? null}
           onChange={selectProject}
           data={projectOptions}
@@ -848,14 +930,23 @@ const App = () => {
               className={activeView === "ideas" ? "active" : ""}
               href={
                 selectedProject
-                  ? formatNavigationPath({ activeView: "ideas", selectedProjectId: selectedProject.id })
-                  : formatNavigationPath({ activeView: "projects", selectedProjectId: "" })
+                  ? formatNavigationPath({
+                      activeView: "ideas",
+                      selectedProjectId: selectedProject.id,
+                    })
+                  : formatNavigationPath({
+                      activeView: "projects",
+                      selectedProjectId: "",
+                    })
               }
               aria-disabled={!selectedProject}
               onClick={(event) => {
                 event.preventDefault();
                 if (selectedProject) {
-                  navigateTo({ activeView: "ideas", selectedProjectId: selectedProject.id });
+                  navigateTo({
+                    activeView: "ideas",
+                    selectedProjectId: selectedProject.id,
+                  });
                 }
               }}
             >
@@ -866,14 +957,23 @@ const App = () => {
               className={activeView === "board" ? "active" : ""}
               href={
                 selectedProject
-                  ? formatNavigationPath({ activeView: "board", selectedProjectId: selectedProject.id })
-                  : formatNavigationPath({ activeView: "projects", selectedProjectId: "" })
+                  ? formatNavigationPath({
+                      activeView: "board",
+                      selectedProjectId: selectedProject.id,
+                    })
+                  : formatNavigationPath({
+                      activeView: "projects",
+                      selectedProjectId: "",
+                    })
               }
               aria-disabled={!selectedProject}
               onClick={(event) => {
                 event.preventDefault();
                 if (selectedProject) {
-                  navigateTo({ activeView: "board", selectedProjectId: selectedProject.id });
+                  navigateTo({
+                    activeView: "board",
+                    selectedProjectId: selectedProject.id,
+                  });
                 }
               }}
             >
@@ -884,14 +984,23 @@ const App = () => {
               className={activeView === "documents" ? "active" : ""}
               href={
                 selectedProject
-                  ? formatNavigationPath({ activeView: "documents", selectedProjectId: selectedProject.id })
-                  : formatNavigationPath({ activeView: "projects", selectedProjectId: "" })
+                  ? formatNavigationPath({
+                      activeView: "documents",
+                      selectedProjectId: selectedProject.id,
+                    })
+                  : formatNavigationPath({
+                      activeView: "projects",
+                      selectedProjectId: "",
+                    })
               }
               aria-disabled={!selectedProject}
               onClick={(event) => {
                 event.preventDefault();
                 if (selectedProject) {
-                  navigateTo({ activeView: "documents", selectedProjectId: selectedProject.id });
+                  navigateTo({
+                    activeView: "documents",
+                    selectedProjectId: selectedProject.id,
+                  });
                 }
               }}
             >
@@ -922,21 +1031,39 @@ const App = () => {
           </div>
           <Group className="topbar-actions" gap="xs">
             {activeView === "projects" && (
-              <Button type="button" leftSection={<Plus size={18} />} onClick={openCreateProject}>
+              <Button
+                type="button"
+                leftSection={<Plus size={18} />}
+                onClick={openCreateProject}
+              >
                 Add Project
               </Button>
             )}
             {activeView === "ideas" && selectedProject && (
-              <Button type="button" leftSection={<Plus size={18} />} onClick={openCreateTask}>
+              <Button
+                type="button"
+                leftSection={<Plus size={18} />}
+                onClick={openCreateTask}
+              >
                 Add Task
               </Button>
             )}
             {activeView === "documents" && selectedProject && (
-              <Button type="button" leftSection={<Plus size={18} />} onClick={openCreateNote}>
+              <Button
+                type="button"
+                leftSection={<Plus size={18} />}
+                onClick={openCreateNote}
+              >
                 Add Note
               </Button>
             )}
-            <ActionIcon variant="light" color="gray" size={40} aria-label="Refresh" onClick={() => loadState()}>
+            <ActionIcon
+              variant="light"
+              color="gray"
+              size={40}
+              aria-label="Refresh"
+              onClick={() => loadState()}
+            >
               <RefreshCcw size={18} />
             </ActionIcon>
           </Group>
@@ -959,8 +1086,15 @@ const App = () => {
               <Paper className="empty-state" withBorder radius="md" p="lg">
                 <Stack gap="sm" align="flex-start">
                   <Title order={3}>No projects yet</Title>
-                  <Text c="dimmed">Create a project to start adding tasks, board cards, and notes.</Text>
-                  <Button type="button" leftSection={<Plus size={18} />} onClick={openCreateProject}>
+                  <Text c="dimmed">
+                    Create a project to start adding tasks, board cards, and
+                    notes.
+                  </Text>
+                  <Button
+                    type="button"
+                    leftSection={<Plus size={18} />}
+                    onClick={openCreateProject}
+                  >
                     Add Project
                   </Button>
                 </Stack>
@@ -991,7 +1125,11 @@ const App = () => {
                     }}
                   >
                     <Stack h="100%" gap="md">
-                      <Group align="flex-start" justify="space-between" gap="md">
+                      <Group
+                        align="flex-start"
+                        justify="space-between"
+                        gap="md"
+                      >
                         <Box>
                           <Badge variant="light" color="gray" mb="xs">
                             {project.key}
@@ -1001,7 +1139,12 @@ const App = () => {
                             {project.summary || "No summary yet."}
                           </Text>
                         </Box>
-                        <ThemeIcon variant="light" color="blue" size={42} radius="md">
+                        <ThemeIcon
+                          variant="light"
+                          color="blue"
+                          size={42}
+                          radius="md"
+                        >
                           <FolderKanban size={22} />
                         </ThemeIcon>
                       </Group>
@@ -1033,7 +1176,10 @@ const App = () => {
                         <Button
                           type="button"
                           component="a"
-                          href={formatNavigationPath({ activeView: "board", selectedProjectId: project.id })}
+                          href={formatNavigationPath({
+                            activeView: "board",
+                            selectedProjectId: project.id,
+                          })}
                           variant="light"
                           leftSection={<Columns3 size={16} />}
                           onClick={(event) => {
@@ -1057,8 +1203,14 @@ const App = () => {
           <Paper className="empty-state" withBorder radius="md" p="lg">
             <Stack gap="sm" align="flex-start">
               <Title order={3}>Select a project</Title>
-              <Text c="dimmed">Tasks, board cards, and notes live inside a project.</Text>
-              <Button type="button" leftSection={<FolderKanban size={18} />} onClick={returnToProjects}>
+              <Text c="dimmed">
+                Tasks, board cards, and notes live inside a project.
+              </Text>
+              <Button
+                type="button"
+                leftSection={<FolderKanban size={18} />}
+                onClick={returnToProjects}
+              >
                 View Projects
               </Button>
             </Stack>
@@ -1078,22 +1230,29 @@ const App = () => {
                 <Select
                   label="Sort"
                   value={taskSort}
-                  onChange={(value) => setTaskSort((value ?? "created_desc") as TaskSortOption)}
+                  onChange={(value) =>
+                    setTaskSort((value ?? "created_desc") as TaskSortOption)
+                  }
                   data={[
                     { value: "created_desc", label: "Latest added" },
                     { value: "updated_desc", label: "Recently updated" },
                     { value: "title_asc", label: "Title A-Z" },
                     { value: "status_asc", label: "Status" },
-                    { value: "rating_desc", label: "Rating" }
+                    { value: "rating_desc", label: "Rating" },
                   ]}
                 />
                 <Select
                   label="Status"
                   value={taskStatusFilter}
-                  onChange={(value) => setTaskStatusFilter((value ?? "") as IdeaStatus | "")}
+                  onChange={(value) =>
+                    setTaskStatusFilter((value ?? "") as IdeaStatus | "")
+                  }
                   data={[
                     { value: "", label: "All statuses" },
-                    ...ideaStatuses.map((status) => ({ value: status, label: status }))
+                    ...ideaStatuses.map((status) => ({
+                      value: status,
+                      label: status,
+                    })),
                   ]}
                 />
                 <Select
@@ -1102,23 +1261,40 @@ const App = () => {
                   onChange={(value) => setTaskLabelFilter(value ?? "")}
                   data={[
                     { value: "", label: "All labels" },
-                    ...taskLabelOptions.map((label) => ({ value: label, label }))
+                    ...taskLabelOptions.map((label) => ({
+                      value: label,
+                      label,
+                    })),
                   ]}
                 />
               </SimpleGrid>
             </Paper>
             {projectIdeas.length === 0 && (
-              <Paper className="empty-state inline" withBorder radius="md" p="md">
+              <Paper
+                className="empty-state inline"
+                withBorder
+                radius="md"
+                p="md"
+              >
                 <Text c="dimmed">No tasks in this project yet.</Text>
               </Paper>
             )}
             {projectIdeas.length > 0 && visibleProjectIdeas.length === 0 && (
-              <Paper className="empty-state inline" withBorder radius="md" p="md">
+              <Paper
+                className="empty-state inline"
+                withBorder
+                radius="md"
+                p="md"
+              >
                 <Text c="dimmed">No tasks match the current filters.</Text>
               </Paper>
             )}
             {visibleProjectIdeas.map((idea) => {
-              const taskCard = taskListCardView(idea, state.columns, selectedProject.key);
+              const taskCard = taskListCardView(
+                idea,
+                state.columns,
+                selectedProject.key,
+              );
               return (
                 <Card
                   className="item task-list-card"
@@ -1142,7 +1318,11 @@ const App = () => {
                   >
                     <Group align="flex-start" justify="space-between" gap="sm">
                       <Box className="task-card-title">
-                        <Group className="task-card-title-row" gap="xs" wrap="nowrap">
+                        <Group
+                          className="task-card-title-row"
+                          gap="xs"
+                          wrap="nowrap"
+                        >
                           <Badge variant="light" color="gray" size="sm">
                             {taskCard.taskId}
                           </Badge>
@@ -1152,17 +1332,25 @@ const App = () => {
                         {idea.readinessScore !== undefined && (
                           <Badge
                             variant="light"
-                            color={isReadinessStale(idea) ? "gray" : readinessColor(idea.readinessScore)}
+                            color={
+                              isReadinessStale(idea)
+                                ? "gray"
+                                : readinessColor(idea.readinessScore)
+                            }
                             size="sm"
                             opacity={isReadinessStale(idea) ? 0.6 : 1}
                             mt="xs"
                             style={{ cursor: "pointer" }}
                             onClick={(event) => {
                               event.stopPropagation();
-                              setReadinessModal({ ideaId: idea.id, ideaTitle: idea.title });
+                              setReadinessModal({
+                                ideaId: idea.id,
+                                ideaTitle: idea.title,
+                              });
                             }}
                           >
-                            {idea.readinessScore}/10{isReadinessStale(idea) ? " · stale" : ""}
+                            {idea.readinessScore}/10
+                            {isReadinessStale(idea) ? " · stale" : ""}
                           </Badge>
                         )}
                       </Box>
@@ -1177,7 +1365,12 @@ const App = () => {
                     <Checkbox
                       label="Ready"
                       checked={taskCard.isReady}
-                      onChange={(event) => void setBoardAvailability(idea, event.currentTarget.checked)}
+                      onChange={(event) =>
+                        void setBoardAvailability(
+                          idea,
+                          event.currentTarget.checked,
+                        )
+                      }
                     />
                   </Box>
                 </Card>
@@ -1216,7 +1409,10 @@ const App = () => {
                   }}
                   onDragLeave={(event) => {
                     const relatedTarget = event.relatedTarget;
-                    if (relatedTarget instanceof Node && event.currentTarget.contains(relatedTarget)) {
+                    if (
+                      relatedTarget instanceof Node &&
+                      event.currentTarget.contains(relatedTarget)
+                    ) {
                       return;
                     }
                     setDragOverColumn(null);
@@ -1227,16 +1423,23 @@ const App = () => {
                   }}
                 >
                   <Group className="column-head" justify="space-between" p="sm">
-                    <Title className="column-title" order={4}>{columnLabels[column]}</Title>
+                    <Title className="column-title" order={4}>
+                      {columnLabels[column]}
+                    </Title>
                     <Badge variant="light" color="gray">
                       {projectColumns[column]?.length ?? 0}
                     </Badge>
                   </Group>
                   <Stack className="column-card-list" gap="xs" p="sm">
                     {(projectColumns[column] ?? []).map((card) => {
-                      const linkedIdea = state.ideas.find((idea) => idea.id === card.ideaId);
+                      const linkedIdea = state.ideas.find(
+                        (idea) => idea.id === card.ideaId,
+                      );
                       const cardTaskId = linkedIdea
-                        ? formatTaskId(selectedProject.key, linkedIdea.taskNumber)
+                        ? formatTaskId(
+                            selectedProject.key,
+                            linkedIdea.taskNumber,
+                          )
                         : null;
                       const repositoryUrl = card.repositoryRemoteUrl
                         ? githubRemoteToHttpsUrl(card.repositoryRemoteUrl)
@@ -1277,28 +1480,50 @@ const App = () => {
                             <Title order={4}>{card.title}</Title>
                             {labelBadges(card.labels, "xs")}
                             {card.readinessScore !== undefined && (
-                              <Group className="board-card-readiness" justify="flex-start">
+                              <Group
+                                className="board-card-readiness"
+                                justify="flex-start"
+                              >
                                 <Badge
                                   variant="light"
-                                  color={isCardReadinessStale(card, ideaById) ? "gray" : readinessColor(card.readinessScore)}
+                                  color={
+                                    isCardReadinessStale(card, ideaById)
+                                      ? "gray"
+                                      : readinessColor(card.readinessScore)
+                                  }
                                   size="sm"
-                                  opacity={isCardReadinessStale(card, ideaById) ? 0.6 : 1}
+                                  opacity={
+                                    isCardReadinessStale(card, ideaById)
+                                      ? 0.6
+                                      : 1
+                                  }
                                   style={{ cursor: "pointer" }}
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     if (card.ideaId) {
-                                      setReadinessModal({ ideaId: card.ideaId, ideaTitle: card.title });
+                                      setReadinessModal({
+                                        ideaId: card.ideaId,
+                                        ideaTitle: card.title,
+                                      });
                                     }
                                   }}
                                 >
-                                  {card.readinessScore}/10{isCardReadinessStale(card, ideaById) ? " · stale" : ""}
+                                  {card.readinessScore}/10
+                                  {isCardReadinessStale(card, ideaById)
+                                    ? " · stale"
+                                    : ""}
                                 </Badge>
                               </Group>
                             )}
                             {card.branchName && (
-                              <Group className="board-card-branch" justify="flex-start">
+                              <Group
+                                className="board-card-branch"
+                                justify="flex-start"
+                              >
                                 <Badge
-                                  leftSection={<GitBranch size={12} aria-hidden />}
+                                  leftSection={
+                                    <GitBranch size={12} aria-hidden />
+                                  }
                                   variant="light"
                                   color="teal"
                                   size="sm"
@@ -1307,7 +1532,8 @@ const App = () => {
                                 </Badge>
                               </Group>
                             )}
-                            {(card.repositoryLocalPath || card.repositoryRemoteUrl) && (
+                            {(card.repositoryLocalPath ||
+                              card.repositoryRemoteUrl) && (
                               <Stack className="board-card-repository" gap={4}>
                                 {card.repositoryLocalPath && (
                                   <Code className="board-card-repository-path">
@@ -1321,20 +1547,28 @@ const App = () => {
                                       href={repositoryUrl}
                                       target="_blank"
                                       rel="noreferrer"
-                                      onClick={(event) => event.stopPropagation()}
+                                      onClick={(event) =>
+                                        event.stopPropagation()
+                                      }
                                     >
                                       <ExternalLink size={12} />
                                       GitHub
                                     </Anchor>
                                   ) : (
-                                    <Text className="board-card-repository-remote" size="xs">
+                                    <Text
+                                      className="board-card-repository-remote"
+                                      size="xs"
+                                    >
                                       {card.repositoryRemoteUrl}
                                     </Text>
                                   ))}
                               </Stack>
                             )}
                             {cardTaskId && (
-                              <Group className="board-card-task-id" justify="flex-end">
+                              <Group
+                                className="board-card-task-id"
+                                justify="flex-end"
+                              >
                                 <Badge variant="light" color="gray" size="sm">
                                   {cardTaskId}
                                 </Badge>
@@ -1354,12 +1588,24 @@ const App = () => {
         {activeView === "documents" && selectedProject && (
           <Stack gap="sm">
             {projectDocuments.length === 0 && (
-              <Paper className="empty-state inline" withBorder radius="md" p="md">
+              <Paper
+                className="empty-state inline"
+                withBorder
+                radius="md"
+                p="md"
+              >
                 <Text c="dimmed">No notes in this project yet.</Text>
               </Paper>
             )}
             {projectDocuments.map((document) => (
-              <Card className="item document" withBorder shadow="xs" radius="md" padding="md" key={document.id}>
+              <Card
+                className="item document"
+                withBorder
+                shadow="xs"
+                radius="md"
+                padding="md"
+                key={document.id}
+              >
                 <Group align="flex-start" justify="space-between">
                   <Title order={3}>{document.title}</Title>
                   <Badge variant="light" color="violet">
@@ -1368,7 +1614,13 @@ const App = () => {
                 </Group>
                 <pre>{document.content || "No note content yet."}</pre>
                 <Group gap="xs">
-                  <Button type="button" variant="light" color="gray" leftSection={<Pencil size={16} />} onClick={() => openEditNote(document)}>
+                  <Button
+                    type="button"
+                    variant="light"
+                    color="gray"
+                    leftSection={<Pencil size={16} />}
+                    onClick={() => openEditNote(document)}
+                  >
                     Edit
                   </Button>
                 </Group>
@@ -1386,12 +1638,19 @@ const App = () => {
         size="lg"
       >
         {projectModal && (
-          <form className="modal-form" onSubmit={(event) => void saveProject(event)}>
+          <form
+            className="modal-form"
+            onSubmit={(event) => void saveProject(event)}
+          >
             <Stack gap="md">
               <TextInput
                 label="Project ID"
                 value={projectModal.draft.key}
-                onChange={(event) => updateProjectDraft({ key: normalizeProjectKeyInput(event.target.value) })}
+                onChange={(event) =>
+                  updateProjectDraft({
+                    key: normalizeProjectKeyInput(event.target.value),
+                  })
+                }
                 description="1 to 3 capital letters"
                 maxLength={3}
                 required
@@ -1399,17 +1658,25 @@ const App = () => {
               <TextInput
                 label="Title"
                 value={projectModal.draft.title}
-                onChange={(event) => updateProjectDraft({ title: event.target.value })}
+                onChange={(event) =>
+                  updateProjectDraft({ title: event.target.value })
+                }
                 required
               />
               <Textarea
                 label="Summary"
                 value={projectModal.draft.summary}
-                onChange={(event) => updateProjectDraft({ summary: event.target.value })}
+                onChange={(event) =>
+                  updateProjectDraft({ summary: event.target.value })
+                }
                 rows={4}
               />
               <Group justify="flex-end">
-                <Button type="button" variant="default" onClick={() => setProjectModal(null)}>
+                <Button
+                  type="button"
+                  variant="default"
+                  onClick={() => setProjectModal(null)}
+                >
                   Cancel
                 </Button>
                 <Button type="submit" leftSection={<Save size={16} />}>
@@ -1446,7 +1713,9 @@ const App = () => {
               <Text size="xs" fw={700} tt="uppercase" c="dimmed">
                 Description
               </Text>
-              <Text className="overview-text">{taskViewCard?.details?.trim() || taskOverview.description}</Text>
+              <Text className="overview-text">
+                {taskViewCard?.details?.trim() || taskOverview.description}
+              </Text>
             </Paper>
 
             <Paper className="overview-section" withBorder radius="md" p="md">
@@ -1470,7 +1739,11 @@ const App = () => {
             </Paper>
 
             <Group justify="flex-end">
-              <Button type="button" variant="default" onClick={() => setTaskViewModal(null)}>
+              <Button
+                type="button"
+                variant="default"
+                onClick={() => setTaskViewModal(null)}
+              >
                 Close
               </Button>
               <Button
@@ -1492,48 +1765,67 @@ const App = () => {
       <Modal
         opened={!!readinessModal}
         onClose={() => setReadinessModal(null)}
-        title={readinessModal ? `Rating History — ${readinessModal.ideaTitle}` : "Rating History"}
+        title={
+          readinessModal
+            ? `Rating History — ${readinessModal.ideaTitle}`
+            : "Rating History"
+        }
         centered
         size="lg"
       >
         {readinessError && <Text c="red">{readinessError}</Text>}
-        {!readinessError && readinessEvents === null && <Text c="dimmed">Loading…</Text>}
-        {!readinessError && readinessEvents !== null && readinessEvents.length === 0 && (
-          <Text c="dimmed">No ratings yet.</Text>
+        {!readinessError && readinessEvents === null && (
+          <Text c="dimmed">Loading…</Text>
         )}
-        {!readinessError && readinessEvents !== null && readinessEvents.length > 0 && (
-          <Stack gap="sm">
-            {readinessEvents.map((event, index) => {
-              const latest = index === 0;
-              const ratedIdea = readinessModal ? ideaById.get(readinessModal.ideaId) : undefined;
-              const stale = latest && ratedIdea !== undefined && isReadinessStale(ratedIdea);
-              return (
-                <Paper
-                  key={event.id}
-                  withBorder
-                  radius="md"
-                  p="md"
-                  style={latest ? { borderColor: "var(--mantine-color-blue-5)" } : undefined}
-                >
-                  <Group align="center" justify="space-between" mb={4}>
-                    <Badge
-                      variant="light"
-                      color={stale ? "gray" : readinessColor(event.score)}
-                      opacity={stale ? 0.6 : 1}
-                    >
-                      {event.score}/10{stale ? " · stale" : ""}
-                    </Badge>
-                    <Text size="xs" c="dimmed">
-                      {latest ? "Latest · " : ""}
-                      {new Date(event.createdAt).toLocaleString()}
-                    </Text>
-                  </Group>
-                  <Text className="overview-text">{event.reason}</Text>
-                </Paper>
-              );
-            })}
-          </Stack>
-        )}
+        {!readinessError &&
+          readinessEvents !== null &&
+          readinessEvents.length === 0 && (
+            <Text c="dimmed">No ratings yet.</Text>
+          )}
+        {!readinessError &&
+          readinessEvents !== null &&
+          readinessEvents.length > 0 && (
+            <Stack gap="sm">
+              {readinessEvents.map((event, index) => {
+                const latest = index === 0;
+                const ratedIdea = readinessModal
+                  ? ideaById.get(readinessModal.ideaId)
+                  : undefined;
+                const stale =
+                  latest &&
+                  ratedIdea !== undefined &&
+                  isReadinessStale(ratedIdea);
+                return (
+                  <Paper
+                    key={event.id}
+                    withBorder
+                    radius="md"
+                    p="md"
+                    style={
+                      latest
+                        ? { borderColor: "var(--mantine-color-blue-5)" }
+                        : undefined
+                    }
+                  >
+                    <Group align="center" justify="space-between" mb={4}>
+                      <Badge
+                        variant="light"
+                        color={stale ? "gray" : readinessColor(event.score)}
+                        opacity={stale ? 0.6 : 1}
+                      >
+                        {event.score}/10{stale ? " · stale" : ""}
+                      </Badge>
+                      <Text size="xs" c="dimmed">
+                        {latest ? "Latest · " : ""}
+                        {new Date(event.createdAt).toLocaleString()}
+                      </Text>
+                    </Group>
+                    <Text className="overview-text">{event.reason}</Text>
+                  </Paper>
+                );
+              })}
+            </Stack>
+          )}
       </Modal>
 
       <Modal
@@ -1545,7 +1837,10 @@ const App = () => {
         classNames={{ header: "task-modal-header", body: "task-modal-body" }}
       >
         {taskModal && (
-          <form className="modal-form" onSubmit={(event) => void saveTask(event)}>
+          <form
+            className="modal-form"
+            onSubmit={(event) => void saveTask(event)}
+          >
             <Stack gap="md">
               {taskModal.draft.taskId && (
                 <Badge variant="light" color="gray" w="fit-content">
@@ -1555,7 +1850,9 @@ const App = () => {
               <TextInput
                 label="Title"
                 value={taskModal.draft.title}
-                onChange={(event) => updateTaskDraft({ title: event.target.value })}
+                onChange={(event) =>
+                  updateTaskDraft({ title: event.target.value })
+                }
                 required
                 size="lg"
               />
@@ -1563,8 +1860,13 @@ const App = () => {
                 <Select
                   label="Status"
                   value={taskModal.draft.status}
-                  onChange={(value) => updateTaskDraft({ status: (value ?? "idea") as IdeaStatus })}
-                  data={ideaStatuses.map((status) => ({ value: status, label: status }))}
+                  onChange={(value) =>
+                    updateTaskDraft({ status: (value ?? "idea") as IdeaStatus })
+                  }
+                  data={ideaStatuses.map((status) => ({
+                    value: status,
+                    label: status,
+                  }))}
                 />
                 <TagsInput
                   label="Labels"
@@ -1597,21 +1899,29 @@ const App = () => {
               <Textarea
                 label="Description"
                 value={taskModal.draft.description}
-                onChange={(event) => updateTaskDraft({ description: event.target.value })}
+                onChange={(event) =>
+                  updateTaskDraft({ description: event.target.value })
+                }
                 classNames={{ input: "task-description-input" }}
                 rows={7}
               />
               <Textarea
                 label="Acceptance Criteria"
                 value={taskModal.draft.acceptanceCriteria}
-                onChange={(event) => updateTaskDraft({ acceptanceCriteria: event.target.value })}
+                onChange={(event) =>
+                  updateTaskDraft({ acceptanceCriteria: event.target.value })
+                }
                 classNames={{ input: "task-criteria-input" }}
                 rows={7}
                 autosize
                 minRows={7}
               />
               <Group justify="flex-end">
-                <Button type="button" variant="default" onClick={() => setTaskModal(null)}>
+                <Button
+                  type="button"
+                  variant="default"
+                  onClick={() => setTaskModal(null)}
+                >
                   Cancel
                 </Button>
                 <Button type="submit" leftSection={<Save size={16} />}>
@@ -1631,37 +1941,58 @@ const App = () => {
         size="lg"
       >
         {noteModal && (
-          <form className="modal-form" onSubmit={(event) => void saveNote(event)}>
+          <form
+            className="modal-form"
+            onSubmit={(event) => void saveNote(event)}
+          >
             <Stack gap="md">
               <TextInput
                 label="Title"
                 value={noteModal.draft.title}
-                onChange={(event) => updateNoteDraft({ title: event.target.value })}
+                onChange={(event) =>
+                  updateNoteDraft({ title: event.target.value })
+                }
                 required
               />
               <Select
                 label="Kind"
                 value={noteModal.draft.kind}
-                onChange={(value) => updateNoteDraft({ kind: (value ?? "notes") as DocumentKind })}
-                data={documentKinds.map((kind) => ({ value: kind, label: kind }))}
+                onChange={(value) =>
+                  updateNoteDraft({ kind: (value ?? "notes") as DocumentKind })
+                }
+                data={documentKinds.map((kind) => ({
+                  value: kind,
+                  label: kind,
+                }))}
               />
               <Select
                 label="Linked Task"
                 value={noteModal.draft.linkedIdeaId}
-                onChange={(value) => updateNoteDraft({ linkedIdeaId: value ?? "" })}
+                onChange={(value) =>
+                  updateNoteDraft({ linkedIdeaId: value ?? "" })
+                }
                 data={[
                   { value: "", label: "None" },
-                  ...projectIdeas.map((idea) => ({ value: idea.id, label: idea.title }))
+                  ...projectIdeas.map((idea) => ({
+                    value: idea.id,
+                    label: idea.title,
+                  })),
                 ]}
               />
               <Textarea
                 label="Content"
                 value={noteModal.draft.content}
-                onChange={(event) => updateNoteDraft({ content: event.target.value })}
+                onChange={(event) =>
+                  updateNoteDraft({ content: event.target.value })
+                }
                 rows={12}
               />
               <Group justify="flex-end">
-                <Button type="button" variant="default" onClick={() => setNoteModal(null)}>
+                <Button
+                  type="button"
+                  variant="default"
+                  onClick={() => setNoteModal(null)}
+                >
                   Cancel
                 </Button>
                 <Button type="submit" leftSection={<Save size={16} />}>
@@ -1692,45 +2023,61 @@ const App = () => {
                 </Group>
                 <Code block>{createdToken.token}</Code>
                 <Stack className="token-config" gap="md">
-                  {integrationExamplesForToken(createdToken.token).map((example) => (
-                    <Paper className="integration-example" withBorder radius="md" p="md" key={example.id}>
-                      <Stack gap="sm">
-                        <Title order={4}>{example.name}</Title>
-                        {example.command && (
+                  {integrationExamplesForToken(createdToken.token).map(
+                    (example) => (
+                      <Paper
+                        className="integration-example"
+                        withBorder
+                        radius="md"
+                        p="md"
+                        key={example.id}
+                      >
+                        <Stack gap="sm">
+                          <Title order={4}>{example.name}</Title>
+                          {example.command && (
+                            <pre>
+                              <code>{example.command}</code>
+                            </pre>
+                          )}
+                          <Text size="sm" fw={700}>
+                            {example.configLabel}
+                          </Text>
                           <pre>
-                            <code>{example.command}</code>
+                            <code>{example.config}</code>
                           </pre>
-                        )}
-                        <Text size="sm" fw={700}>
-                          {example.configLabel}
-                        </Text>
-                        <pre>
-                          <code>{example.config}</code>
-                        </pre>
-                      </Stack>
-                    </Paper>
-                  ))}
+                        </Stack>
+                      </Paper>
+                    ),
+                  )}
                 </Stack>
               </Stack>
             </Paper>
           )}
 
           <Paper withBorder radius="md" p="md">
-            <form className="modal-form" onSubmit={(event) => void createToken(event)}>
+            <form
+              className="modal-form"
+              onSubmit={(event) => void createToken(event)}
+            >
               <Stack gap="md">
                 <Title order={3}>Create Token</Title>
                 <TextInput
                   label="Token Name"
                   value={tokenDraft.name}
                   onChange={(event) =>
-                    setTokenDraft((current) => ({ ...current, name: event.currentTarget.value }))
+                    setTokenDraft((current) => ({
+                      ...current,
+                      name: event.currentTarget.value,
+                    }))
                   }
                   required
                 />
                 <MultiSelect
                   label="Projects"
                   value={tokenDraft.projectIds}
-                  onChange={(projectIds) => setTokenDraft((current) => ({ ...current, projectIds }))}
+                  onChange={(projectIds) =>
+                    setTokenDraft((current) => ({ ...current, projectIds }))
+                  }
                   data={projectOptions}
                   searchable
                   required
@@ -1746,7 +2093,12 @@ const App = () => {
 
           <Stack className="token-list" gap="sm">
             {tokens.length === 0 && (
-              <Paper className="empty-state inline" withBorder radius="md" p="md">
+              <Paper
+                className="empty-state inline"
+                withBorder
+                radius="md"
+                p="md"
+              >
                 <Text c="dimmed">No API tokens yet.</Text>
               </Paper>
             )}
@@ -1771,7 +2123,9 @@ const App = () => {
                     </Group>
                     <Text c="dimmed" size="sm" mt="xs">
                       Created {formatDateTime(token.createdAt)}
-                      {token.lastUsedAt ? `, last used ${formatDateTime(token.lastUsedAt)}` : ""}
+                      {token.lastUsedAt
+                        ? `, last used ${formatDateTime(token.lastUsedAt)}`
+                        : ""}
                     </Text>
                   </Box>
                   <Button
@@ -1798,10 +2152,19 @@ const App = () => {
         size="xl"
       >
         <Stack gap="lg">
-          <Text c="dimmed">Connect running agent containers to vibepod-board over Streamable HTTP.</Text>
+          <Text c="dimmed">
+            Connect running agent containers to vibepod-board over Streamable
+            HTTP.
+          </Text>
           <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
             {endpointOptions.map((endpoint) => (
-              <Paper className="endpoint" withBorder radius="md" p="md" key={endpoint.url}>
+              <Paper
+                className="endpoint"
+                withBorder
+                radius="md"
+                p="md"
+                key={endpoint.url}
+              >
                 <Stack gap="xs">
                   <Title order={3}>{endpoint.label}</Title>
                   <Code>{endpoint.url}</Code>
@@ -1813,14 +2176,24 @@ const App = () => {
 
           <Stack gap="md">
             {integrationExamples.map((example) => (
-              <Paper className="integration-example" withBorder radius="md" p="md" key={example.id}>
+              <Paper
+                className="integration-example"
+                withBorder
+                radius="md"
+                p="md"
+                key={example.id}
+              >
                 <Stack gap="sm">
                   <Group align="flex-start" justify="space-between">
                     <Box>
                       <Title order={3}>{example.name}</Title>
                       <Text c="dimmed">{example.description}</Text>
                     </Box>
-                    <Anchor href={example.docsUrl} target="_blank" rel="noreferrer">
+                    <Anchor
+                      href={example.docsUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
                       <Group gap={6}>
                         <ExternalLink size={16} />
                         Docs
@@ -1859,18 +2232,26 @@ export const AppShell = () => (
 );
 
 const countCards = (columns: BoardColumns) =>
-  boardColumns.reduce((total, column) => total + (columns[column]?.length ?? 0), 0);
+  boardColumns.reduce(
+    (total, column) => total + (columns[column]?.length ?? 0),
+    0,
+  );
 
-const filterColumnsByProject = (columns: BoardColumns, projectId: string): BoardColumns => {
+const filterColumnsByProject = (
+  columns: BoardColumns,
+  projectId: string,
+): BoardColumns => {
   const filtered: BoardColumns = {
     ready: [],
     planned: [],
     in_progress: [],
     review: [],
-    done: []
+    done: [],
   };
   for (const column of boardColumns) {
-    filtered[column] = (columns[column] ?? []).filter((card) => card.projectId === projectId);
+    filtered[column] = (columns[column] ?? []).filter(
+      (card) => card.projectId === projectId,
+    );
   }
   return filtered;
 };
@@ -1880,7 +2261,9 @@ const projectCounts = (projectId: string, state: AppState) => {
   return {
     tasks: state.ideas.filter((idea) => idea.projectId === projectId).length,
     cards: countCards(columns),
-    notes: state.documents.filter((document) => document.projectId === projectId).length
+    notes: state.documents.filter(
+      (document) => document.projectId === projectId,
+    ).length,
   };
 };
 
@@ -1891,13 +2274,18 @@ const normalizeProjectKeyInput = (value: string) =>
     .slice(0, 3);
 
 const formatDateTime = (value: string) =>
-  value ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : "";
+  value
+    ? new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(new Date(value))
+    : "";
 
 const statusColors: Record<IdeaStatus, string> = {
   idea: "gray",
   refining: "yellow",
   ready: "green",
-  denied: "red"
+  denied: "red",
 };
 
 const statusBadge = (status: IdeaStatus) => (
@@ -1910,7 +2298,13 @@ const labelBadges = (labels: string[], size: "xs" | "sm" = "sm"): ReactNode =>
   labels.length > 0 ? (
     <Group gap={6}>
       {labels.map((label) => (
-        <Badge className="label-badge" key={label} variant="outline" color="gray" size={size}>
+        <Badge
+          className="label-badge"
+          key={label}
+          variant="outline"
+          color="gray"
+          size={size}
+        >
           {label}
         </Badge>
       ))}

@@ -1,5 +1,11 @@
 export const ideaStatuses = ["idea", "refining", "ready", "denied"] as const;
-export const boardColumns = ["ready", "planned", "in_progress", "review", "done"] as const;
+export const boardColumns = [
+  "ready",
+  "planned",
+  "in_progress",
+  "review",
+  "done",
+] as const;
 export const documentKinds = ["execution_plan", "design", "notes"] as const;
 
 export type IdeaStatus = (typeof ideaStatuses)[number];
@@ -101,7 +107,9 @@ export type CreateProjectInput = {
   summary?: string;
 };
 
-export type UpdateProjectInput = Partial<Pick<Project, "key" | "title" | "summary">>;
+export type UpdateProjectInput = Partial<
+  Pick<Project, "key" | "title" | "summary">
+>;
 
 export type CreateIdeaInput = {
   projectId?: string;
@@ -135,7 +143,14 @@ export type CreateBoardCardOptions = {
 };
 
 export type UpdateBoardCardInput = Partial<
-  Pick<BoardCard, "column" | "branchName" | "details" | "repositoryLocalPath" | "repositoryRemoteUrl">
+  Pick<
+    BoardCard,
+    | "column"
+    | "branchName"
+    | "details"
+    | "repositoryLocalPath"
+    | "repositoryRemoteUrl"
+  >
 >;
 
 export type SetCardReadinessInput = {
@@ -153,7 +168,10 @@ export type CreateDocumentInput = {
 };
 
 export type UpdateDocumentInput = Partial<
-  Pick<PlanDocument, "title" | "kind" | "content" | "linkedIdeaIds" | "linkedCardIds">
+  Pick<
+    PlanDocument,
+    "title" | "kind" | "content" | "linkedIdeaIds" | "linkedCardIds"
+  >
 >;
 
 export type ApiTokenProject = Pick<Project, "id" | "key" | "title">;

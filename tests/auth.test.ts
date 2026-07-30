@@ -4,14 +4,14 @@ import {
   createAdminSessionManager,
   createRawApiToken,
   hashApiToken,
-  parseBearerToken
+  parseBearerToken,
 } from "../src/server/auth.js";
 
 describe("auth helpers", () => {
   it("creates and validates admin sessions", () => {
     const sessions = createAdminSessionManager({
       username: "admin",
-      password: "secret"
+      password: "secret",
     });
 
     expect(sessions.login("admin", "wrong")).toBeNull();
@@ -19,7 +19,9 @@ describe("auth helpers", () => {
 
     expect(session?.username).toBe("admin");
     expect(session?.cookie).toContain("vibepod_session=");
-    expect(sessions.authenticateCookie(session?.cookie ?? "")?.username).toBe("admin");
+    expect(sessions.authenticateCookie(session?.cookie ?? "")?.username).toBe(
+      "admin",
+    );
     sessions.logout(session?.id ?? "");
     expect(sessions.authenticateCookie(session?.cookie ?? "")).toBeNull();
   });

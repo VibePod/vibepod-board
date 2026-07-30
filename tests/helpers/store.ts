@@ -2,7 +2,11 @@ import type { Pool } from "pg";
 
 import { initializeDatabase } from "../../src/server/db.js";
 import { PostgresBoardStore } from "../../src/server/storage.js";
-import { createTestPool, ensureTestDatabase, resetDatabase } from "./postgres.js";
+import {
+  createTestPool,
+  ensureTestDatabase,
+  resetDatabase,
+} from "./postgres.js";
 
 export const createTestStore = async () => {
   await ensureTestDatabase();

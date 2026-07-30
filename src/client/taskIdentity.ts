@@ -1,1 +1,2 @@
-export const formatTaskId = (projectKey: string, taskNumber: number) => `${projectKey}-${taskNumber}`;
+export const formatTaskId = (projectKey: string, taskNumber: number) =>
+  `${projectKey}-${taskNumber}`;

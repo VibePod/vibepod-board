@@ -1,22 +1,27 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import cors from "cors";
 import express, {
   type ErrorRequestHandler,
   type Request,
-  type RequestHandler
+  type RequestHandler,
 } from "express";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { z } from "zod";
 
 import { boardColumns, documentKinds, ideaStatuses } from "../shared/types.js";
 import {
+  type AdminSessionManager,
   parseBearerToken,
   sessionFromRequest,
   setSessionCookie,
-  type AdminSessionManager
 } from "./auth.js";
 import { createMcpRouter } from "./mcp.js";
-import { adminAccess, tokenAccess, type AccessContext, type BoardDataStore } from "./store.js";
+import {
+  type AccessContext,
+  adminAccess,
+  type BoardDataStore,
+  tokenAccess,
+} from "./store.js";
 
 type CreateAppOptions = {
   store: BoardDataStore;
@@ -31,7 +36,7 @@ type GitHubIssue = {
 
 const loginSchema = z.object({
   username: z.string(),
-  password: z.string()
+  password: z.string(),
 });
 
 const ideaSchema = z.object({
@@ -42,12 +47,12 @@ const ideaSchema = z.object({
   labels: z.array(z.string()).optional().default([]),
   acceptanceCriteria: z.array(z.string()).optional().default([]),
   repositoryLocalPath: z.string().optional(),
-  repositoryRemoteUrl: z.string().optional()
+  repositoryRemoteUrl: z.string().optional(),
 });
 
 const ideaStatusSchema = z.preprocess(
   (value) => (value === "dennied" ? "denied" : value),
-  z.enum(ideaStatuses)
+  z.enum(ideaStatuses),
 );
 
 const updateIdeaSchema = z.object({
@@ -58,11 +63,11 @@ const updateIdeaSchema = z.object({
   acceptanceCriteria: z.array(z.string()).optional(),
   repositoryLocalPath: z.string().optional(),
   repositoryRemoteUrl: z.string().optional(),
-  status: ideaStatusSchema.optional()
+  status: ideaStatusSchema.optional(),
 });
 
 const readySchema = z.object({
-  available: z.boolean().optional().default(true)
+  available: z.boolean().optional().default(true),
 });
 
 const updateBoardCardSchema = z.object({
@@ -70,26 +75,29 @@ const updateBoardCardSchema = z.object({
   branchName: z.string().optional(),
   details: z.string().optional(),
   repositoryLocalPath: z.string().optional(),
-  repositoryRemoteUrl: z.string().optional()
+  repositoryRemoteUrl: z.string().optional(),
 });
 
 const readinessSchema = z.object({
   score: z.number().int().min(1).max(10),
-  reason: z.string().trim().min(1)
+  reason: z.string().trim().min(1),
 });
 
-const projectKeySchema = z.string().trim().regex(/^[A-Z]{1,3}$/, "Project ID must be 1 to 3 capital letters");
+const projectKeySchema = z
+  .string()
+  .trim()
+  .regex(/^[A-Z]{1,3}$/, "Project ID must be 1 to 3 capital letters");
 
 const projectSchema = z.object({
   key: projectKeySchema,
   title: z.string().trim().min(1),
-  summary: z.string().optional().default("")
+  summary: z.string().optional().default(""),
 });
 
 const updateProjectSchema = z.object({
   key: projectKeySchema.optional(),
   title: z.string().trim().min(1).optional(),
-  summary: z.string().optional()
+  summary: z.string().optional(),
 });
 
 const documentSchema = z.object({
@@ -98,7 +106,7 @@ const documentSchema = z.object({
   kind: z.enum(documentKinds).optional().default("execution_plan"),
   content: z.string().optional().default(""),
   linkedIdeaIds: z.array(z.string()).optional().default([]),
-  linkedCardIds: z.array(z.string()).optional().default([])
+  linkedCardIds: z.array(z.string()).optional().default([]),
 });
 
 const updateDocumentSchema = z.object({
@@ -106,17 +114,17 @@ const updateDocumentSchema = z.object({
   kind: z.enum(documentKinds).optional(),
   content: z.string().optional(),
   linkedIdeaIds: z.array(z.string()).optional(),
-  linkedCardIds: z.array(z.string()).optional()
+  linkedCardIds: z.array(z.string()).optional(),
 });
 
 const tokenSchema = z.object({
   name: z.string().trim().min(1),
-  projectIds: z.array(z.string().trim().min(1)).min(1)
+  projectIds: z.array(z.string().trim().min(1)).min(1),
 });
 
 const updateTokenSchema = z.object({
   name: z.string().trim().min(1).optional(),
-  projectIds: z.array(z.string().trim().min(1)).min(1).optional()
+  projectIds: z.array(z.string().trim().min(1)).min(1).optional(),
 });
 
 export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
@@ -129,7 +137,7 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
     res.json({
       ok: true,
       service: "vibepod-board",
-      mcp: "/mcp"
+      mcp: "/mcp",
     });
   });
 
@@ -177,9 +185,9 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
         "move_board_card",
         "update_board_card",
         "create_document",
-        "list_documents"
+        "list_documents",
       ],
-      resources: ["vibepod-board://state"]
+      resources: ["vibepod-board://state"],
     });
   });
 
@@ -188,7 +196,7 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
     requireAccess(store, sessions),
     asyncHandler(async (req, res) => {
       res.json({ items: await store.listProjects(accessFromResponse(req)) });
-    })
+    }),
   );
 
   app.post(
@@ -197,33 +205,44 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
     asyncHandler(async (req, res) => {
       const item = await store.createProject(projectSchema.parse(req.body));
       res.status(201).json({ item });
-    })
+    }),
   );
 
   app.patch(
     "/api/projects/:id",
     requireAdmin(store, sessions),
     asyncHandler(async (req, res) => {
-      const item = await store.updateProject(routeParam(req.params.id), updateProjectSchema.parse(req.body));
+      const item = await store.updateProject(
+        routeParam(req.params.id),
+        updateProjectSchema.parse(req.body),
+      );
       res.json({ item });
-    })
+    }),
   );
 
   app.get(
     "/api/ideas",
     requireAccess(store, sessions),
     asyncHandler(async (req, res) => {
-      res.json({ items: await store.listIdeas(accessFromResponse(req), queryParam(req.query.projectId)) });
-    })
+      res.json({
+        items: await store.listIdeas(
+          accessFromResponse(req),
+          queryParam(req.query.projectId),
+        ),
+      });
+    }),
   );
 
   app.post(
     "/api/ideas",
     requireAccess(store, sessions),
     asyncHandler(async (req, res) => {
-      const item = await store.createIdea(accessFromResponse(req), ideaSchema.parse(req.body));
+      const item = await store.createIdea(
+        accessFromResponse(req),
+        ideaSchema.parse(req.body),
+      );
       res.status(201).json({ item });
-    })
+    }),
   );
 
   app.patch(
@@ -233,10 +252,10 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
       const item = await store.updateIdea(
         accessFromResponse(req),
         routeParam(req.params.id),
-        updateIdeaSchema.parse(req.body)
+        updateIdeaSchema.parse(req.body),
       );
       res.json({ item });
-    })
+    }),
   );
 
   app.post(
@@ -247,10 +266,10 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
       const item = await store.setIdeaBoardAvailability(
         accessFromResponse(req),
         routeParam(req.params.id),
-        available
+        available,
       );
       res.json({ item });
-    })
+    }),
   );
 
   app.post(
@@ -262,15 +281,20 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
       const github = await maybeCreateGitHubIssue(store, access, id);
       const card = await store.createBoardCardFromIdea(access, id, github);
       res.json({ mode: github.githubMode, card });
-    })
+    }),
   );
 
   app.get(
     "/api/board",
     requireAccess(store, sessions),
     asyncHandler(async (req, res) => {
-      res.json({ columns: await store.getBoardColumns(accessFromResponse(req), queryParam(req.query.projectId)) });
-    })
+      res.json({
+        columns: await store.getBoardColumns(
+          accessFromResponse(req),
+          queryParam(req.query.projectId),
+        ),
+      });
+    }),
   );
 
   app.patch(
@@ -278,9 +302,13 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
     requireAccess(store, sessions),
     asyncHandler(async (req, res) => {
       const input = updateBoardCardSchema.parse(req.body);
-      const item = await store.updateBoardCard(accessFromResponse(req), routeParam(req.params.id), input);
+      const item = await store.updateBoardCard(
+        accessFromResponse(req),
+        routeParam(req.params.id),
+        input,
+      );
       res.json({ item });
-    })
+    }),
   );
 
   app.post(
@@ -288,9 +316,13 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
     requireAccess(store, sessions),
     asyncHandler(async (req, res) => {
       const input = readinessSchema.parse(req.body);
-      const item = await store.setCardReadiness(accessFromResponse(req), routeParam(req.params.id), input);
+      const item = await store.setCardReadiness(
+        accessFromResponse(req),
+        routeParam(req.params.id),
+        input,
+      );
       res.json({ item });
-    })
+    }),
   );
 
   app.post(
@@ -298,35 +330,50 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
     requireAccess(store, sessions),
     asyncHandler(async (req, res) => {
       const input = readinessSchema.parse(req.body);
-      const item = await store.setIdeaReadiness(accessFromResponse(req), routeParam(req.params.id), input);
+      const item = await store.setIdeaReadiness(
+        accessFromResponse(req),
+        routeParam(req.params.id),
+        input,
+      );
       res.json({ item });
-    })
+    }),
   );
 
   app.get(
     "/api/ideas/:id/readiness",
     requireAccess(store, sessions),
     asyncHandler(async (req, res) => {
-      const items = await store.listIdeaReadiness(accessFromResponse(req), routeParam(req.params.id));
+      const items = await store.listIdeaReadiness(
+        accessFromResponse(req),
+        routeParam(req.params.id),
+      );
       res.json({ items });
-    })
+    }),
   );
 
   app.get(
     "/api/documents",
     requireAccess(store, sessions),
     asyncHandler(async (req, res) => {
-      res.json({ items: await store.listDocuments(accessFromResponse(req), queryParam(req.query.projectId)) });
-    })
+      res.json({
+        items: await store.listDocuments(
+          accessFromResponse(req),
+          queryParam(req.query.projectId),
+        ),
+      });
+    }),
   );
 
   app.post(
     "/api/documents",
     requireAccess(store, sessions),
     asyncHandler(async (req, res) => {
-      const item = await store.createDocument(accessFromResponse(req), documentSchema.parse(req.body));
+      const item = await store.createDocument(
+        accessFromResponse(req),
+        documentSchema.parse(req.body),
+      );
       res.status(201).json({ item });
-    })
+    }),
   );
 
   app.patch(
@@ -336,10 +383,10 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
       const item = await store.updateDocument(
         accessFromResponse(req),
         routeParam(req.params.id),
-        updateDocumentSchema.parse(req.body)
+        updateDocumentSchema.parse(req.body),
       );
       res.json({ item });
-    })
+    }),
   );
 
   app.get(
@@ -347,7 +394,7 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
     requireAdmin(store, sessions),
     asyncHandler(async (req, res) => {
       res.json({ items: await store.listActivity(accessFromResponse(req)) });
-    })
+    }),
   );
 
   app.get(
@@ -355,7 +402,7 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
     requireAdmin(store, sessions),
     asyncHandler(async (_req, res) => {
       res.json({ items: await store.listApiTokens() });
-    })
+    }),
   );
 
   app.post(
@@ -364,16 +411,19 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
     asyncHandler(async (req, res) => {
       const created = await store.createApiToken(tokenSchema.parse(req.body));
       res.status(201).json(created);
-    })
+    }),
   );
 
   app.patch(
     "/api/tokens/:id",
     requireAdmin(store, sessions),
     asyncHandler(async (req, res) => {
-      const item = await store.updateApiToken(routeParam(req.params.id), updateTokenSchema.parse(req.body));
+      const item = await store.updateApiToken(
+        routeParam(req.params.id),
+        updateTokenSchema.parse(req.body),
+      );
       res.json({ item });
-    })
+    }),
   );
 
   app.post(
@@ -382,7 +432,7 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
     asyncHandler(async (req, res) => {
       const item = await store.revokeApiToken(routeParam(req.params.id));
       res.json({ item });
-    })
+    }),
   );
 
   app.use("/mcp", createMcpRouter(store));
@@ -404,7 +454,10 @@ const asyncHandler =
     Promise.resolve(handler(req, res, next)).catch(next);
   };
 
-const requireAccess = (store: BoardDataStore, sessions: AdminSessionManager): RequestHandler =>
+const requireAccess = (
+  store: BoardDataStore,
+  sessions: AdminSessionManager,
+): RequestHandler =>
   asyncHandler(async (req, res, next) => {
     const access = await getAccess(req, store, sessions);
     if (!access) {
@@ -415,7 +468,10 @@ const requireAccess = (store: BoardDataStore, sessions: AdminSessionManager): Re
     next();
   });
 
-const requireAdmin = (store: BoardDataStore, sessions: AdminSessionManager): RequestHandler =>
+const requireAdmin = (
+  store: BoardDataStore,
+  sessions: AdminSessionManager,
+): RequestHandler =>
   asyncHandler(async (req, res, next) => {
     const access = await getAccess(req, store, sessions);
     if (!access) {
@@ -433,7 +489,7 @@ const requireAdmin = (store: BoardDataStore, sessions: AdminSessionManager): Req
 const getAccess = async (
   req: Request,
   store: BoardDataStore,
-  sessions: AdminSessionManager
+  sessions: AdminSessionManager,
 ): Promise<AccessContext | null> => {
   const session = sessionFromRequest(req, sessions);
   if (session) {
@@ -445,22 +501,31 @@ const getAccess = async (
     return null;
   }
   const authenticated = await store.authenticateApiToken(token);
-  return authenticated ? tokenAccess(authenticated.tokenId, authenticated.projectIds) : null;
+  return authenticated
+    ? tokenAccess(authenticated.tokenId, authenticated.projectIds)
+    : null;
 };
 
-const accessFromResponse = (req: Request): AccessContext => req.res?.locals.access as AccessContext;
+const accessFromResponse = (req: Request): AccessContext =>
+  req.res?.locals.access as AccessContext;
 
 const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
   const message = error instanceof Error ? error.message : "Unknown error";
   if (error instanceof z.ZodError) {
-    res.status(400).json({ error: "Validation failed", details: error.flatten() });
+    res
+      .status(400)
+      .json({ error: "Validation failed", details: error.flatten() });
     return;
   }
   if (message.includes("not found")) {
     res.status(404).json({ error: message });
     return;
   }
-  if (message.includes("not allowed") || message.includes("not mapped") || message.includes("Admin access")) {
+  if (
+    message.includes("not allowed") ||
+    message.includes("not mapped") ||
+    message.includes("Admin access")
+  ) {
     res.status(403).json({ error: message });
     return;
   }
@@ -475,7 +540,8 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
   res.status(500).json({ error: message });
 };
 
-const routeParam = (value: string | string[]): string => (Array.isArray(value) ? value[0] : value);
+const routeParam = (value: string | string[]): string =>
+  Array.isArray(value) ? value[0] : value;
 
 const queryParam = (value: unknown): string | undefined => {
   if (Array.isArray(value)) {
@@ -484,52 +550,67 @@ const queryParam = (value: unknown): string | undefined => {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 };
 
-const maybeCreateGitHubIssue = async (store: BoardDataStore, access: AccessContext, ideaId: string) => {
+const maybeCreateGitHubIssue = async (
+  store: BoardDataStore,
+  access: AccessContext,
+  ideaId: string,
+) => {
   const token = process.env.GITHUB_TOKEN;
   const repository = process.env.GITHUB_REPOSITORY;
   if (!token || !repository) {
     return { githubMode: "local" as const };
   }
 
-  const idea = (await store.getState(access)).ideas.find((item) => item.id === ideaId);
+  const idea = (await store.getState(access)).ideas.find(
+    (item) => item.id === ideaId,
+  );
   if (!idea) {
     throw new Error(`Idea not found: ${ideaId}`);
   }
 
-  const response = await fetch(`https://api.github.com/repos/${repository}/issues`, {
-    method: "POST",
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      "User-Agent": "vibepod-board"
+  const response = await fetch(
+    `https://api.github.com/repos/${repository}/issues`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "User-Agent": "vibepod-board",
+      },
+      body: JSON.stringify({
+        title: idea.title,
+        labels: idea.labels,
+        body: formatIssueBody(idea),
+      }),
     },
-    body: JSON.stringify({
-      title: idea.title,
-      labels: idea.labels,
-      body: formatIssueBody(idea)
-    })
-  });
+  );
 
   if (!response.ok) {
     const details = await response.text();
-    throw new Error(`GitHub issue creation failed: ${response.status} ${details}`);
+    throw new Error(
+      `GitHub issue creation failed: ${response.status} ${details}`,
+    );
   }
 
   const issue = (await response.json()) as GitHubIssue;
   return {
     githubMode: "github" as const,
     githubIssueUrl: issue.html_url,
-    githubIssueNumber: issue.number
+    githubIssueNumber: issue.number,
   };
 };
 
-const formatIssueBody = (idea: { summary: string; details: string; acceptanceCriteria: string[] }) => {
+const formatIssueBody = (idea: {
+  summary: string;
+  details: string;
+  acceptanceCriteria: string[];
+}) => {
   const sections = [
     idea.summary && `## Summary\n${idea.summary}`,
     idea.details && `## Details\n${idea.details}`,
     idea.acceptanceCriteria.length > 0 &&
-      `## Acceptance Criteria\n${idea.acceptanceCriteria.map((item) => `- ${item}`).join("\n")}`
+      `## Acceptance Criteria\n${idea.acceptanceCriteria.map((item) => `- ${item}`).join("\n")}`,
   ].filter(Boolean);
 
   return sections.join("\n\n") || "Created from vibepod-board.";

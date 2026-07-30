@@ -1,7 +1,7 @@
-import { Pool } from "pg";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import EmbeddedPostgres from "embedded-postgres";
+import { Pool } from "pg";
 
 const embeddedDatabaseName = "vibepod_board_test";
 const embeddedPort = 55432;
@@ -24,7 +24,7 @@ export const ensureTestDatabase = async () => {
 export const createTestPool = () =>
   new Pool({
     connectionString: testDatabaseUrl,
-    max: 1
+    max: 1,
   });
 
 export const resetDatabase = async (pool: Pool) => {
@@ -40,7 +40,7 @@ const startEmbeddedPostgres = async () => {
     port: embeddedPort,
     persistent: false,
     onLog: () => undefined,
-    onError: () => undefined
+    onError: () => undefined,
   });
 
   await postgres.initialise();
@@ -48,7 +48,10 @@ const startEmbeddedPostgres = async () => {
   try {
     await postgres.createDatabase(embeddedDatabaseName);
   } catch (error) {
-    if (!(error instanceof Error) || !error.message.includes("already exists")) {
+    if (
+      !(error instanceof Error) ||
+      !error.message.includes("already exists")
+    ) {
       throw error;
     }
   }

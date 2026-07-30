@@ -23,28 +23,38 @@ describe("API token storage", () => {
 
     const created = await store.createApiToken({
       name: "Codex",
-      projectIds: [project.id]
+      projectIds: [project.id],
     });
 
     expect(created.token).toMatch(/^vbp_/);
     expect(created.item.name).toBe("Codex");
-    expect(created.item.projects).toEqual([{ id: project.id, key: "APP", title: "App" }]);
+    expect(created.item.projects).toEqual([
+      { id: project.id, key: "APP", title: "App" },
+    ]);
 
-    const rawRows = await pool.query<{ token_hash: string }>("select token_hash from api_tokens");
+    const rawRows = await pool.query<{ token_hash: string }>(
+      "select token_hash from api_tokens",
+    );
     expect(rawRows.rows[0].token_hash).not.toBe(created.token);
 
     const authenticated = await store.authenticateApiToken(created.token);
-    expect(authenticated).toEqual({ tokenId: created.item.id, projectIds: [project.id] });
+    expect(authenticated).toEqual({
+      tokenId: created.item.id,
+      projectIds: [project.id],
+    });
   });
 
   it("updates project mappings and rejects revoked tokens", async () => {
     const app = await store.createProject({ key: "APP", title: "App" });
     const api = await store.createProject({ key: "API", title: "API" });
-    const created = await store.createApiToken({ name: "Agent", projectIds: [app.id] });
+    const created = await store.createApiToken({
+      name: "Agent",
+      projectIds: [app.id],
+    });
 
     const updated = await store.updateApiToken(created.item.id, {
       name: "Agent updated",
-      projectIds: [api.id]
+      projectIds: [api.id],
     });
     expect(updated.name).toBe("Agent updated");
     expect(updated.projects.map((project) => project.id)).toEqual([api.id]);

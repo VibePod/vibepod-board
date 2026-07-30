@@ -7,13 +7,15 @@ describe("integration examples", () => {
     const ids = integrationExamples.map((example) => example.id);
 
     expect(ids).toEqual(
-      expect.arrayContaining(["claude-code", "codex", "auggie", "opencode"])
+      expect.arrayContaining(["claude-code", "codex", "auggie", "opencode"]),
     );
   });
 
   it("uses the VibePod network endpoint in container examples", () => {
     for (const example of integrationExamples) {
-      expect(`${example.command ?? ""}\n${example.config}`).toContain("vibepod-board:3000/mcp");
+      expect(`${example.command ?? ""}\n${example.config}`).toContain(
+        "vibepod-board:3000/mcp",
+      );
     }
   });
 });

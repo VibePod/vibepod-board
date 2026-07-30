@@ -28,7 +28,10 @@ describe("BoardStore readiness", () => {
   it("sets readiness without bumping updatedAt and keeps it across edits", () => {
     const card = createCard();
 
-    const scored = store.setCardReadiness(card.id, { score: 9, reason: "Fully specified" });
+    const scored = store.setCardReadiness(card.id, {
+      score: 9,
+      reason: "Fully specified",
+    });
     expect(scored.readinessScore).toBe(9);
     expect(scored.readinessReason).toBe("Fully specified");
     expect(scored.readinessEvaluatedAt).toBeDefined();
@@ -41,22 +44,33 @@ describe("BoardStore readiness", () => {
   it("validates score and reason", () => {
     const card = createCard();
 
-    expect(() => store.setCardReadiness(card.id, { score: 0, reason: "r" })).toThrow(
-      "Readiness score must be an integer from 1 to 10"
-    );
-    expect(() => store.setCardReadiness(card.id, { score: 5, reason: " " })).toThrow(
-      "Readiness reason is required"
-    );
+    expect(() =>
+      store.setCardReadiness(card.id, { score: 0, reason: "r" }),
+    ).toThrow("Readiness score must be an integer from 1 to 10");
+    expect(() =>
+      store.setCardReadiness(card.id, { score: 5, reason: " " }),
+    ).toThrow("Readiness reason is required");
   });
 
   it("sets idea readiness and mirrors it onto the linked card without bumping updatedAt", () => {
-    const project = store.createProject({ key: "IDR", title: "Idea readiness" });
-    const idea = store.createIdea({ projectId: project.id, title: "Scored idea" });
+    const project = store.createProject({
+      key: "IDR",
+      title: "Idea readiness",
+    });
+    const idea = store.createIdea({
+      projectId: project.id,
+      title: "Scored idea",
+    });
     store.markIdeaReady(idea.id);
     const cardBefore = store.getBoardColumns(project.id).ready[0];
-    const ideaBefore = store.listIdeas(project.id).find((i) => i.id === idea.id)!;
+    const ideaBefore = store
+      .listIdeas(project.id)
+      .find((i) => i.id === idea.id)!;
 
-    const scored = store.setIdeaReadiness(idea.id, { score: 7, reason: "Clear scope" });
+    const scored = store.setIdeaReadiness(idea.id, {
+      score: 7,
+      reason: "Clear scope",
+    });
     expect(scored.readinessScore).toBe(7);
     expect(scored.readinessReason).toBe("Clear scope");
     expect(scored.readinessEvaluatedAt).toBeDefined();
@@ -71,12 +85,12 @@ describe("BoardStore readiness", () => {
   it("validates idea readiness score and reason", () => {
     const project = store.createProject({ key: "IDV", title: "Idea validate" });
     const idea = store.createIdea({ projectId: project.id, title: "Idea" });
-    expect(() => store.setIdeaReadiness(idea.id, { score: 0, reason: "r" })).toThrow(
-      "Readiness score must be an integer from 1 to 10"
-    );
-    expect(() => store.setIdeaReadiness(idea.id, { score: 5, reason: " " })).toThrow(
-      "Readiness reason is required"
-    );
+    expect(() =>
+      store.setIdeaReadiness(idea.id, { score: 0, reason: "r" }),
+    ).toThrow("Readiness score must be an integer from 1 to 10");
+    expect(() =>
+      store.setIdeaReadiness(idea.id, { score: 5, reason: " " }),
+    ).toThrow("Readiness reason is required");
   });
 
   it("redirects card scoring to the linked idea", () => {
@@ -85,10 +99,15 @@ describe("BoardStore readiness", () => {
     store.markIdeaReady(idea.id);
     const card = store.getBoardColumns(project.id).ready[0];
 
-    const scoredCard = store.setCardReadiness(card.id, { score: 4, reason: "Some risk" });
+    const scoredCard = store.setCardReadiness(card.id, {
+      score: 4,
+      reason: "Some risk",
+    });
     expect(scoredCard.readinessScore).toBe(4);
 
-    const updatedIdea = store.listIdeas(project.id).find((i) => i.id === idea.id)!;
+    const updatedIdea = store
+      .listIdeas(project.id)
+      .find((i) => i.id === idea.id)!;
     expect(updatedIdea.readinessScore).toBe(4);
     expect(updatedIdea.readinessReason).toBe("Some risk");
   });
@@ -126,7 +145,10 @@ describe("BoardStore readiness", () => {
 
   it("carries idea readiness onto a card created at promotion time", () => {
     const project = store.createProject({ key: "CRY", title: "Carry" });
-    const idea = store.createIdea({ projectId: project.id, title: "Scored then promoted" });
+    const idea = store.createIdea({
+      projectId: project.id,
+      title: "Scored then promoted",
+    });
     store.setIdeaReadiness(idea.id, { score: 8, reason: "Ready to ship" });
 
     store.markIdeaReady(idea.id);

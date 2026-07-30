@@ -1,9 +1,8 @@
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-
-import { createAdminSessionManager } from "./auth.js";
 import { createApp } from "./app.js";
+import { createAdminSessionManager } from "./auth.js";
 import { createPool, initializeDatabase } from "./db.js";
 import { PostgresBoardStore } from "./storage.js";
 
@@ -19,8 +18,13 @@ const adminPassword = process.env.ADMIN_PASSWORD;
 if (!databaseUrl) {
   throw new Error("DATABASE_URL is required");
 }
-if (process.env.NODE_ENV === "production" && (!adminUsername || !adminPassword)) {
-  throw new Error("ADMIN_USERNAME and ADMIN_PASSWORD are required in production");
+if (
+  process.env.NODE_ENV === "production" &&
+  (!adminUsername || !adminPassword)
+) {
+  throw new Error(
+    "ADMIN_USERNAME and ADMIN_PASSWORD are required in production",
+  );
 }
 
 const pool = createPool(databaseUrl);
@@ -29,13 +33,15 @@ await initializeDatabase(pool);
 const store = new PostgresBoardStore(pool);
 const sessions = createAdminSessionManager({
   username: adminUsername ?? "admin",
-  password: adminPassword ?? "admin"
+  password: adminPassword ?? "admin",
 });
 
 const app = createApp({
   store,
   sessions,
-  publicDir: existsSync(resolve(publicDir, "index.html")) ? publicDir : undefined
+  publicDir: existsSync(resolve(publicDir, "index.html"))
+    ? publicDir
+    : undefined,
 });
 
 app.listen(port, host, () => {

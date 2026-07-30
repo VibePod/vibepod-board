@@ -1,17 +1,17 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 
 import {
-  boardColumns,
   type ActivityEvent,
   type ApiTokenSummary,
   type BoardCard,
   type BoardColumn,
   type BoardColumns,
-  type CreateApiTokenInput,
   type BoardData,
+  boardColumns,
+  type CreateApiTokenInput,
   type CreateBoardCardOptions,
   type CreateDocumentInput,
   type CreateIdeaInput,
@@ -25,17 +25,17 @@ import {
   type UpdateBoardCardInput,
   type UpdateDocumentInput,
   type UpdateIdeaInput,
-  type UpdateProjectInput
+  type UpdateProjectInput,
 } from "../shared/types.js";
 import { createRawApiToken, hashApiToken } from "./auth.js";
 import {
-  assertCanAccessProject,
-  defaultProjectIdForCreate,
-  filterProjectIds,
   type AccessContext,
+  type AuthenticatedToken,
+  assertCanAccessProject,
   type BoardDataStore,
   type CreatedApiToken,
-  type AuthenticatedToken
+  defaultProjectIdForCreate,
+  filterProjectIds,
 } from "./store.js";
 
 const emptyData = (): BoardData => ({
@@ -45,14 +45,22 @@ const emptyData = (): BoardData => ({
   boardCards: [],
   readinessEvents: [],
   documents: [],
-  activity: []
+  activity: [],
 });
 
-type LegacyIdea = Omit<Idea, "projectId" | "taskNumber"> & { projectId?: string; taskNumber?: number };
+type LegacyIdea = Omit<Idea, "projectId" | "taskNumber"> & {
+  projectId?: string;
+  taskNumber?: number;
+};
 type LegacyBoardCard = Omit<BoardCard, "projectId"> & { projectId?: string };
-type LegacyPlanDocument = Omit<PlanDocument, "projectId"> & { projectId?: string };
+type LegacyPlanDocument = Omit<PlanDocument, "projectId"> & {
+  projectId?: string;
+};
 type PersistedBoardData = Partial<
-  Omit<BoardData, "schemaVersion" | "projects" | "ideas" | "boardCards" | "documents">
+  Omit<
+    BoardData,
+    "schemaVersion" | "projects" | "ideas" | "boardCards" | "documents"
+  >
 > & {
   schemaVersion?: number;
   projects?: Partial<Project>[];
@@ -73,10 +81,13 @@ const nowIso = () => new Date().toISOString();
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
-const normalizeList = (items: string[] | undefined): string[] =>
-  [...new Set((items ?? []).map((item) => item.trim()).filter(Boolean))];
+const normalizeList = (items: string[] | undefined): string[] => [
+  ...new Set((items ?? []).map((item) => item.trim()).filter(Boolean)),
+];
 
-const normalizeOptionalText = (value: string | undefined): string | undefined => {
+const normalizeOptionalText = (
+  value: string | undefined,
+): string | undefined => {
   if (value === undefined) {
     return undefined;
   }
@@ -84,7 +95,9 @@ const normalizeOptionalText = (value: string | undefined): string | undefined =>
   return trimmed || undefined;
 };
 
-const normalizeReadinessInput = (input: SetCardReadinessInput): { score: number; reason: string } => {
+const normalizeReadinessInput = (
+  input: SetCardReadinessInput,
+): { score: number; reason: string } => {
   if (!Number.isInteger(input.score) || input.score < 1 || input.score > 10) {
     throw new Error("Readiness score must be an integer from 1 to 10");
   }
@@ -205,7 +218,7 @@ export class PostgresBoardStore implements BoardDataStore {
     const events = ideas.length
       ? await this.pool.query<ReadinessEventRow>(
           "select * from idea_readiness_events where idea_id = any($1::text[]) order by created_at desc",
-          [ideas.map((idea) => idea.id)]
+          [ideas.map((idea) => idea.id)],
         )
       : { rows: [] as ReadinessEventRow[] };
     return {
@@ -215,13 +228,13 @@ export class PostgresBoardStore implements BoardDataStore {
       boardCards: await this.listBoardCards(access),
       readinessEvents: events.rows.map(readinessEventFromRow),
       documents: await this.listDocuments(access),
-      activity: await this.listActivity(access)
+      activity: await this.listActivity(access),
     };
   }
 
   async listProjects(access?: AccessContext): Promise<Project[]> {
     const result = await this.pool.query<ProjectRow>(
-      "select * from projects order by updated_at desc, title asc"
+      "select * from projects order by updated_at desc, title asc",
     );
     const projects = result.rows.map(projectFromRow);
     if (!access || access.kind === "admin") {
@@ -243,10 +256,21 @@ export class PostgresBoardStore implements BoardDataStore {
         `insert into projects (id, key, title, summary, created_at, updated_at)
          values ($1, $2, $3, $4, $5, $5)
          returning *`,
-        [randomUUID(), key, input.title.trim(), input.summary?.trim() ?? "", timestamp]
+        [
+          randomUUID(),
+          key,
+          input.title.trim(),
+          input.summary?.trim() ?? "",
+          timestamp,
+        ],
       );
       const project = projectFromRow(result.rows[0]);
-      await this.addActivity(client, "project.created", `Created project: ${project.title}`, timestamp);
+      await this.addActivity(
+        client,
+        "project.created",
+        `Created project: ${project.title}`,
+        timestamp,
+      );
       await client.query("commit");
       return project;
     } catch (error) {
@@ -262,25 +286,33 @@ export class PostgresBoardStore implements BoardDataStore {
     try {
       await client.query("begin");
       const current = await this.requireProject(client, id);
-      const key = input.key !== undefined ? normalizeProjectKey(input.key) : current.key;
+      const key =
+        input.key !== undefined ? normalizeProjectKey(input.key) : current.key;
       if (input.key !== undefined) {
         await this.assertProjectKeyAvailable(client, key, current.id);
       }
-      const title = input.title !== undefined ? input.title.trim() : current.title;
+      const title =
+        input.title !== undefined ? input.title.trim() : current.title;
       if (input.title !== undefined) {
         assertTitle(input.title, "Project");
       }
-      const summary = input.summary !== undefined ? input.summary.trim() : current.summary;
+      const summary =
+        input.summary !== undefined ? input.summary.trim() : current.summary;
       const timestamp = nowIso();
       const result = await client.query<ProjectRow>(
         `update projects
          set key = $2, title = $3, summary = $4, updated_at = $5
          where id = $1
          returning *`,
-        [id, key, title, summary, timestamp]
+        [id, key, title, summary, timestamp],
       );
       const project = projectFromRow(result.rows[0]);
-      await this.addActivity(client, "project.updated", `Updated project: ${project.title}`, timestamp);
+      await this.addActivity(
+        client,
+        "project.updated",
+        `Updated project: ${project.title}`,
+        timestamp,
+      );
       await client.query("commit");
       return project;
     } catch (error) {
@@ -297,7 +329,7 @@ export class PostgresBoardStore implements BoardDataStore {
       assertCanAccessProject(access, project.id);
       const result = await this.pool.query<IdeaRow>(
         "select * from ideas where project_id = $1 order by updated_at desc, title asc",
-        [project.id]
+        [project.id],
       );
       return result.rows.map(ideaFromRow);
     }
@@ -308,22 +340,27 @@ export class PostgresBoardStore implements BoardDataStore {
 
     const result =
       access.kind === "admin"
-        ? await this.pool.query<IdeaRow>("select * from ideas order by updated_at desc, title asc")
+        ? await this.pool.query<IdeaRow>(
+            "select * from ideas order by updated_at desc, title asc",
+          )
         : await this.pool.query<IdeaRow>(
             "select * from ideas where project_id = any($1::text[]) order by updated_at desc, title asc",
-            [filterProjectIds(access, access.projectIds)]
+            [filterProjectIds(access, access.projectIds)],
           );
     return result.rows.map(ideaFromRow);
   }
 
-  async createIdea(access: AccessContext, input: CreateIdeaInput): Promise<Idea> {
+  async createIdea(
+    access: AccessContext,
+    input: CreateIdeaInput,
+  ): Promise<Idea> {
     assertTitle(input.title, "Idea");
     const client = await this.pool.connect();
     try {
       await client.query("begin");
       const projectId = await this.resolveProjectIdForCreate(
         client,
-        defaultProjectIdForCreate(access, input.projectId)
+        defaultProjectIdForCreate(access, input.projectId),
       );
       assertCanAccessProject(access, projectId);
       const timestamp = nowIso();
@@ -346,11 +383,16 @@ export class PostgresBoardStore implements BoardDataStore {
           JSON.stringify(normalizeList(input.acceptanceCriteria)),
           normalizeOptionalText(input.repositoryLocalPath) ?? null,
           normalizeOptionalText(input.repositoryRemoteUrl) ?? null,
-          timestamp
-        ]
+          timestamp,
+        ],
       );
       const idea = ideaFromRow(result.rows[0]);
-      await this.addActivity(client, "idea.created", `Created idea: ${idea.title}`, timestamp);
+      await this.addActivity(
+        client,
+        "idea.created",
+        `Created idea: ${idea.title}`,
+        timestamp,
+      );
       await client.query("commit");
       return idea;
     } catch (error) {
@@ -361,19 +403,29 @@ export class PostgresBoardStore implements BoardDataStore {
     }
   }
 
-  async updateIdea(access: AccessContext, id: string, input: UpdateIdeaInput): Promise<Idea> {
+  async updateIdea(
+    access: AccessContext,
+    id: string,
+    input: UpdateIdeaInput,
+  ): Promise<Idea> {
     const client = await this.pool.connect();
     try {
       await client.query("begin");
       const current = await this.requireIdea(client, id);
       assertCanAccessProject(access, current.projectId);
-      const title = input.title !== undefined ? input.title.trim() : current.title;
+      const title =
+        input.title !== undefined ? input.title.trim() : current.title;
       if (input.title !== undefined) {
         assertTitle(input.title, "Idea");
       }
-      const summary = input.summary !== undefined ? input.summary.trim() : current.summary;
-      const details = input.details !== undefined ? input.details.trim() : current.details;
-      const labels = input.labels !== undefined ? normalizeList(input.labels) : current.labels;
+      const summary =
+        input.summary !== undefined ? input.summary.trim() : current.summary;
+      const details =
+        input.details !== undefined ? input.details.trim() : current.details;
+      const labels =
+        input.labels !== undefined
+          ? normalizeList(input.labels)
+          : current.labels;
       const acceptanceCriteria =
         input.acceptanceCriteria !== undefined
           ? normalizeList(input.acceptanceCriteria)
@@ -389,7 +441,8 @@ export class PostgresBoardStore implements BoardDataStore {
       let status = input.status ?? current.status;
       if (
         status === "idea" &&
-        (input.details !== undefined || input.acceptanceCriteria !== undefined) &&
+        (input.details !== undefined ||
+          input.acceptanceCriteria !== undefined) &&
         (details || acceptanceCriteria.length > 0)
       ) {
         status = "refining";
@@ -418,12 +471,17 @@ export class PostgresBoardStore implements BoardDataStore {
           status,
           repositoryLocalPath ?? null,
           repositoryRemoteUrl ?? null,
-          timestamp
-        ]
+          timestamp,
+        ],
       );
       const idea = ideaFromRow(result.rows[0]);
       await this.syncBoardCardFromIdea(client, idea, timestamp);
-      await this.addActivity(client, "idea.updated", `Updated idea: ${idea.title}`, timestamp);
+      await this.addActivity(
+        client,
+        "idea.updated",
+        `Updated idea: ${idea.title}`,
+        timestamp,
+      );
       await client.query("commit");
       return idea;
     } catch (error) {
@@ -441,7 +499,7 @@ export class PostgresBoardStore implements BoardDataStore {
   async setIdeaBoardAvailability(
     access: AccessContext,
     id: string,
-    available: boolean
+    available: boolean,
   ): Promise<Idea> {
     const client = await this.pool.connect();
     try {
@@ -451,17 +509,47 @@ export class PostgresBoardStore implements BoardDataStore {
       const timestamp = nowIso();
 
       if (available) {
-        const ready = await this.updateIdeaStatus(client, idea.id, "ready", timestamp);
-        await this.ensureBoardCard(client, ready, { githubMode: "local" }, timestamp);
-        await this.addActivity(client, "idea.ready", `Marked idea ready: ${ready.title}`, timestamp);
+        const ready = await this.updateIdeaStatus(
+          client,
+          idea.id,
+          "ready",
+          timestamp,
+        );
+        await this.ensureBoardCard(
+          client,
+          ready,
+          { githubMode: "local" },
+          timestamp,
+        );
+        await this.addActivity(
+          client,
+          "idea.ready",
+          `Marked idea ready: ${ready.title}`,
+          timestamp,
+        );
         await client.query("commit");
         return ready;
       }
 
-      await client.query("delete from board_cards where idea_id = $1", [idea.id]);
-      const status = idea.details || idea.acceptanceCriteria.length > 0 ? "refining" : "idea";
-      const unavailable = await this.updateIdeaStatus(client, idea.id, status, timestamp);
-      await this.addActivity(client, "idea.not_ready", `Removed idea from board: ${idea.title}`, timestamp);
+      await client.query("delete from board_cards where idea_id = $1", [
+        idea.id,
+      ]);
+      const status =
+        idea.details || idea.acceptanceCriteria.length > 0
+          ? "refining"
+          : "idea";
+      const unavailable = await this.updateIdeaStatus(
+        client,
+        idea.id,
+        status,
+        timestamp,
+      );
+      await this.addActivity(
+        client,
+        "idea.not_ready",
+        `Removed idea from board: ${idea.title}`,
+        timestamp,
+      );
       await client.query("commit");
       return unavailable;
     } catch (error) {
@@ -475,7 +563,7 @@ export class PostgresBoardStore implements BoardDataStore {
   async createBoardCardFromIdea(
     access: AccessContext,
     id: string,
-    options: CreateBoardCardOptions
+    options: CreateBoardCardOptions,
   ): Promise<BoardCard> {
     const client = await this.pool.connect();
     try {
@@ -496,13 +584,16 @@ export class PostgresBoardStore implements BoardDataStore {
     }
   }
 
-  async listBoardCards(access: AccessContext, projectId?: string): Promise<BoardCard[]> {
+  async listBoardCards(
+    access: AccessContext,
+    projectId?: string,
+  ): Promise<BoardCard[]> {
     if (projectId) {
       const project = await this.requireProject(this.pool, projectId);
       assertCanAccessProject(access, project.id);
       const result = await this.pool.query<BoardCardRow>(
         "select * from board_cards where project_id = $1 order by updated_at desc, title asc",
-        [project.id]
+        [project.id],
       );
       return result.rows.map(boardCardFromRow);
     }
@@ -514,23 +605,26 @@ export class PostgresBoardStore implements BoardDataStore {
     const result =
       access.kind === "admin"
         ? await this.pool.query<BoardCardRow>(
-            "select * from board_cards order by updated_at desc, title asc"
+            "select * from board_cards order by updated_at desc, title asc",
           )
         : await this.pool.query<BoardCardRow>(
             "select * from board_cards where project_id = any($1::text[]) order by updated_at desc, title asc",
-            [access.projectIds]
+            [access.projectIds],
           );
     return result.rows.map(boardCardFromRow);
   }
 
-  async getBoardColumns(access: AccessContext, projectId?: string): Promise<BoardColumns> {
+  async getBoardColumns(
+    access: AccessContext,
+    projectId?: string,
+  ): Promise<BoardColumns> {
     const cards = await this.listBoardCards(access, projectId);
     const columns: BoardColumns = {
       ready: [],
       planned: [],
       in_progress: [],
       review: [],
-      done: []
+      done: [],
     };
     for (const card of cards) {
       columns[card.column].push(card);
@@ -544,7 +638,7 @@ export class PostgresBoardStore implements BoardDataStore {
   async updateBoardCard(
     access: AccessContext,
     id: string,
-    input: UpdateBoardCardInput
+    input: UpdateBoardCardInput,
   ): Promise<BoardCard> {
     const client = await this.pool.connect();
     try {
@@ -556,7 +650,8 @@ export class PostgresBoardStore implements BoardDataStore {
         input.branchName !== undefined
           ? normalizeOptionalText(input.branchName)
           : current.branchName;
-      const details = input.details !== undefined ? input.details.trim() : current.details;
+      const details =
+        input.details !== undefined ? input.details.trim() : current.details;
       const repositoryLocalPath =
         input.repositoryLocalPath !== undefined
           ? normalizeOptionalText(input.repositoryLocalPath)
@@ -583,11 +678,16 @@ export class PostgresBoardStore implements BoardDataStore {
           details,
           repositoryLocalPath ?? null,
           repositoryRemoteUrl ?? null,
-          timestamp
-        ]
+          timestamp,
+        ],
       );
       const card = boardCardFromRow(result.rows[0]);
-      await this.addActivity(client, "board.updated", `Updated board card: ${card.title}`, timestamp);
+      await this.addActivity(
+        client,
+        "board.updated",
+        `Updated board card: ${card.title}`,
+        timestamp,
+      );
       await client.query("commit");
       return card;
     } catch (error) {
@@ -598,7 +698,11 @@ export class PostgresBoardStore implements BoardDataStore {
     }
   }
 
-  async moveBoardCard(access: AccessContext, id: string, column: BoardColumn): Promise<BoardCard> {
+  async moveBoardCard(
+    access: AccessContext,
+    id: string,
+    column: BoardColumn,
+  ): Promise<BoardCard> {
     const client = await this.pool.connect();
     try {
       await client.query("begin");
@@ -610,10 +714,15 @@ export class PostgresBoardStore implements BoardDataStore {
          set column_name = $2, updated_at = $3
          where id = $1
          returning *`,
-        [id, column, timestamp]
+        [id, column, timestamp],
       );
       const card = boardCardFromRow(result.rows[0]);
-      await this.addActivity(client, "board.moved", `Moved card to ${column}: ${card.title}`, timestamp);
+      await this.addActivity(
+        client,
+        "board.moved",
+        `Moved card to ${column}: ${card.title}`,
+        timestamp,
+      );
       await client.query("commit");
       return card;
     } catch (error) {
@@ -627,11 +736,11 @@ export class PostgresBoardStore implements BoardDataStore {
   async setCardReadiness(
     access: AccessContext,
     id: string,
-    input: SetCardReadinessInput
+    input: SetCardReadinessInput,
   ): Promise<BoardCard> {
     const existing = await this.pool.query<BoardCardRow>(
       "select * from board_cards where id = $1",
-      [id]
+      [id],
     );
     const row = existing.rows[0];
     if (!row) {
@@ -643,7 +752,7 @@ export class PostgresBoardStore implements BoardDataStore {
       await this.setIdeaReadiness(access, row.idea_id, input);
       const reread = await this.pool.query<BoardCardRow>(
         "select * from board_cards where id = $1",
-        [id]
+        [id],
       );
       return boardCardFromRow(reread.rows[0]);
     }
@@ -657,7 +766,7 @@ export class PostgresBoardStore implements BoardDataStore {
            readiness_evaluated_at = $4
        where id = $1
        returning *`,
-      [id, score, reason, timestamp]
+      [id, score, reason, timestamp],
     );
     return boardCardFromRow(result.rows[0]);
   }
@@ -665,7 +774,7 @@ export class PostgresBoardStore implements BoardDataStore {
   async setIdeaReadiness(
     access: AccessContext,
     id: string,
-    input: SetCardReadinessInput
+    input: SetCardReadinessInput,
   ): Promise<Idea> {
     const { score, reason } = normalizeReadinessInput(input);
     const client = await this.pool.connect();
@@ -681,7 +790,7 @@ export class PostgresBoardStore implements BoardDataStore {
              readiness_evaluated_at = $4
          where id = $1
          returning *`,
-        [id, score, reason, timestamp]
+        [id, score, reason, timestamp],
       );
       await client.query(
         `update board_cards
@@ -689,19 +798,19 @@ export class PostgresBoardStore implements BoardDataStore {
              readiness_reason = $3,
              readiness_evaluated_at = $4
          where idea_id = $1`,
-        [id, score, reason, timestamp]
+        [id, score, reason, timestamp],
       );
       await client.query(
         `insert into idea_readiness_events (id, idea_id, score, reason, created_at)
          values ($1, $2, $3, $4, $5)`,
-        [randomUUID(), id, score, reason, timestamp]
+        [randomUUID(), id, score, reason, timestamp],
       );
       const idea = ideaFromRow(result.rows[0]);
       await this.addActivity(
         client,
         "idea.readiness",
         `Set readiness ${score}/10: ${idea.title}`,
-        timestamp
+        timestamp,
       );
       await client.query("commit");
       return idea;
@@ -713,23 +822,29 @@ export class PostgresBoardStore implements BoardDataStore {
     }
   }
 
-  async listIdeaReadiness(access: AccessContext, id: string): Promise<ReadinessEvent[]> {
+  async listIdeaReadiness(
+    access: AccessContext,
+    id: string,
+  ): Promise<ReadinessEvent[]> {
     const idea = await this.requireIdea(this.pool, id);
     assertCanAccessProject(access, idea.projectId);
     const result = await this.pool.query<ReadinessEventRow>(
       "select * from idea_readiness_events where idea_id = $1 order by created_at desc",
-      [id]
+      [id],
     );
     return result.rows.map(readinessEventFromRow);
   }
 
-  async listDocuments(access: AccessContext, projectId?: string): Promise<PlanDocument[]> {
+  async listDocuments(
+    access: AccessContext,
+    projectId?: string,
+  ): Promise<PlanDocument[]> {
     if (projectId) {
       const project = await this.requireProject(this.pool, projectId);
       assertCanAccessProject(access, project.id);
       const result = await this.pool.query<DocumentRow>(
         "select * from documents where project_id = $1 order by updated_at desc, title asc",
-        [project.id]
+        [project.id],
       );
       return result.rows.map(documentFromRow);
     }
@@ -740,22 +855,27 @@ export class PostgresBoardStore implements BoardDataStore {
 
     const result =
       access.kind === "admin"
-        ? await this.pool.query<DocumentRow>("select * from documents order by updated_at desc, title asc")
+        ? await this.pool.query<DocumentRow>(
+            "select * from documents order by updated_at desc, title asc",
+          )
         : await this.pool.query<DocumentRow>(
             "select * from documents where project_id = any($1::text[]) order by updated_at desc, title asc",
-            [access.projectIds]
+            [access.projectIds],
           );
     return result.rows.map(documentFromRow);
   }
 
-  async createDocument(access: AccessContext, input: CreateDocumentInput): Promise<PlanDocument> {
+  async createDocument(
+    access: AccessContext,
+    input: CreateDocumentInput,
+  ): Promise<PlanDocument> {
     assertTitle(input.title, "Document");
     const client = await this.pool.connect();
     try {
       await client.query("begin");
       const projectId = await this.resolveProjectIdForCreate(
         client,
-        defaultProjectIdForCreate(access, input.projectId)
+        defaultProjectIdForCreate(access, input.projectId),
       );
       assertCanAccessProject(access, projectId);
       const timestamp = nowIso();
@@ -773,11 +893,16 @@ export class PostgresBoardStore implements BoardDataStore {
           input.content?.trim() ?? "",
           JSON.stringify(normalizeList(input.linkedIdeaIds)),
           JSON.stringify(normalizeList(input.linkedCardIds)),
-          timestamp
-        ]
+          timestamp,
+        ],
       );
       const document = documentFromRow(result.rows[0]);
-      await this.addActivity(client, "document.created", `Created document: ${document.title}`, timestamp);
+      await this.addActivity(
+        client,
+        "document.created",
+        `Created document: ${document.title}`,
+        timestamp,
+      );
       await client.query("commit");
       return document;
     } catch (error) {
@@ -791,14 +916,15 @@ export class PostgresBoardStore implements BoardDataStore {
   async updateDocument(
     access: AccessContext,
     id: string,
-    input: UpdateDocumentInput
+    input: UpdateDocumentInput,
   ): Promise<PlanDocument> {
     const client = await this.pool.connect();
     try {
       await client.query("begin");
       const current = await this.requireDocument(client, id);
       assertCanAccessProject(access, current.projectId);
-      const title = input.title !== undefined ? input.title.trim() : current.title;
+      const title =
+        input.title !== undefined ? input.title.trim() : current.title;
       if (input.title !== undefined) {
         assertTitle(input.title, "Document");
       }
@@ -818,13 +944,26 @@ export class PostgresBoardStore implements BoardDataStore {
           title,
           input.kind ?? current.kind,
           input.content ?? current.content,
-          JSON.stringify(input.linkedIdeaIds !== undefined ? normalizeList(input.linkedIdeaIds) : current.linkedIdeaIds),
-          JSON.stringify(input.linkedCardIds !== undefined ? normalizeList(input.linkedCardIds) : current.linkedCardIds),
-          timestamp
-        ]
+          JSON.stringify(
+            input.linkedIdeaIds !== undefined
+              ? normalizeList(input.linkedIdeaIds)
+              : current.linkedIdeaIds,
+          ),
+          JSON.stringify(
+            input.linkedCardIds !== undefined
+              ? normalizeList(input.linkedCardIds)
+              : current.linkedCardIds,
+          ),
+          timestamp,
+        ],
       );
       const document = documentFromRow(result.rows[0]);
-      await this.addActivity(client, "document.updated", `Updated document: ${document.title}`, timestamp);
+      await this.addActivity(
+        client,
+        "document.updated",
+        `Updated document: ${document.title}`,
+        timestamp,
+      );
       await client.query("commit");
       return document;
     } catch (error) {
@@ -840,14 +979,14 @@ export class PostgresBoardStore implements BoardDataStore {
       return [];
     }
     const result = await this.pool.query<ActivityRow>(
-      "select * from activity_events order by created_at desc"
+      "select * from activity_events order by created_at desc",
     );
     return result.rows.map(activityFromRow);
   }
 
   async listApiTokens(): Promise<ApiTokenSummary[]> {
     const result = await this.pool.query<ApiTokenRow>(
-      "select id, name, created_at, last_used_at, revoked_at from api_tokens order by created_at desc"
+      "select id, name, created_at, last_used_at, revoked_at from api_tokens order by created_at desc",
     );
     return Promise.all(result.rows.map((row) => this.apiTokenSummary(row)));
   }
@@ -869,19 +1008,19 @@ export class PostgresBoardStore implements BoardDataStore {
         `insert into api_tokens (id, name, token_hash, created_at)
          values ($1, $2, $3, $4)
          returning id, name, created_at, last_used_at, revoked_at`,
-        [randomUUID(), input.name.trim(), hashApiToken(token), timestamp]
+        [randomUUID(), input.name.trim(), hashApiToken(token), timestamp],
       );
       for (const projectId of normalizeList(input.projectIds)) {
         await client.query(
           "insert into api_token_projects (token_id, project_id) values ($1, $2)",
-          [created.rows[0].id, projectId]
+          [created.rows[0].id, projectId],
         );
       }
       const item = await this.apiTokenSummary(created.rows[0], client);
       await client.query("commit");
       return {
         item,
-        token
+        token,
       };
     } catch (error) {
       await client.query("rollback");
@@ -893,7 +1032,7 @@ export class PostgresBoardStore implements BoardDataStore {
 
   async updateApiToken(
     id: string,
-    input: UpdateApiTokenInput
+    input: UpdateApiTokenInput,
   ): Promise<ApiTokenSummary> {
     const client = await this.pool.connect();
     try {
@@ -908,18 +1047,21 @@ export class PostgresBoardStore implements BoardDataStore {
          set name = $2
          where id = $1
          returning id, name, created_at, last_used_at, revoked_at`,
-        [id, name]
+        [id, name],
       );
       if (input.projectIds !== undefined) {
         if (input.projectIds.length === 0) {
           throw new Error("At least one project is required");
         }
         await this.requireProjects(client, input.projectIds);
-        await client.query("delete from api_token_projects where token_id = $1", [id]);
+        await client.query(
+          "delete from api_token_projects where token_id = $1",
+          [id],
+        );
         for (const projectId of normalizeList(input.projectIds)) {
           await client.query(
             "insert into api_token_projects (token_id, project_id) values ($1, $2)",
-            [id, projectId]
+            [id, projectId],
           );
         }
       }
@@ -940,7 +1082,7 @@ export class PostgresBoardStore implements BoardDataStore {
        set revoked_at = coalesce(revoked_at, $2)
        where id = $1
        returning id, name, created_at, last_used_at, revoked_at`,
-      [id, nowIso()]
+      [id, nowIso()],
     );
     const row = result.rows[0];
     if (!row) {
@@ -949,13 +1091,15 @@ export class PostgresBoardStore implements BoardDataStore {
     return this.apiTokenSummary(row);
   }
 
-  async authenticateApiToken(token: string): Promise<AuthenticatedToken | null> {
+  async authenticateApiToken(
+    token: string,
+  ): Promise<AuthenticatedToken | null> {
     const result = await this.pool.query<{ id: string }>(
       `update api_tokens
        set last_used_at = $2
        where token_hash = $1 and revoked_at is null
        returning id`,
-      [hashApiToken(token), nowIso()]
+      [hashApiToken(token), nowIso()],
     );
     const row = result.rows[0];
     if (!row) {
@@ -965,8 +1109,14 @@ export class PostgresBoardStore implements BoardDataStore {
     return { tokenId: row.id, projectIds };
   }
 
-  private async requireProject(queryable: Pick<Pool | PoolClient, "query">, id: string): Promise<Project> {
-    const result = await queryable.query<ProjectRow>("select * from projects where id = $1", [id]);
+  private async requireProject(
+    queryable: Pick<Pool | PoolClient, "query">,
+    id: string,
+  ): Promise<Project> {
+    const result = await queryable.query<ProjectRow>(
+      "select * from projects where id = $1",
+      [id],
+    );
     const row = result.rows[0];
     if (!row) {
       throw new Error(`Project not found: ${id}`);
@@ -974,8 +1124,14 @@ export class PostgresBoardStore implements BoardDataStore {
     return projectFromRow(row);
   }
 
-  private async requireIdea(queryable: Pick<Pool | PoolClient, "query">, id: string): Promise<Idea> {
-    const result = await queryable.query<IdeaRow>("select * from ideas where id = $1", [id]);
+  private async requireIdea(
+    queryable: Pick<Pool | PoolClient, "query">,
+    id: string,
+  ): Promise<Idea> {
+    const result = await queryable.query<IdeaRow>(
+      "select * from ideas where id = $1",
+      [id],
+    );
     const row = result.rows[0];
     if (!row) {
       throw new Error(`Idea not found: ${id}`);
@@ -985,9 +1141,12 @@ export class PostgresBoardStore implements BoardDataStore {
 
   private async requireBoardCard(
     queryable: Pick<Pool | PoolClient, "query">,
-    id: string
+    id: string,
   ): Promise<BoardCard> {
-    const result = await queryable.query<BoardCardRow>("select * from board_cards where id = $1", [id]);
+    const result = await queryable.query<BoardCardRow>(
+      "select * from board_cards where id = $1",
+      [id],
+    );
     const row = result.rows[0];
     if (!row) {
       throw new Error(`Board card not found: ${id}`);
@@ -997,9 +1156,12 @@ export class PostgresBoardStore implements BoardDataStore {
 
   private async requireDocument(
     queryable: Pick<Pool | PoolClient, "query">,
-    id: string
+    id: string,
   ): Promise<PlanDocument> {
-    const result = await queryable.query<DocumentRow>("select * from documents where id = $1", [id]);
+    const result = await queryable.query<DocumentRow>(
+      "select * from documents where id = $1",
+      [id],
+    );
     const row = result.rows[0];
     if (!row) {
       throw new Error(`Document not found: ${id}`);
@@ -1009,11 +1171,11 @@ export class PostgresBoardStore implements BoardDataStore {
 
   private async requireApiToken(
     queryable: Pick<Pool | PoolClient, "query">,
-    id: string
+    id: string,
   ): Promise<ApiTokenRow> {
     const result = await queryable.query<ApiTokenRow>(
       "select id, name, created_at, last_used_at, revoked_at from api_tokens where id = $1",
-      [id]
+      [id],
     );
     const row = result.rows[0];
     if (!row) {
@@ -1022,11 +1184,14 @@ export class PostgresBoardStore implements BoardDataStore {
     return row;
   }
 
-  private async requireProjects(queryable: Pick<Pool | PoolClient, "query">, projectIds: string[]) {
+  private async requireProjects(
+    queryable: Pick<Pool | PoolClient, "query">,
+    projectIds: string[],
+  ) {
     const uniqueIds = normalizeList(projectIds);
     const result = await queryable.query<{ id: string }>(
       "select id from projects where id = any($1::text[])",
-      [uniqueIds]
+      [uniqueIds],
     );
     const found = new Set(result.rows.map((row) => row.id));
     const missing = uniqueIds.find((id) => !found.has(id));
@@ -1037,14 +1202,14 @@ export class PostgresBoardStore implements BoardDataStore {
 
   private async resolveProjectIdForCreate(
     client: PoolClient,
-    requestedProjectId: string | undefined
+    requestedProjectId: string | undefined,
   ): Promise<string> {
     if (requestedProjectId !== undefined) {
       return (await this.requireProject(client, requestedProjectId)).id;
     }
 
     const existing = await client.query<ProjectRow>(
-      "select * from projects order by created_at asc, id asc limit 1"
+      "select * from projects order by created_at asc, id asc limit 1",
     );
     if (existing.rows[0]) {
       return existing.rows[0].id;
@@ -1056,31 +1221,39 @@ export class PostgresBoardStore implements BoardDataStore {
       `insert into projects (id, key, title, summary, created_at, updated_at)
        values ($1, $2, 'General', $3, $4, $4)
        returning *`,
-      [randomUUID(), key, defaultProjectSummary, timestamp]
+      [randomUUID(), key, defaultProjectSummary, timestamp],
     );
     const project = projectFromRow(created.rows[0]);
-    await this.addActivity(client, "project.created", `Created project: ${project.title}`, timestamp);
+    await this.addActivity(
+      client,
+      "project.created",
+      `Created project: ${project.title}`,
+      timestamp,
+    );
     return project.id;
   }
 
   private async assertProjectKeyAvailable(
     queryable: Pick<Pool | PoolClient, "query">,
     key: string,
-    currentProjectId?: string
+    currentProjectId?: string,
   ) {
     const result = await queryable.query<ProjectRow>(
       "select * from projects where key = $1 and ($2::text is null or id <> $2) limit 1",
-      [key, currentProjectId ?? null]
+      [key, currentProjectId ?? null],
     );
     if (result.rows[0]) {
       throw new Error(`Project ID ${key} is already used`);
     }
   }
 
-  private async nextTaskNumber(queryable: Pick<Pool | PoolClient, "query">, projectId: string): Promise<number> {
+  private async nextTaskNumber(
+    queryable: Pick<Pool | PoolClient, "query">,
+    projectId: string,
+  ): Promise<number> {
     const result = await queryable.query<{ next_number: number }>(
       "select coalesce(max(task_number), 0) + 1 as next_number from ideas where project_id = $1",
-      [projectId]
+      [projectId],
     );
     return Number(result.rows[0]?.next_number ?? 1);
   }
@@ -1089,11 +1262,11 @@ export class PostgresBoardStore implements BoardDataStore {
     queryable: Pick<Pool | PoolClient, "query">,
     id: string,
     status: Idea["status"],
-    timestamp = nowIso()
+    timestamp = nowIso(),
   ): Promise<Idea> {
     const result = await queryable.query<IdeaRow>(
       "update ideas set status = $2, updated_at = $3 where id = $1 returning *",
-      [id, status, timestamp]
+      [id, status, timestamp],
     );
     return ideaFromRow(result.rows[0]);
   }
@@ -1102,16 +1275,21 @@ export class PostgresBoardStore implements BoardDataStore {
     queryable: Pick<Pool | PoolClient, "query">,
     idea: Idea,
     options: CreateBoardCardOptions,
-    timestamp = nowIso()
+    timestamp = nowIso(),
   ): Promise<BoardCard> {
     const existing = await queryable.query<BoardCardRow>(
       "select * from board_cards where idea_id = $1 limit 1",
-      [idea.id]
+      [idea.id],
     );
     if (existing.rows[0]) {
-      const githubIssueUrl = options.githubMode === "github" ? options.githubIssueUrl : existing.rows[0].github_issue_url;
+      const githubIssueUrl =
+        options.githubMode === "github"
+          ? options.githubIssueUrl
+          : existing.rows[0].github_issue_url;
       const githubIssueNumber =
-        options.githubMode === "github" ? options.githubIssueNumber : existing.rows[0].github_issue_number;
+        options.githubMode === "github"
+          ? options.githubIssueNumber
+          : existing.rows[0].github_issue_number;
       const updated = await queryable.query<BoardCardRow>(
         `update board_cards
          set title = $2,
@@ -1133,8 +1311,8 @@ export class PostgresBoardStore implements BoardDataStore {
           idea.repositoryRemoteUrl ?? null,
           githubIssueUrl,
           githubIssueNumber,
-          timestamp
-        ]
+          timestamp,
+        ],
       );
       if (options.githubMode === "github") {
         await this.applyIdeaGitHubIssue(queryable, idea.id, options, timestamp);
@@ -1164,21 +1342,26 @@ export class PostgresBoardStore implements BoardDataStore {
         timestamp,
         idea.readinessScore ?? null,
         idea.readinessReason ?? null,
-        idea.readinessEvaluatedAt ?? null
-      ]
+        idea.readinessEvaluatedAt ?? null,
+      ],
     );
     if (options.githubMode === "github") {
       await this.applyIdeaGitHubIssue(queryable, idea.id, options, timestamp);
     }
     const card = boardCardFromRow(created.rows[0]);
-    await this.addActivity(queryable, "board.created", `Created board card: ${card.title}`, timestamp);
+    await this.addActivity(
+      queryable,
+      "board.created",
+      `Created board card: ${card.title}`,
+      timestamp,
+    );
     return card;
   }
 
   private async syncBoardCardFromIdea(
     queryable: Pick<Pool | PoolClient, "query">,
     idea: Idea,
-    timestamp = nowIso()
+    timestamp = nowIso(),
   ) {
     await queryable.query(
       `update board_cards
@@ -1196,8 +1379,8 @@ export class PostgresBoardStore implements BoardDataStore {
         JSON.stringify(idea.labels),
         idea.repositoryLocalPath ?? null,
         idea.repositoryRemoteUrl ?? null,
-        timestamp
-      ]
+        timestamp,
+      ],
     );
   }
 
@@ -1205,7 +1388,7 @@ export class PostgresBoardStore implements BoardDataStore {
     queryable: Pick<Pool | PoolClient, "query">,
     ideaId: string,
     options: CreateBoardCardOptions,
-    timestamp = nowIso()
+    timestamp = nowIso(),
   ) {
     if (options.githubMode !== "github") {
       return;
@@ -1216,7 +1399,7 @@ export class PostgresBoardStore implements BoardDataStore {
            github_issue_number = $3,
            updated_at = $4
        where id = $1`,
-      [ideaId, options.githubIssueUrl, options.githubIssueNumber, timestamp]
+      [ideaId, options.githubIssueUrl, options.githubIssueNumber, timestamp],
     );
   }
 
@@ -1224,11 +1407,11 @@ export class PostgresBoardStore implements BoardDataStore {
     queryable: Pick<Pool | PoolClient, "query">,
     type: string,
     message: string,
-    createdAt = nowIso()
+    createdAt = nowIso(),
   ) {
     await queryable.query(
       "insert into activity_events (id, type, message, created_at) values ($1, $2, $3, $4)",
-      [randomUUID(), type, message, createdAt]
+      [randomUUID(), type, message, createdAt],
     );
     await queryable.query(
       `delete from activity_events
@@ -1236,21 +1419,23 @@ export class PostgresBoardStore implements BoardDataStore {
          select id from activity_events
          order by created_at desc
          limit 100
-      )`
+      )`,
     );
   }
 
   private async apiTokenSummary(
     row: ApiTokenRow,
-    queryable: Pick<Pool | PoolClient, "query"> = this.pool
+    queryable: Pick<Pool | PoolClient, "query"> = this.pool,
   ): Promise<ApiTokenSummary> {
-    const projects = await queryable.query<Pick<ProjectRow, "id" | "key" | "title">>(
+    const projects = await queryable.query<
+      Pick<ProjectRow, "id" | "key" | "title">
+    >(
       `select projects.id, projects.key, projects.title
        from projects
        inner join api_token_projects on api_token_projects.project_id = projects.id
        where api_token_projects.token_id = $1
        order by projects.key asc, projects.title asc`,
-      [row.id]
+      [row.id],
     );
     return {
       id: row.id,
@@ -1258,17 +1443,17 @@ export class PostgresBoardStore implements BoardDataStore {
       projects: projects.rows,
       createdAt: rowTimestamp(row.created_at),
       lastUsedAt: row.last_used_at ? rowTimestamp(row.last_used_at) : undefined,
-      revokedAt: row.revoked_at ? rowTimestamp(row.revoked_at) : undefined
+      revokedAt: row.revoked_at ? rowTimestamp(row.revoked_at) : undefined,
     };
   }
 
   private async apiTokenProjectIds(
     queryable: Pick<Pool | PoolClient, "query">,
-    tokenId: string
+    tokenId: string,
   ): Promise<string[]> {
     const result = await queryable.query<{ project_id: string }>(
       "select project_id from api_token_projects where token_id = $1 order by project_id asc",
-      [tokenId]
+      [tokenId],
     );
     return result.rows.map((row) => row.project_id);
   }
@@ -1278,10 +1463,13 @@ const rowTimestamp = (value: Date | string): string =>
   value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 
 const jsonStringArray = (value: unknown): string[] =>
-  Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 
-const boardCardDetailsForIdea = (idea: Pick<Idea, "details" | "summary">): string =>
-  idea.details || idea.summary;
+const boardCardDetailsForIdea = (
+  idea: Pick<Idea, "details" | "summary">,
+): string => idea.details || idea.summary;
 
 const projectFromRow = (row: ProjectRow): Project => ({
   id: row.id,
@@ -1289,7 +1477,7 @@ const projectFromRow = (row: ProjectRow): Project => ({
   title: row.title,
   summary: row.summary,
   createdAt: rowTimestamp(row.created_at),
-  updatedAt: rowTimestamp(row.updated_at)
+  updatedAt: rowTimestamp(row.updated_at),
 });
 
 const ideaFromRow = (row: IdeaRow): Idea => ({
@@ -1308,9 +1496,11 @@ const ideaFromRow = (row: IdeaRow): Idea => ({
   repositoryRemoteUrl: row.repository_remote_url ?? undefined,
   readinessScore: row.readiness_score ?? undefined,
   readinessReason: row.readiness_reason ?? undefined,
-  readinessEvaluatedAt: row.readiness_evaluated_at ? rowTimestamp(row.readiness_evaluated_at) : undefined,
+  readinessEvaluatedAt: row.readiness_evaluated_at
+    ? rowTimestamp(row.readiness_evaluated_at)
+    : undefined,
   createdAt: rowTimestamp(row.created_at),
-  updatedAt: rowTimestamp(row.updated_at)
+  updatedAt: rowTimestamp(row.updated_at),
 });
 
 const readinessEventFromRow = (row: ReadinessEventRow): ReadinessEvent => ({
@@ -1318,7 +1508,7 @@ const readinessEventFromRow = (row: ReadinessEventRow): ReadinessEvent => ({
   ideaId: row.idea_id,
   score: row.score,
   reason: row.reason,
-  createdAt: rowTimestamp(row.created_at)
+  createdAt: rowTimestamp(row.created_at),
 });
 
 const boardCardFromRow = (row: BoardCardRow): BoardCard => ({
@@ -1336,9 +1526,11 @@ const boardCardFromRow = (row: BoardCardRow): BoardCard => ({
   labels: jsonStringArray(row.labels),
   readinessScore: row.readiness_score ?? undefined,
   readinessReason: row.readiness_reason ?? undefined,
-  readinessEvaluatedAt: row.readiness_evaluated_at ? rowTimestamp(row.readiness_evaluated_at) : undefined,
+  readinessEvaluatedAt: row.readiness_evaluated_at
+    ? rowTimestamp(row.readiness_evaluated_at)
+    : undefined,
   createdAt: rowTimestamp(row.created_at),
-  updatedAt: rowTimestamp(row.updated_at)
+  updatedAt: rowTimestamp(row.updated_at),
 });
 
 const documentFromRow = (row: DocumentRow): PlanDocument => ({
@@ -1350,14 +1542,14 @@ const documentFromRow = (row: DocumentRow): PlanDocument => ({
   linkedIdeaIds: jsonStringArray(row.linked_idea_ids),
   linkedCardIds: jsonStringArray(row.linked_card_ids),
   createdAt: rowTimestamp(row.created_at),
-  updatedAt: rowTimestamp(row.updated_at)
+  updatedAt: rowTimestamp(row.updated_at),
 });
 
 const activityFromRow = (row: ActivityRow): ActivityEvent => ({
   id: row.id,
   type: row.type,
   message: row.message,
-  createdAt: rowTimestamp(row.created_at)
+  createdAt: rowTimestamp(row.created_at),
 });
 
 export class BoardStore {
@@ -1390,11 +1582,15 @@ export class BoardStore {
       title: input.title.trim(),
       summary: input.summary?.trim() ?? "",
       createdAt: timestamp,
-      updatedAt: timestamp
+      updatedAt: timestamp,
     };
 
     this.data.projects.push(project);
-    this.addActivity("project.created", `Created project: ${project.title}`, timestamp);
+    this.addActivity(
+      "project.created",
+      `Created project: ${project.title}`,
+      timestamp,
+    );
     this.save();
     return clone(project);
   }
@@ -1422,7 +1618,9 @@ export class BoardStore {
 
   listIdeas(projectId?: string): Idea[] {
     const filtered = projectId
-      ? this.data.ideas.filter((idea) => idea.projectId === this.requireProject(projectId).id)
+      ? this.data.ideas.filter(
+          (idea) => idea.projectId === this.requireProject(projectId).id,
+        )
       : this.data.ideas;
     return clone(filtered).sort(sortUpdatedDesc);
   }
@@ -1444,7 +1642,7 @@ export class BoardStore {
       repositoryLocalPath: normalizeOptionalText(input.repositoryLocalPath),
       repositoryRemoteUrl: normalizeOptionalText(input.repositoryRemoteUrl),
       createdAt: timestamp,
-      updatedAt: timestamp
+      updatedAt: timestamp,
     };
 
     this.data.ideas.push(idea);
@@ -1478,10 +1676,14 @@ export class BoardStore {
       }
     }
     if (input.repositoryLocalPath !== undefined) {
-      idea.repositoryLocalPath = normalizeOptionalText(input.repositoryLocalPath);
+      idea.repositoryLocalPath = normalizeOptionalText(
+        input.repositoryLocalPath,
+      );
     }
     if (input.repositoryRemoteUrl !== undefined) {
-      idea.repositoryRemoteUrl = normalizeOptionalText(input.repositoryRemoteUrl);
+      idea.repositoryRemoteUrl = normalizeOptionalText(
+        input.repositoryRemoteUrl,
+      );
     }
     if (input.status !== undefined) {
       idea.status = input.status;
@@ -1506,20 +1708,34 @@ export class BoardStore {
       idea.status = "ready";
       idea.updatedAt = timestamp;
       this.ensureBoardCard(idea, { githubMode: "local" }, timestamp);
-      this.addActivity("idea.ready", `Marked idea ready: ${idea.title}`, timestamp);
+      this.addActivity(
+        "idea.ready",
+        `Marked idea ready: ${idea.title}`,
+        timestamp,
+      );
       this.save();
       return clone(idea);
     }
 
-    this.data.boardCards = this.data.boardCards.filter((card) => card.ideaId !== idea.id);
-    idea.status = idea.details || idea.acceptanceCriteria.length > 0 ? "refining" : "idea";
+    this.data.boardCards = this.data.boardCards.filter(
+      (card) => card.ideaId !== idea.id,
+    );
+    idea.status =
+      idea.details || idea.acceptanceCriteria.length > 0 ? "refining" : "idea";
     idea.updatedAt = timestamp;
-    this.addActivity("idea.not_ready", `Removed idea from board: ${idea.title}`, timestamp);
+    this.addActivity(
+      "idea.not_ready",
+      `Removed idea from board: ${idea.title}`,
+      timestamp,
+    );
     this.save();
     return clone(idea);
   }
 
-  createBoardCardFromIdea(id: string, options: CreateBoardCardOptions): BoardCard {
+  createBoardCardFromIdea(
+    id: string,
+    options: CreateBoardCardOptions,
+  ): BoardCard {
     const idea = this.requireIdea(id);
     if (idea.status !== "ready") {
       throw new Error("Only ready ideas can be moved to the board");
@@ -1530,8 +1746,14 @@ export class BoardStore {
     return clone(existing);
   }
 
-  private ensureBoardCard(idea: Idea, options: CreateBoardCardOptions, timestamp = nowIso()): BoardCard {
-    const existing = this.data.boardCards.find((card) => card.ideaId === idea.id);
+  private ensureBoardCard(
+    idea: Idea,
+    options: CreateBoardCardOptions,
+    timestamp = nowIso(),
+  ): BoardCard {
+    const existing = this.data.boardCards.find(
+      (card) => card.ideaId === idea.id,
+    );
     if (existing) {
       this.syncBoardCardFromIdea(idea, timestamp);
       this.applyGitHubIssue(existing, options);
@@ -1555,31 +1777,39 @@ export class BoardStore {
       readinessReason: idea.readinessReason,
       readinessEvaluatedAt: idea.readinessEvaluatedAt,
       createdAt: timestamp,
-      updatedAt: timestamp
+      updatedAt: timestamp,
     };
     this.applyGitHubIssue(card, options);
     this.applyGitHubIssue(idea, options);
 
     this.data.boardCards.push(card);
-    this.addActivity("board.created", `Created board card: ${card.title}`, timestamp);
+    this.addActivity(
+      "board.created",
+      `Created board card: ${card.title}`,
+      timestamp,
+    );
     return card;
   }
 
   listBoardCards(projectId?: string): BoardCard[] {
     const filtered = projectId
-      ? this.data.boardCards.filter((card) => card.projectId === this.requireProject(projectId).id)
+      ? this.data.boardCards.filter(
+          (card) => card.projectId === this.requireProject(projectId).id,
+        )
       : this.data.boardCards;
     return clone(filtered).sort(sortUpdatedDesc);
   }
 
   getBoardColumns(projectId?: string): BoardColumns {
-    const scopedProjectId = projectId ? this.requireProject(projectId).id : undefined;
+    const scopedProjectId = projectId
+      ? this.requireProject(projectId).id
+      : undefined;
     const columns: BoardColumns = {
       ready: [],
       planned: [],
       in_progress: [],
       review: [],
-      done: []
+      done: [],
     };
     for (const card of this.data.boardCards) {
       if (scopedProjectId && card.projectId !== scopedProjectId) {
@@ -1614,10 +1844,14 @@ export class BoardStore {
       card.details = input.details.trim();
     }
     if (input.repositoryLocalPath !== undefined) {
-      card.repositoryLocalPath = normalizeOptionalText(input.repositoryLocalPath);
+      card.repositoryLocalPath = normalizeOptionalText(
+        input.repositoryLocalPath,
+      );
     }
     if (input.repositoryRemoteUrl !== undefined) {
-      card.repositoryRemoteUrl = normalizeOptionalText(input.repositoryRemoteUrl);
+      card.repositoryRemoteUrl = normalizeOptionalText(
+        input.repositoryRemoteUrl,
+      );
     }
     card.updatedAt = nowIso();
     this.addActivity("board.updated", `Updated board card: ${card.title}`);
@@ -1635,7 +1869,10 @@ export class BoardStore {
     card.readinessScore = score;
     card.readinessReason = reason;
     card.readinessEvaluatedAt = nowIso();
-    this.addActivity("board.readiness", `Set readiness ${score}/10: ${card.title}`);
+    this.addActivity(
+      "board.readiness",
+      `Set readiness ${score}/10: ${card.title}`,
+    );
     this.save();
     return clone(card);
   }
@@ -1658,9 +1895,12 @@ export class BoardStore {
       ideaId: idea.id,
       score,
       reason,
-      createdAt: timestamp
+      createdAt: timestamp,
     });
-    this.addActivity("idea.readiness", `Set readiness ${score}/10: ${idea.title}`);
+    this.addActivity(
+      "idea.readiness",
+      `Set readiness ${score}/10: ${idea.title}`,
+    );
     this.save();
     return clone(idea);
   }
@@ -1669,12 +1909,17 @@ export class BoardStore {
     const idea = this.requireIdea(id);
     // Events are append-only, so insertion order is chronological; reverse for a
     // stable newest-first list even when timestamps collide within the same ms.
-    return clone(this.data.readinessEvents.filter((event) => event.ideaId === idea.id)).reverse();
+    return clone(
+      this.data.readinessEvents.filter((event) => event.ideaId === idea.id),
+    ).reverse();
   }
 
   listDocuments(projectId?: string): PlanDocument[] {
     const filtered = projectId
-      ? this.data.documents.filter((document) => document.projectId === this.requireProject(projectId).id)
+      ? this.data.documents.filter(
+          (document) =>
+            document.projectId === this.requireProject(projectId).id,
+        )
       : this.data.documents;
     return clone(filtered).sort(sortUpdatedDesc);
   }
@@ -1692,11 +1937,15 @@ export class BoardStore {
       linkedIdeaIds: normalizeList(input.linkedIdeaIds),
       linkedCardIds: normalizeList(input.linkedCardIds),
       createdAt: timestamp,
-      updatedAt: timestamp
+      updatedAt: timestamp,
     };
 
     this.data.documents.push(document);
-    this.addActivity("document.created", `Created document: ${document.title}`, timestamp);
+    this.addActivity(
+      "document.created",
+      `Created document: ${document.title}`,
+      timestamp,
+    );
     this.save();
     return clone(document);
   }
@@ -1727,7 +1976,9 @@ export class BoardStore {
   }
 
   listActivity(): ActivityEvent[] {
-    return clone(this.data.activity).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return clone(this.data.activity).sort((a, b) =>
+      b.createdAt.localeCompare(a.createdAt),
+    );
   }
 
   private load(): LoadResult {
@@ -1736,7 +1987,9 @@ export class BoardStore {
       return { data: emptyData(), migrated: false };
     }
 
-    const parsed = JSON.parse(readFileSync(this.filePath, "utf8")) as PersistedBoardData;
+    const parsed = JSON.parse(
+      readFileSync(this.filePath, "utf8"),
+    ) as PersistedBoardData;
     const normalizedProjects = normalizeProjects(parsed.projects);
     const data: BoardData = {
       schemaVersion: 3,
@@ -1745,7 +1998,7 @@ export class BoardStore {
       boardCards: (parsed.boardCards ?? []) as BoardCard[],
       readinessEvents: (parsed.readinessEvents ?? []) as ReadinessEvent[],
       documents: (parsed.documents ?? []) as PlanDocument[],
-      activity: parsed.activity ?? []
+      activity: parsed.activity ?? [],
     };
 
     const ownershipMigrated = migrateProjectOwnership(data);
@@ -1762,7 +2015,7 @@ export class BoardStore {
           ideaId: idea.id,
           score: idea.readinessScore,
           reason: idea.readinessReason ?? "",
-          createdAt: idea.readinessEvaluatedAt ?? nowIso()
+          createdAt: idea.readinessEvaluatedAt ?? nowIso(),
         });
         readinessBackfilled = true;
       }
@@ -1780,7 +2033,11 @@ export class BoardStore {
 
   private save() {
     mkdirSync(dirname(this.filePath), { recursive: true });
-    writeFileSync(this.filePath, `${JSON.stringify(this.data, null, 2)}\n`, "utf8");
+    writeFileSync(
+      this.filePath,
+      `${JSON.stringify(this.data, null, 2)}\n`,
+      "utf8",
+    );
   }
 
   private requireIdea(id: string): Idea {
@@ -1812,20 +2069,27 @@ export class BoardStore {
     const timestamp = nowIso();
     const project: Project = {
       id: randomUUID(),
-      key: nextAvailableProjectKey(this.data.projects.map((item) => item.key), "GEN"),
+      key: nextAvailableProjectKey(
+        this.data.projects.map((item) => item.key),
+        "GEN",
+      ),
       title: "General",
       summary: defaultProjectSummary,
       createdAt: timestamp,
-      updatedAt: timestamp
+      updatedAt: timestamp,
     };
     this.data.projects.push(project);
-    this.addActivity("project.created", `Created project: ${project.title}`, timestamp);
+    this.addActivity(
+      "project.created",
+      `Created project: ${project.title}`,
+      timestamp,
+    );
     return project.id;
   }
 
   private assertProjectKeyAvailable(key: string, currentProjectId?: string) {
     const existing = this.data.projects.find(
-      (project) => project.key === key && project.id !== currentProjectId
+      (project) => project.key === key && project.id !== currentProjectId,
     );
     if (existing) {
       throw new Error(`Project ID ${key} is already used`);
@@ -1836,7 +2100,8 @@ export class BoardStore {
     return (
       this.data.ideas
         .filter((idea) => idea.projectId === projectId)
-        .reduce((highest, idea) => Math.max(highest, idea.taskNumber ?? 0), 0) + 1
+        .reduce((highest, idea) => Math.max(highest, idea.taskNumber ?? 0), 0) +
+      1
     );
   }
 
@@ -1870,8 +2135,9 @@ export class BoardStore {
   }
 
   private applyGitHubIssue(
-    entity: Pick<Idea | BoardCard, "githubIssueUrl" | "githubIssueNumber"> & Partial<Idea>,
-    options: CreateBoardCardOptions
+    entity: Pick<Idea | BoardCard, "githubIssueUrl" | "githubIssueNumber"> &
+      Partial<Idea>,
+    options: CreateBoardCardOptions,
   ) {
     if (options.githubMode === "github") {
       entity.githubIssueUrl = options.githubIssueUrl;
@@ -1884,14 +2150,18 @@ export class BoardStore {
       id: randomUUID(),
       type,
       message,
-      createdAt
+      createdAt,
     });
     this.data.activity = this.data.activity.slice(-100);
   }
 }
 
-const sortUpdatedDesc = <T extends { updatedAt: string; title?: string }>(a: T, b: T) =>
-  b.updatedAt.localeCompare(a.updatedAt) || (a.title ?? "").localeCompare(b.title ?? "");
+const sortUpdatedDesc = <T extends { updatedAt: string; title?: string }>(
+  a: T,
+  b: T,
+) =>
+  b.updatedAt.localeCompare(a.updatedAt) ||
+  (a.title ?? "").localeCompare(b.title ?? "");
 
 const normalizeProjects = (projects: Partial<Project>[] | undefined) => {
   let migrated = false;
@@ -1915,7 +2185,7 @@ const normalizeProjects = (projects: Partial<Project>[] | undefined) => {
       title: project.title.trim(),
       summary: project.summary?.trim() ?? "",
       createdAt: project.createdAt ?? timestamp,
-      updatedAt: project.updatedAt ?? timestamp
+      updatedAt: project.updatedAt ?? timestamp,
     });
     if (
       !project.createdAt ||
@@ -1941,11 +2211,14 @@ const migrateProjectOwnership = (data: BoardData) => {
     const timestamp = nowIso();
     data.projects.push({
       id: randomUUID(),
-      key: nextAvailableProjectKey(data.projects.map((project) => project.key), "GEN"),
+      key: nextAvailableProjectKey(
+        data.projects.map((project) => project.key),
+        "GEN",
+      ),
       title: "General",
       summary: defaultProjectSummary,
       createdAt: timestamp,
-      updatedAt: timestamp
+      updatedAt: timestamp,
     });
     migrated = true;
   }
@@ -1955,12 +2228,16 @@ const migrateProjectOwnership = (data: BoardData) => {
     return migrated;
   }
 
-  const ideaProjectIds = new Map(data.ideas.map((idea) => [idea.id, idea.projectId || fallbackProjectId]));
+  const ideaProjectIds = new Map(
+    data.ideas.map((idea) => [idea.id, idea.projectId || fallbackProjectId]),
+  );
   const cardProjectIds = new Map(
     data.boardCards.map((card) => [
       card.id,
-      card.projectId || (card.ideaId ? ideaProjectIds.get(card.ideaId) : undefined) || fallbackProjectId
-    ])
+      card.projectId ||
+        (card.ideaId ? ideaProjectIds.get(card.ideaId) : undefined) ||
+        fallbackProjectId,
+    ]),
   );
 
   for (const idea of data.ideas) {
@@ -1980,8 +2257,12 @@ const migrateProjectOwnership = (data: BoardData) => {
   for (const document of data.documents) {
     if (!document.projectId) {
       document.projectId =
-        document.linkedIdeaIds.map((id) => ideaProjectIds.get(id)).find(Boolean) ??
-        document.linkedCardIds.map((id) => cardProjectIds.get(id)).find(Boolean) ??
+        document.linkedIdeaIds
+          .map((id) => ideaProjectIds.get(id))
+          .find(Boolean) ??
+        document.linkedCardIds
+          .map((id) => cardProjectIds.get(id))
+          .find(Boolean) ??
         fallbackProjectId;
       migrated = true;
     }
@@ -1999,14 +2280,16 @@ const normalizeIdeaTaskNumbers = (data: BoardData) => {
         (a, b) =>
           a.createdAt.localeCompare(b.createdAt) ||
           a.updatedAt.localeCompare(b.updatedAt) ||
-          a.id.localeCompare(b.id)
+          a.id.localeCompare(b.id),
       );
     const usedNumbers = new Set<number>();
     let nextNumber = 1;
 
     for (const idea of ideas) {
       const currentNumber =
-        Number.isInteger(idea.taskNumber) && idea.taskNumber > 0 ? idea.taskNumber : undefined;
+        Number.isInteger(idea.taskNumber) && idea.taskNumber > 0
+          ? idea.taskNumber
+          : undefined;
       if (currentNumber && !usedNumbers.has(currentNumber)) {
         usedNumbers.add(currentNumber);
         nextNumber = Math.max(nextNumber, currentNumber + 1);
@@ -2059,7 +2342,10 @@ const projectKeyFromTitle = (title: string): string => {
   return letters || "PRJ";
 };
 
-const nextAvailableProjectKey = (usedKeysInput: Iterable<string | undefined>, preferred = "PRJ"): string => {
+const nextAvailableProjectKey = (
+  usedKeysInput: Iterable<string | undefined>,
+  preferred = "PRJ",
+): string => {
   const usedKeys = new Set<string>();
   for (const key of usedKeysInput) {
     const normalized = normalizedProjectKeyOrUndefined(key);

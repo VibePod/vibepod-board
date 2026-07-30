@@ -1,12 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Pool } from "pg";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createPool, initializeDatabase } from "../src/server/db.js";
 import {
   createTestPool,
   ensureTestDatabase,
   resetDatabase,
-  testDatabaseUrl
+  testDatabaseUrl,
 } from "./helpers/postgres.js";
 
 let pool: Pool;
@@ -26,7 +26,7 @@ describe("PostgreSQL schema", () => {
     await initializeDatabase(pool);
 
     const tables = await pool.query<{ table_name: string }>(
-      "select table_name from information_schema.tables where table_schema = 'public' order by table_name"
+      "select table_name from information_schema.tables where table_schema = 'public' order by table_name",
     );
 
     expect(tables.rows.map((row) => row.table_name)).toEqual([
@@ -37,7 +37,7 @@ describe("PostgreSQL schema", () => {
       "documents",
       "idea_readiness_events",
       "ideas",
-      "projects"
+      "projects",
     ]);
   });
 
@@ -57,7 +57,7 @@ describe("PostgreSQL schema", () => {
       `select column_name
        from information_schema.columns
        where table_schema = 'public' and table_name = 'board_cards'
-       order by ordinal_position`
+       order by ordinal_position`,
     );
 
     expect(columns.rows.map((row) => row.column_name)).toContain("branch_name");
@@ -66,23 +66,35 @@ describe("PostgreSQL schema", () => {
   it("stores repository metadata on ideas and board cards", async () => {
     await initializeDatabase(pool);
 
-    const columns = await pool.query<{ table_name: string; column_name: string }>(
+    const columns = await pool.query<{
+      table_name: string;
+      column_name: string;
+    }>(
       `select table_name, column_name
        from information_schema.columns
        where table_schema = 'public'
          and table_name in ('ideas', 'board_cards')
-       order by table_name, ordinal_position`
+       order by table_name, ordinal_position`,
     );
     const columnsByTable = new Map<string, string[]>();
     for (const row of columns.rows) {
-      columnsByTable.set(row.table_name, [...(columnsByTable.get(row.table_name) ?? []), row.column_name]);
+      columnsByTable.set(row.table_name, [
+        ...(columnsByTable.get(row.table_name) ?? []),
+        row.column_name,
+      ]);
     }
 
     expect(columnsByTable.get("ideas")).toEqual(
-      expect.arrayContaining(["repository_local_path", "repository_remote_url"])
+      expect.arrayContaining([
+        "repository_local_path",
+        "repository_remote_url",
+      ]),
     );
     expect(columnsByTable.get("board_cards")).toEqual(
-      expect.arrayContaining(["repository_local_path", "repository_remote_url"])
+      expect.arrayContaining([
+        "repository_local_path",
+        "repository_remote_url",
+      ]),
     );
   });
 
@@ -93,7 +105,7 @@ describe("PostgreSQL schema", () => {
       `select column_name
        from information_schema.columns
        where table_schema = 'public' and table_name = 'board_cards'
-       order by ordinal_position`
+       order by ordinal_position`,
     );
 
     const names = columns.rows.map((row) => row.column_name);
@@ -109,11 +121,19 @@ describe("PostgreSQL schema", () => {
       `select column_name
        from information_schema.columns
        where table_schema = 'public' and table_name = 'idea_readiness_events'
-       order by ordinal_position`
+       order by ordinal_position`,
     );
 
     const names = columns.rows.map((row) => row.column_name);
-    expect(names).toEqual(expect.arrayContaining(["id", "idea_id", "score", "reason", "created_at"]));
+    expect(names).toEqual(
+      expect.arrayContaining([
+        "id",
+        "idea_id",
+        "score",
+        "reason",
+        "created_at",
+      ]),
+    );
   });
 
   it("stores readiness fields on ideas", async () => {
@@ -123,7 +143,7 @@ describe("PostgreSQL schema", () => {
       `select column_name
        from information_schema.columns
        where table_schema = 'public' and table_name = 'ideas'
-       order by ordinal_position`
+       order by ordinal_position`,
     );
 
     const names = columns.rows.map((row) => row.column_name);

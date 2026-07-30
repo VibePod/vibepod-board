@@ -21,7 +21,7 @@ export const emptyTaskDraft = (): TaskDraft => ({
   acceptanceCriteria: "",
   repositoryLocalPath: "",
   repositoryRemoteUrl: "",
-  status: "idea"
+  status: "idea",
 });
 
 export const taskToDraft = (idea: Idea, projectKey?: string): TaskDraft => ({
@@ -35,7 +35,7 @@ export const taskToDraft = (idea: Idea, projectKey?: string): TaskDraft => ({
   acceptanceCriteria: formatListField(idea.acceptanceCriteria),
   repositoryLocalPath: idea.repositoryLocalPath ?? "",
   repositoryRemoteUrl: idea.repositoryRemoteUrl ?? "",
-  status: idea.status
+  status: idea.status,
 });
 
 export const taskDraftToIdeaPayload = (draft: TaskDraft) => ({
@@ -45,5 +45,5 @@ export const taskDraftToIdeaPayload = (draft: TaskDraft) => ({
   labels: [...draft.labels],
   acceptanceCriteria: parseListField(draft.acceptanceCriteria),
   repositoryLocalPath: draft.repositoryLocalPath,
-  repositoryRemoteUrl: draft.repositoryRemoteUrl
+  repositoryRemoteUrl: draft.repositoryRemoteUrl,
 });

@@ -3,19 +3,19 @@ import type { NavigationState, NavigationView } from "./navigation.js";
 
 export const navigationForProjectSelection = (
   currentView: NavigationView,
-  selectedProjectId: string
+  selectedProjectId: string,
 ): NavigationState => ({
   activeView: currentView === "projects" ? "ideas" : currentView,
-  selectedProjectId
+  selectedProjectId,
 });
 
 export const shouldShowProjectSidebar = (
   activeView: NavigationView,
-  hasSelectedProject: boolean
+  hasSelectedProject: boolean,
 ): boolean => activeView !== "projects" && hasSelectedProject;
 
 export const projectSelectorOptions = (projects: Project[]) =>
   projects.map((project) => ({
     value: project.id,
-    label: `${project.key} - ${project.title}`
+    label: `${project.key} - ${project.title}`,
   }));

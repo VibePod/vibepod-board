@@ -15,7 +15,7 @@ const task = (patch: Partial<Idea> = {}): Idea => ({
   acceptanceCriteria: ["Board cards open read-only", "Edit is explicit"],
   createdAt: "2026-06-04T00:00:00.000Z",
   updatedAt: "2026-06-04T00:00:00.000Z",
-  ...patch
+  ...patch,
 });
 
 describe("task overview utilities", () => {
@@ -26,11 +26,13 @@ describe("task overview utilities", () => {
       description: "Read-only overview for board cards",
       status: "ready",
       labels: ["board", "ui"],
-      acceptanceCriteria: ["Board cards open read-only", "Edit is explicit"]
+      acceptanceCriteria: ["Board cards open read-only", "Edit is explicit"],
     });
   });
 
   it("falls back to summary when task details are empty", () => {
-    expect(taskOverviewForIdea(task({ details: "" }), "APP").description).toBe("Fallback summary");
+    expect(taskOverviewForIdea(task({ details: "" }), "APP").description).toBe(
+      "Fallback summary",
+    );
   });
 });
