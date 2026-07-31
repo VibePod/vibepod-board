@@ -3,12 +3,11 @@ import { readFile } from "node:fs/promises";
 import type { Pool } from "pg";
 
 import type {
-  ActivityEvent,
   BoardCard,
   BoardData,
   Idea,
   PlanDocument,
-  Project
+  Project,
 } from "../shared/types.js";
 
 const defaultProjectSummary = "Default project for uncategorized work.";
@@ -20,9 +19,14 @@ type LegacyIdea = Omit<Idea, "projectId" | "taskNumber" | "status"> & {
   status: string;
 };
 type LegacyBoardCard = Omit<BoardCard, "projectId"> & { projectId?: string };
-type LegacyPlanDocument = Omit<PlanDocument, "projectId"> & { projectId?: string };
+type LegacyPlanDocument = Omit<PlanDocument, "projectId"> & {
+  projectId?: string;
+};
 type PersistedBoardData = Partial<
-  Omit<BoardData, "schemaVersion" | "projects" | "ideas" | "boardCards" | "documents">
+  Omit<
+    BoardData,
+    "schemaVersion" | "projects" | "ideas" | "boardCards" | "documents"
+  >
 > & {
   schemaVersion?: number;
   projects?: Partial<Project>[];
@@ -38,20 +42,23 @@ const emptyData = (): BoardData => ({
   boardCards: [],
   readinessEvents: [],
   documents: [],
-  activity: []
+  activity: [],
 });
 
 const nowIso = () => new Date().toISOString();
 
-export const normalizeImportedBoardData = (input: PersistedBoardData): BoardData => {
+export const normalizeImportedBoardData = (
+  input: PersistedBoardData,
+): BoardData => {
   const normalizedProjects = normalizeProjects(input.projects);
   const data: BoardData = {
     ...emptyData(),
     projects: normalizedProjects.projects,
     ideas: (input.ideas ?? []) as Idea[],
     boardCards: (input.boardCards ?? []) as BoardCard[],
+    readinessEvents: input.readinessEvents ?? [],
     documents: (input.documents ?? []) as PlanDocument[],
-    activity: input.activity ?? []
+    activity: input.activity ?? [],
   };
 
   migrateProjectOwnership(data);
@@ -64,9 +71,11 @@ export const normalizeImportedBoardData = (input: PersistedBoardData): BoardData
 export const importBoardJsonFile = async (
   pool: Pool,
   filePath: string,
-  options: { allowNonEmpty?: boolean } = {}
+  options: { allowNonEmpty?: boolean } = {},
 ): Promise<void> => {
-  const parsed = JSON.parse(await readFile(filePath, "utf8")) as PersistedBoardData;
+  const parsed = JSON.parse(
+    await readFile(filePath, "utf8"),
+  ) as PersistedBoardData;
   const data = normalizeImportedBoardData(parsed);
   const client = await pool.connect();
 
@@ -81,7 +90,7 @@ export const importBoardJsonFile = async (
            union all select count(*) from board_cards
            union all select count(*) from documents
            union all select count(*) from activity_events
-         ) counts`
+         ) counts`,
       );
       if (Number(existing.rows[0]?.count ?? 0) > 0) {
         throw new Error("PostgreSQL board tables are not empty");
@@ -92,7 +101,14 @@ export const importBoardJsonFile = async (
       await client.query(
         `insert into projects (id, key, title, summary, created_at, updated_at)
          values ($1, $2, $3, $4, $5, $6)`,
-        [project.id, project.key, project.title, project.summary, project.createdAt, project.updatedAt]
+        [
+          project.id,
+          project.key,
+          project.title,
+          project.summary,
+          project.createdAt,
+          project.updatedAt,
+        ],
       );
     }
 
@@ -101,9 +117,10 @@ export const importBoardJsonFile = async (
         `insert into ideas (
            id, project_id, task_number, title, summary, details, status, labels,
            acceptance_criteria, github_issue_url, github_issue_number, repository_local_path,
-           repository_remote_url, created_at, updated_at
+           repository_remote_url, readiness_score, readiness_reason, readiness_evaluated_at,
+           created_at, updated_at
          )
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
         [
           idea.id,
           idea.projectId,
@@ -118,9 +135,12 @@ export const importBoardJsonFile = async (
           idea.githubIssueNumber ?? null,
           idea.repositoryLocalPath ?? null,
           idea.repositoryRemoteUrl ?? null,
+          idea.readinessScore ?? null,
+          idea.readinessReason ?? null,
+          idea.readinessEvaluatedAt ?? null,
           idea.createdAt,
-          idea.updatedAt
-        ]
+          idea.updatedAt,
+        ],
       );
     }
 
@@ -128,9 +148,10 @@ export const importBoardJsonFile = async (
       await client.query(
         `insert into board_cards (
            id, project_id, idea_id, title, details, column_name, branch_name, github_issue_url,
-           github_issue_number, repository_local_path, repository_remote_url, labels, created_at, updated_at
+           github_issue_number, repository_local_path, repository_remote_url, labels,
+           readiness_score, readiness_reason, readiness_evaluated_at, created_at, updated_at
          )
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
         [
           card.id,
           card.projectId,
@@ -144,9 +165,12 @@ export const importBoardJsonFile = async (
           card.repositoryLocalPath ?? null,
           card.repositoryRemoteUrl ?? null,
           JSON.stringify(card.labels),
+          card.readinessScore ?? null,
+          card.readinessReason ?? null,
+          card.readinessEvaluatedAt ?? null,
           card.createdAt,
-          card.updatedAt
-        ]
+          card.updatedAt,
+        ],
       );
     }
 
@@ -165,15 +189,27 @@ export const importBoardJsonFile = async (
           JSON.stringify(document.linkedIdeaIds),
           JSON.stringify(document.linkedCardIds),
           document.createdAt,
-          document.updatedAt
-        ]
+          document.updatedAt,
+        ],
+      );
+    }
+
+    const importedIdeaIds = new Set(data.ideas.map((idea) => idea.id));
+    for (const event of data.readinessEvents) {
+      if (!importedIdeaIds.has(event.ideaId)) {
+        continue;
+      }
+      await client.query(
+        `insert into idea_readiness_events (id, idea_id, score, reason, created_at)
+         values ($1, $2, $3, $4, $5)`,
+        [event.id, event.ideaId, event.score, event.reason, event.createdAt],
       );
     }
 
     for (const event of data.activity) {
       await client.query(
         "insert into activity_events (id, type, message, created_at) values ($1, $2, $3, $4)",
-        [event.id, event.type, event.message, event.createdAt]
+        [event.id, event.type, event.message, event.createdAt],
       );
     }
 
@@ -208,7 +244,7 @@ const normalizeProjects = (projects: Partial<Project>[] | undefined) => {
       title: project.title.trim(),
       summary: project.summary?.trim() ?? "",
       createdAt: project.createdAt ?? timestamp,
-      updatedAt: project.updatedAt ?? timestamp
+      updatedAt: project.updatedAt ?? timestamp,
     });
     if (
       !project.createdAt ||
@@ -234,11 +270,14 @@ const migrateProjectOwnership = (data: BoardData) => {
     const timestamp = nowIso();
     data.projects.push({
       id: randomUUID(),
-      key: nextAvailableProjectKey(data.projects.map((project) => project.key), "GEN"),
+      key: nextAvailableProjectKey(
+        data.projects.map((project) => project.key),
+        "GEN",
+      ),
       title: "General",
       summary: defaultProjectSummary,
       createdAt: timestamp,
-      updatedAt: timestamp
+      updatedAt: timestamp,
     });
     migrated = true;
   }
@@ -248,12 +287,16 @@ const migrateProjectOwnership = (data: BoardData) => {
     return migrated;
   }
 
-  const ideaProjectIds = new Map(data.ideas.map((idea) => [idea.id, idea.projectId || fallbackProjectId]));
+  const ideaProjectIds = new Map(
+    data.ideas.map((idea) => [idea.id, idea.projectId || fallbackProjectId]),
+  );
   const cardProjectIds = new Map(
     data.boardCards.map((card) => [
       card.id,
-      card.projectId || (card.ideaId ? ideaProjectIds.get(card.ideaId) : undefined) || fallbackProjectId
-    ])
+      card.projectId ||
+        (card.ideaId ? ideaProjectIds.get(card.ideaId) : undefined) ||
+        fallbackProjectId,
+    ]),
   );
 
   for (const idea of data.ideas) {
@@ -273,8 +316,12 @@ const migrateProjectOwnership = (data: BoardData) => {
   for (const document of data.documents) {
     if (!document.projectId) {
       document.projectId =
-        document.linkedIdeaIds.map((id) => ideaProjectIds.get(id)).find(Boolean) ??
-        document.linkedCardIds.map((id) => cardProjectIds.get(id)).find(Boolean) ??
+        document.linkedIdeaIds
+          .map((id) => ideaProjectIds.get(id))
+          .find(Boolean) ??
+        document.linkedCardIds
+          .map((id) => cardProjectIds.get(id))
+          .find(Boolean) ??
         fallbackProjectId;
       migrated = true;
     }
@@ -292,14 +339,16 @@ const normalizeIdeaTaskNumbers = (data: BoardData) => {
         (a, b) =>
           a.createdAt.localeCompare(b.createdAt) ||
           a.updatedAt.localeCompare(b.updatedAt) ||
-          a.id.localeCompare(b.id)
+          a.id.localeCompare(b.id),
       );
     const usedNumbers = new Set<number>();
     let nextNumber = 1;
 
     for (const idea of ideas) {
       const currentNumber =
-        Number.isInteger(idea.taskNumber) && idea.taskNumber > 0 ? idea.taskNumber : undefined;
+        Number.isInteger(idea.taskNumber) && idea.taskNumber > 0
+          ? idea.taskNumber
+          : undefined;
       if (currentNumber && !usedNumbers.has(currentNumber)) {
         usedNumbers.add(currentNumber);
         nextNumber = Math.max(nextNumber, currentNumber + 1);
@@ -352,7 +401,10 @@ const projectKeyFromTitle = (title: string): string => {
   return letters || "PRJ";
 };
 
-const nextAvailableProjectKey = (usedKeysInput: Iterable<string | undefined>, preferred = "PRJ"): string => {
+const nextAvailableProjectKey = (
+  usedKeysInput: Iterable<string | undefined>,
+  preferred = "PRJ",
+): string => {
   const usedKeys = new Set<string>();
   for (const key of usedKeysInput) {
     const normalized = normalizedProjectKeyOrUndefined(key);

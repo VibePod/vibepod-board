@@ -5,7 +5,7 @@ import {
   assertCanAccessProject,
   defaultProjectIdForCreate,
   filterProjectIds,
-  tokenAccess
+  tokenAccess,
 } from "../src/server/store.js";
 
 describe("project access helpers", () => {
@@ -19,20 +19,22 @@ describe("project access helpers", () => {
   it("limits token access to mapped projects", () => {
     const access = tokenAccess("token-1", ["project-1", "project-2"]);
 
-    expect(filterProjectIds(access, ["project-1", "project-3"])).toEqual(["project-1"]);
+    expect(filterProjectIds(access, ["project-1", "project-3"])).toEqual([
+      "project-1",
+    ]);
     expect(defaultProjectIdForCreate(access, undefined)).toBe("project-1");
     expect(defaultProjectIdForCreate(access, "project-2")).toBe("project-2");
     expect(() => defaultProjectIdForCreate(access, "project-3")).toThrow(
-      "Token is not allowed to access project: project-3"
+      "Token is not allowed to access project: project-3",
     );
     expect(() => assertCanAccessProject(access, "project-3")).toThrow(
-      "Token is not allowed to access project: project-3"
+      "Token is not allowed to access project: project-3",
     );
   });
 
   it("rejects create defaults when a token has no projects", () => {
-    expect(() => defaultProjectIdForCreate(tokenAccess("token-1", []), undefined)).toThrow(
-      "Token is not mapped to any projects"
-    );
+    expect(() =>
+      defaultProjectIdForCreate(tokenAccess("token-1", []), undefined),
+    ).toThrow("Token is not mapped to any projects");
   });
 });

@@ -1,16 +1,22 @@
-import { boardColumns, type BoardColumns, type Idea } from "../shared/types.js";
+import { type BoardColumns, boardColumns, type Idea } from "../shared/types.js";
 import { formatTaskId } from "./taskIdentity.js";
 
 export const isIdeaOnBoard = (idea: Idea, columns: BoardColumns): boolean =>
-  boardColumns.some((column) => (columns[column] ?? []).some((card) => card.ideaId === idea.id));
+  boardColumns.some((column) =>
+    (columns[column] ?? []).some((card) => card.ideaId === idea.id),
+  );
 
-export const taskListCardView = (idea: Idea, columns: BoardColumns, projectKey: string) => ({
+export const taskListCardView = (
+  idea: Idea,
+  columns: BoardColumns,
+  projectKey: string,
+) => ({
   id: idea.id,
   taskId: formatTaskId(projectKey, idea.taskNumber),
   title: idea.title,
   status: idea.status,
   labels: [...idea.labels],
-  isReady: isIdeaOnBoard(idea, columns)
+  isReady: isIdeaOnBoard(idea, columns),
 });
 
 export const readinessColor = (score: number): "red" | "yellow" | "green" => {
@@ -26,11 +32,13 @@ export const readinessColor = (score: number): "red" | "yellow" | "green" => {
 export const isReadinessStale = (card: {
   updatedAt: string;
   readinessEvaluatedAt?: string;
-}): boolean => card.readinessEvaluatedAt !== undefined && card.updatedAt > card.readinessEvaluatedAt;
+}): boolean =>
+  card.readinessEvaluatedAt !== undefined &&
+  card.updatedAt > card.readinessEvaluatedAt;
 
 export const isCardReadinessStale = (
   card: { updatedAt: string; readinessEvaluatedAt?: string; ideaId?: string },
-  ideaById: Map<string, { updatedAt: string }>
+  ideaById: Map<string, { updatedAt: string }>,
 ): boolean => {
   if (card.readinessEvaluatedAt === undefined) {
     return false;

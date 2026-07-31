@@ -7,8 +7,12 @@ describe("token-aware MCP config examples", () => {
     const examples = integrationExamplesForToken("vbp_test_token");
 
     for (const example of examples) {
-      expect(`${example.command ?? ""}\n${example.config}`).toContain("vbp_test_token");
-      expect(`${example.command ?? ""}\n${example.config}`).toContain("Authorization");
+      expect(`${example.command ?? ""}\n${example.config}`).toContain(
+        "vbp_test_token",
+      );
+      expect(`${example.command ?? ""}\n${example.config}`).toContain(
+        "Authorization",
+      );
     }
   });
 });

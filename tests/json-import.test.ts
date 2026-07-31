@@ -4,9 +4,12 @@ import { join } from "node:path";
 import type { Pool } from "pg";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { importBoardJsonFile, normalizeImportedBoardData } from "../src/server/jsonImport.js";
-import { adminAccess } from "../src/server/store.js";
+import {
+  importBoardJsonFile,
+  normalizeImportedBoardData,
+} from "../src/server/jsonImport.js";
 import type { PostgresBoardStore } from "../src/server/storage.js";
+import { adminAccess } from "../src/server/store.js";
 import { closeTestPool, createTestStore } from "./helpers/store.js";
 
 let tempDir: string;
@@ -41,8 +44,8 @@ describe("JSON import", () => {
           labels: [],
           acceptanceCriteria: [],
           createdAt: timestamp,
-          updatedAt: timestamp
-        }
+          updatedAt: timestamp,
+        },
       ],
       boardCards: [
         {
@@ -53,8 +56,8 @@ describe("JSON import", () => {
           ideaId: "idea-1",
           labels: [],
           createdAt: timestamp,
-          updatedAt: timestamp
-        }
+          updatedAt: timestamp,
+        },
       ],
       documents: [
         {
@@ -65,10 +68,10 @@ describe("JSON import", () => {
           linkedIdeaIds: ["idea-1"],
           linkedCardIds: ["card-1"],
           createdAt: timestamp,
-          updatedAt: timestamp
-        }
+          updatedAt: timestamp,
+        },
       ],
-      activity: []
+      activity: [],
     });
 
     expect(normalized.schemaVersion).toBe(3);
@@ -93,8 +96,8 @@ describe("JSON import", () => {
             title: "Launch site",
             summary: "Coordinate launch",
             createdAt: timestamp,
-            updatedAt: timestamp
-          }
+            updatedAt: timestamp,
+          },
         ],
         ideas: [
           {
@@ -110,8 +113,8 @@ describe("JSON import", () => {
             repositoryLocalPath: "/workspace/vibepod-cli",
             repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git",
             createdAt: timestamp,
-            updatedAt: timestamp
-          }
+            updatedAt: timestamp,
+          },
         ],
         boardCards: [
           {
@@ -125,13 +128,13 @@ describe("JSON import", () => {
             repositoryLocalPath: "/workspace/vibepod-cli",
             repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git",
             createdAt: timestamp,
-            updatedAt: timestamp
-          }
+            updatedAt: timestamp,
+          },
         ],
         documents: [],
-        activity: []
+        activity: [],
       })}\n`,
-      "utf8"
+      "utf8",
     );
 
     await importBoardJsonFile(pool, filePath);
@@ -140,11 +143,13 @@ describe("JSON import", () => {
     expect((await store.listIdeas(admin, "project-1"))[0]).toMatchObject({
       title: "Publish",
       repositoryLocalPath: "/workspace/vibepod-cli",
-      repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git"
+      repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git",
     });
-    expect((await store.getBoardColumns(admin, "project-1")).ready[0]).toMatchObject({
+    expect(
+      (await store.getBoardColumns(admin, "project-1")).ready[0],
+    ).toMatchObject({
       repositoryLocalPath: "/workspace/vibepod-cli",
-      repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git"
+      repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git",
     });
   });
 
@@ -154,7 +159,7 @@ describe("JSON import", () => {
     await writeFile(filePath, JSON.stringify({ schemaVersion: 3 }), "utf8");
 
     await expect(importBoardJsonFile(pool, filePath)).rejects.toThrow(
-      "PostgreSQL board tables are not empty"
+      "PostgreSQL board tables are not empty",
     );
   });
 });

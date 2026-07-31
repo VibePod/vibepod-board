@@ -4,13 +4,20 @@ import type {
   CreateIdeaInput,
   CreateProjectInput,
   SetCardReadinessInput,
-  UpdateDocumentInput,
   UpdateBoardCardInput,
-  UpdateIdeaInput
+  UpdateDocumentInput,
+  UpdateIdeaInput,
 } from "../shared/types.js";
-import { isAdminAccess, type AccessContext, type BoardDataStore } from "./store.js";
+import {
+  type AccessContext,
+  type BoardDataStore,
+  isAdminAccess,
+} from "./store.js";
 
-export const createMcpToolHandlers = (store: BoardDataStore, access: AccessContext) => ({
+export const createMcpToolHandlers = (
+  store: BoardDataStore,
+  access: AccessContext,
+) => ({
   async list_projects() {
     return { items: await store.listProjects(access) };
   },
@@ -66,5 +73,5 @@ export const createMcpToolHandlers = (store: BoardDataStore, access: AccessConte
   },
   async read_state() {
     return await store.getState(access);
-  }
+  },
 });

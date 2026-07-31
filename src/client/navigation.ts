@@ -1,4 +1,9 @@
-export const navigationViews = ["projects", "ideas", "board", "documents"] as const;
+export const navigationViews = [
+  "projects",
+  "ideas",
+  "board",
+  "documents",
+] as const;
 
 export type NavigationView = (typeof navigationViews)[number];
 
@@ -10,13 +15,13 @@ export type NavigationState = {
 const projectSections: Record<Exclude<NavigationView, "projects">, string> = {
   ideas: "tasks",
   board: "board",
-  documents: "notes"
+  documents: "notes",
 };
 
 const sectionViews: Record<string, Exclude<NavigationView, "projects">> = {
   tasks: "ideas",
   board: "board",
-  notes: "documents"
+  notes: "documents",
 };
 
 export const parseNavigationPath = (pathname: string): NavigationState => {
@@ -32,11 +37,14 @@ export const parseNavigationPath = (pathname: string): NavigationState => {
   const section = parts[2] ?? "tasks";
   return {
     activeView: sectionViews[section] ?? "ideas",
-    selectedProjectId: parts[1]
+    selectedProjectId: parts[1],
   };
 };
 
-export const formatNavigationPath = ({ activeView, selectedProjectId }: NavigationState): string => {
+export const formatNavigationPath = ({
+  activeView,
+  selectedProjectId,
+}: NavigationState): string => {
   if (activeView === "projects" || !selectedProjectId) {
     return "/projects";
   }

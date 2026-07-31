@@ -1,4 +1,5 @@
-const githubRepoPathPattern = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/;
+const githubRepoPathPattern =
+  /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/;
 
 const normalizeGitHubPath = (path: string): string | undefined => {
   const match = path.replace(/^\/+/, "").match(githubRepoPathPattern);
@@ -8,7 +9,9 @@ const normalizeGitHubPath = (path: string): string | undefined => {
   return `${match[1]}/${match[2]}`;
 };
 
-export const githubRemoteToHttpsUrl = (remoteUrl: string): string | undefined => {
+export const githubRemoteToHttpsUrl = (
+  remoteUrl: string,
+): string | undefined => {
   const trimmed = remoteUrl.trim();
   if (!trimmed) {
     return undefined;

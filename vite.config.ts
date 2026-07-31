@@ -5,14 +5,14 @@ export default defineConfig({
   plugins: [react()],
   build: {
     outDir: "dist/client",
-    emptyOutDir: true
+    emptyOutDir: true,
   },
   server: {
     host: "0.0.0.0",
     port: 5173,
     proxy: {
       "/api": "http://127.0.0.1:3000",
-      "/mcp": "http://127.0.0.1:3000"
-    }
-  }
+      "/mcp": "http://127.0.0.1:3000",
+    },
+  },
 });

@@ -3,7 +3,7 @@ import { Pool } from "pg";
 export const createPool = (connectionString: string) =>
   new Pool({
     connectionString,
-    max: Number(process.env.DATABASE_POOL_MAX ?? 10)
+    max: Number(process.env.DATABASE_POOL_MAX ?? 10),
   });
 
 const schemaSql = `
