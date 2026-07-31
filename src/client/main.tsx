@@ -1341,12 +1341,25 @@ const App = () => {
                             opacity={isReadinessStale(idea) ? 0.6 : 1}
                             mt="xs"
                             style={{ cursor: "pointer" }}
+                            role="button"
+                            tabIndex={0}
+                            aria-label={`Show readiness history for ${idea.title}`}
                             onClick={(event) => {
                               event.stopPropagation();
                               setReadinessModal({
                                 ideaId: idea.id,
                                 ideaTitle: idea.title,
                               });
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                setReadinessModal({
+                                  ideaId: idea.id,
+                                  ideaTitle: idea.title,
+                                });
+                              }
                             }}
                           >
                             {idea.readinessScore}/10
@@ -1498,6 +1511,9 @@ const App = () => {
                                       : 1
                                   }
                                   style={{ cursor: "pointer" }}
+                                  role="button"
+                                  tabIndex={0}
+                                  aria-label={`Show readiness history for ${card.title}`}
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     if (card.ideaId) {
@@ -1505,6 +1521,21 @@ const App = () => {
                                         ideaId: card.ideaId,
                                         ideaTitle: card.title,
                                       });
+                                    }
+                                  }}
+                                  onKeyDown={(event) => {
+                                    if (
+                                      event.key === "Enter" ||
+                                      event.key === " "
+                                    ) {
+                                      event.preventDefault();
+                                      event.stopPropagation();
+                                      if (card.ideaId) {
+                                        setReadinessModal({
+                                          ideaId: card.ideaId,
+                                          ideaTitle: card.title,
+                                        });
+                                      }
                                     }
                                   }}
                                 >
