@@ -56,6 +56,7 @@ export const normalizeImportedBoardData = (
     projects: normalizedProjects.projects,
     ideas: (input.ideas ?? []) as Idea[],
     boardCards: (input.boardCards ?? []) as BoardCard[],
+    readinessEvents: input.readinessEvents ?? [],
     documents: (input.documents ?? []) as PlanDocument[],
     activity: input.activity ?? [],
   };
@@ -116,9 +117,10 @@ export const importBoardJsonFile = async (
         `insert into ideas (
            id, project_id, task_number, title, summary, details, status, labels,
            acceptance_criteria, github_issue_url, github_issue_number, repository_local_path,
-           repository_remote_url, created_at, updated_at
+           repository_remote_url, readiness_score, readiness_reason, readiness_evaluated_at,
+           created_at, updated_at
          )
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
         [
           idea.id,
           idea.projectId,
@@ -133,6 +135,9 @@ export const importBoardJsonFile = async (
           idea.githubIssueNumber ?? null,
           idea.repositoryLocalPath ?? null,
           idea.repositoryRemoteUrl ?? null,
+          idea.readinessScore ?? null,
+          idea.readinessReason ?? null,
+          idea.readinessEvaluatedAt ?? null,
           idea.createdAt,
           idea.updatedAt,
         ],
@@ -143,9 +148,10 @@ export const importBoardJsonFile = async (
       await client.query(
         `insert into board_cards (
            id, project_id, idea_id, title, details, column_name, branch_name, github_issue_url,
-           github_issue_number, repository_local_path, repository_remote_url, labels, created_at, updated_at
+           github_issue_number, repository_local_path, repository_remote_url, labels,
+           readiness_score, readiness_reason, readiness_evaluated_at, created_at, updated_at
          )
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
         [
           card.id,
           card.projectId,
@@ -159,6 +165,9 @@ export const importBoardJsonFile = async (
           card.repositoryLocalPath ?? null,
           card.repositoryRemoteUrl ?? null,
           JSON.stringify(card.labels),
+          card.readinessScore ?? null,
+          card.readinessReason ?? null,
+          card.readinessEvaluatedAt ?? null,
           card.createdAt,
           card.updatedAt,
         ],
@@ -182,6 +191,18 @@ export const importBoardJsonFile = async (
           document.createdAt,
           document.updatedAt,
         ],
+      );
+    }
+
+    const importedIdeaIds = new Set(data.ideas.map((idea) => idea.id));
+    for (const event of data.readinessEvents) {
+      if (!importedIdeaIds.has(event.ideaId)) {
+        continue;
+      }
+      await client.query(
+        `insert into idea_readiness_events (id, idea_id, score, reason, created_at)
+         values ($1, $2, $3, $4, $5)`,
+        [event.id, event.ideaId, event.score, event.reason, event.createdAt],
       );
     }
 
