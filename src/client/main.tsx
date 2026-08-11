@@ -79,6 +79,13 @@ import {
   projectSelectorOptions,
   shouldShowProjectSidebar,
 } from "./layoutNavigation.js";
+import { InlineMarkdown, MarkdownText } from "./Markdown.js";
+import {
+  CriteriaPreview,
+  MarkdownField,
+  MarkdownPreview,
+} from "./MarkdownField.js";
+import type { MarkdownFieldMode } from "./markdownField.js";
 import {
   formatNavigationPath,
   type NavigationState,
@@ -290,6 +297,9 @@ const App = () => {
   );
   const [taskModal, setTaskModal] = useState<TaskModalState | null>(null);
   const taskModalRef = useRef<HTMLFormElement>(null);
+  const [descriptionMode, setDescriptionMode] =
+    useState<MarkdownFieldMode>("edit");
+  const [criteriaMode, setCriteriaMode] = useState<MarkdownFieldMode>("edit");
   const [taskViewModal, setTaskViewModal] = useState<TaskViewModalState | null>(
     null,
   );
@@ -797,6 +807,8 @@ const App = () => {
       returnToProjects();
       return;
     }
+    setDescriptionMode("edit");
+    setCriteriaMode("edit");
     setTaskModal({
       mode: "create",
       draft: emptyTaskDraft(),
@@ -1914,9 +1926,11 @@ const App = () => {
               <Text size="xs" fw={700} tt="uppercase" c="dimmed">
                 Description
               </Text>
-              <Text className="overview-text">
-                {taskViewCard?.details?.trim() || taskOverview.description}
-              </Text>
+              <div className="overview-markdown">
+                <MarkdownText>
+                  {taskViewCard?.details?.trim() || taskOverview.description}
+                </MarkdownText>
+              </div>
             </Paper>
 
             <Paper className="overview-section" withBorder radius="md" p="md">
@@ -1931,7 +1945,9 @@ const App = () => {
               {taskOverview.acceptanceCriteria.length > 0 ? (
                 <ul className="overview-criteria-list">
                   {taskOverview.acceptanceCriteria.map((criterion) => (
-                    <li key={criterion}>{criterion}</li>
+                    <li key={criterion}>
+                      <InlineMarkdown>{criterion}</InlineMarkdown>
+                    </li>
                   ))}
                 </ul>
               ) : (
@@ -2201,26 +2217,61 @@ const App = () => {
                 searchable
                 clearable
               />
-              <Textarea
+              <MarkdownField
                 label="Description"
-                value={taskModal.draft.description}
-                onChange={(event) =>
-                  updateTaskDraft({ description: event.target.value })
+                mode={descriptionMode}
+                onModeChange={setDescriptionMode}
+                preview={
+                  <MarkdownPreview
+                    value={taskModal.draft.description}
+                    emptyText="No description yet."
+                  />
                 }
-                classNames={{ input: "task-description-input" }}
-                rows={7}
-              />
-              <Textarea
+              >
+                <Textarea
+                  aria-label="Description"
+                  value={taskModal.draft.description}
+                  onChange={(event) =>
+                    updateTaskDraft({ description: event.target.value })
+                  }
+                  classNames={{ input: "task-description-input" }}
+                  rows={7}
+                />
+              </MarkdownField>
+              <MarkdownField
                 label="Acceptance Criteria"
-                value={taskModal.draft.acceptanceCriteria}
-                onChange={(event) =>
-                  updateTaskDraft({ acceptanceCriteria: event.target.value })
+                mode={criteriaMode}
+                onModeChange={setCriteriaMode}
+                preview={
+                  <CriteriaPreview
+                    value={taskModal.draft.acceptanceCriteria}
+                    emptyText="No acceptance criteria yet."
+                  />
                 }
-                classNames={{ input: "task-criteria-input" }}
-                rows={7}
-                autosize
-                minRows={7}
               />
+              <MarkdownField
+                label="Acceptance Criteria"
+                mode={criteriaMode}
+                onModeChange={setCriteriaMode}
+                preview={
+                  <CriteriaPreview
+                    value={taskModal.draft.acceptanceCriteria}
+                    emptyText="No acceptance criteria yet."
+                  />
+                }
+              >
+                <Textarea
+                  aria-label="Acceptance Criteria"
+                  value={taskModal.draft.acceptanceCriteria}
+                  onChange={(event) =>
+                    updateTaskDraft({ acceptanceCriteria: event.target.value })
+                  }
+                  classNames={{ input: "task-criteria-input" }}
+                  rows={7}
+                  autosize
+                  minRows={7}
+                />
+              </MarkdownField>
               <Group justify="flex-end" gap="sm">
                 <Button
                   type="button"
