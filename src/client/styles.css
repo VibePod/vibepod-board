@@ -605,6 +605,19 @@ body {
   color: var(--app-sidebar-text);
 }
 
+.task-modal-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-modal-body .mantine-Modal-fullscreenClose {
+  color: var(--app-sidebar-text);
+  right: 16px;
+  top: 16px;
+  z-index: 100;
+}
+
 .task-modal-body {
   background: var(--app-surface-muted);
 }

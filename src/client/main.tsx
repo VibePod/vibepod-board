@@ -9,6 +9,7 @@ import {
   Checkbox,
   Code,
   createTheme,
+  Divider,
   Group,
   MantineProvider,
   Modal,
@@ -32,6 +33,7 @@ import {
   ExternalLink,
   FileText,
   FolderKanban,
+  Fullscreen,
   GitBranch,
   KeyRound,
   ListChecks,
@@ -44,7 +46,7 @@ import {
   Save,
   Sun,
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useEffect, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   endpointOptions,
@@ -136,6 +138,8 @@ type NoteDraft = {
 type TaskModalState = {
   mode: "create" | "edit";
   draft: TaskDraft;
+  originalDraft: TaskDraft | null;
+  isFullscreen: boolean;
 };
 
 type TaskViewModalState = {
@@ -282,6 +286,7 @@ const App = () => {
     null,
   );
   const [taskModal, setTaskModal] = useState<TaskModalState | null>(null);
+  const taskModalRef = useRef<HTMLFormElement>(null);
   const [taskViewModal, setTaskViewModal] = useState<TaskViewModalState | null>(
     null,
   );
@@ -395,6 +400,66 @@ const App = () => {
     setError("");
     await api(`/api/tokens/${tokenId}/revoke`, { method: "POST" });
     await loadTokens();
+  };
+
+  // Keyboard shortcuts for task modal
+  useEffect(() => {
+    if (!taskModal) {
+      return;
+    }
+
+    const handleTaskModalKeydown = (event: KeyboardEvent) => {
+      // Ctrl+S to save
+      if ((event.ctrlKey || event.metaKey) && event.key === "s") {
+        event.preventDefault();
+        void saveTaskWithoutClose(event as unknown as FormEvent);
+        return;
+      }
+
+      // Escape closes the modal
+      if (event.key === "Escape") {
+        setTaskModal(null);
+        return;
+      }
+
+      // Arrow keys to navigate tasks (only when not in an input)
+      const activeElement = document.activeElement;
+      const isInInput =
+        activeElement instanceof HTMLInputElement ||
+        activeElement instanceof HTMLTextAreaElement ||
+        activeElement instanceof HTMLSelectElement ||
+        activeElement?.getAttribute("contenteditable") === "true";
+
+      if (!isInInput && activeElement === taskModalRef.current) {
+        if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+          event.preventDefault();
+          const direction = event.key === "ArrowLeft" ? -1 : 1;
+          navigateToAdjacentTask(direction);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleTaskModalKeydown);
+    return () => window.removeEventListener("keydown", handleTaskModalKeydown);
+  }, [taskModal, selectedProjectId, state.ideas]);
+
+  const navigateToAdjacentTask = (direction: number) => {
+    if (!selectedProject) return;
+    const projectIdeasList = state.ideas.filter(
+      (idea) => idea.projectId === selectedProject.id,
+    );
+    if (projectIdeasList.length === 0) return;
+
+    // Find current idea index
+    const currentIdea = taskViewIdea ?? projectIdeasList[0];
+    const currentIndex = projectIdeasList.findIndex(
+      (idea) => idea.id === currentIdea.id,
+    );
+    if (currentIndex === -1) return;
+
+    const newIndex = (currentIndex + direction + projectIdeasList.length) % projectIdeasList.length;
+    const nextIdea = projectIdeasList[newIndex];
+    openEditTask(nextIdea);
   };
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: bootstrap must run once on mount only
@@ -699,24 +764,62 @@ const App = () => {
       returnToProjects();
       return;
     }
-    setTaskModal({ mode: "create", draft: emptyTaskDraft() });
+    setTaskModal({
+      mode: "create",
+      draft: emptyTaskDraft(),
+      originalDraft: null,
+      isFullscreen: false,
+    });
   };
 
   const openEditTask = (idea: Idea) => {
     const project = state.projects.find((item) => item.id === idea.projectId);
+    const draft = taskToDraft(idea, project?.key);
     setTaskModal({
       mode: "edit",
-      draft: taskToDraft(idea, project?.key),
+      draft,
+      originalDraft: { ...draft },
+      isFullscreen: false,
     });
   };
 
   const updateTaskDraft = (patch: Partial<TaskDraft>) => {
     setTaskModal((current) =>
-      current ? { ...current, draft: { ...current.draft, ...patch } } : current,
+      current
+        ? {
+            ...current,
+            draft: { ...current.draft, ...patch },
+            originalDraft:
+              current.mode === "edit" && current.originalDraft
+                ? { ...current.originalDraft, ...patch }
+                : current.originalDraft,
+          }
+        : current,
     );
   };
 
-  const saveTask = async (event: FormEvent) => {
+  const hasTaskModalChanges = () => {
+    if (!taskModal) return false;
+    if (taskModal.mode === "create") return true;
+    if (!taskModal.originalDraft) return false;
+    const d = taskModal.draft;
+    const o = taskModal.originalDraft;
+    return (
+      d.title !== o.title ||
+      d.description !== o.description ||
+      d.acceptanceCriteria !== o.acceptanceCriteria ||
+      d.status !== o.status ||
+      JSON.stringify(d.labels) !== JSON.stringify(o.labels) ||
+      d.repositoryLocalPath !== o.repositoryLocalPath ||
+      d.repositoryRemoteUrl !== o.repositoryRemoteUrl
+    );
+  };
+
+  const closeTaskModal = () => {
+    setTaskModal(null);
+  };
+
+  const saveTaskWithoutClose = async (event: FormEvent) => {
     event.preventDefault();
     if (!taskModal) {
       return;
@@ -747,8 +850,16 @@ const App = () => {
         }),
       });
     }
-    setTaskModal(null);
     await loadState();
+    // Keep modal open, update original to mark as clean
+    setTaskModal((current) =>
+      current
+        ? {
+            ...current,
+            originalDraft: { ...current.draft },
+          }
+        : current,
+    );
   };
 
   const openCreateNote = () => {
@@ -1861,23 +1972,65 @@ const App = () => {
 
       <Modal
         opened={!!taskModal}
-        onClose={() => setTaskModal(null)}
-        title={taskModal?.mode === "create" ? "Add Task" : "Edit Task"}
+        onClose={closeTaskModal}
+        title={
+          taskModal?.mode === "create"
+            ? "Add Task"
+            : `Edit Task${hasTaskModalChanges() ? " *" : ""}`
+        }
         centered
         size="xl"
-        classNames={{ header: "task-modal-header", body: "task-modal-body" }}
+        fullscreen={taskModal?.isFullscreen ?? false}
+        overlayOpacity={0.5}
+        overlayColor="var(--app-sidebar-bg)"
+        classNames={{
+          header: "task-modal-header",
+          body: "task-modal-body",
+          title: "task-modal-title",
+        }}
       >
         {taskModal && (
           <form
             className="modal-form"
-            onSubmit={(event) => void saveTask(event)}
+            onSubmit={(event) => void saveTaskWithoutClose(event)}
+            ref={taskModalRef}
           >
             <Stack gap="md">
-              {taskModal.draft.taskId && (
-                <Badge variant="light" color="gray" w="fit-content">
-                  {taskModal.draft.taskId}
-                </Badge>
-              )}
+              <Group justify="space-between">
+                <Group gap="xs">
+                  {taskModal.mode === "edit" && (
+                    <Badge
+                      variant="light"
+                      color={hasTaskModalChanges() ? "yellow" : "teal"}
+                    >
+                      {hasTaskModalChanges() ? "Modified" : "Saved"}
+                    </Badge>
+                  )}
+                  {taskModal.mode === "edit" && taskModal.draft.taskId && (
+                    <Badge variant="light" color="gray">
+                      {taskModal.draft.taskId}
+                    </Badge>
+                  )}
+                </Group>
+                {taskModal.mode === "edit" && (
+                  <ActionIcon
+                    variant="subtle"
+                    color="gray"
+                    size="md"
+                    onClick={() =>
+                      setTaskModal((current) =>
+                        current
+                          ? { ...current, isFullscreen: !current.isFullscreen }
+                          : current,
+                      )
+                    }
+                    title={taskModal.isFullscreen ? "Exit fullscreen" : "Toggle fullscreen"}
+                  >
+                    <Fullscreen size={16} />
+                  </ActionIcon>
+                )}
+              </Group>
+              <Divider my="xs" />
               <TextInput
                 label="Title"
                 value={taskModal.draft.title}
@@ -1947,13 +2100,13 @@ const App = () => {
                 autosize
                 minRows={7}
               />
-              <Group justify="flex-end">
+              <Group justify="flex-end" gap="sm">
                 <Button
                   type="button"
                   variant="default"
                   onClick={() => setTaskModal(null)}
                 >
-                  Cancel
+                  Close
                 </Button>
                 <Button type="submit" leftSection={<Save size={16} />}>
                   Save
