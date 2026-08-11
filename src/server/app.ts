@@ -46,6 +46,7 @@ const ideaSchema = z.object({
   details: z.string().optional().default(""),
   labels: z.array(z.string()).optional().default([]),
   acceptanceCriteria: z.array(z.string()).optional().default([]),
+  dependsOn: z.array(z.string()).optional().default([]),
   repositoryLocalPath: z.string().optional(),
   repositoryRemoteUrl: z.string().optional(),
 });
@@ -61,9 +62,18 @@ const updateIdeaSchema = z.object({
   details: z.string().optional(),
   labels: z.array(z.string()).optional(),
   acceptanceCriteria: z.array(z.string()).optional(),
+  dependsOn: z.array(z.string()).optional(),
   repositoryLocalPath: z.string().optional(),
   repositoryRemoteUrl: z.string().optional(),
   status: ideaStatusSchema.optional(),
+});
+
+const dependencySchema = z.object({
+  dependsOnId: z.string().trim().min(1),
+});
+
+const dependencyListSchema = z.object({
+  dependsOnIds: z.array(z.string().trim().min(1)),
 });
 
 const readySchema = z.object({
@@ -181,6 +191,10 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
         "list_ideas",
         "create_idea",
         "mark_idea_ready",
+        "add_idea_dependency",
+        "remove_idea_dependency",
+        "set_idea_dependencies",
+        "list_work_order",
         "list_board",
         "move_board_card",
         "update_board_card",
@@ -269,6 +283,59 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
         available,
       );
       res.json({ item });
+    }),
+  );
+
+  app.put(
+    "/api/ideas/:id/dependencies",
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      const { dependsOnIds } = dependencyListSchema.parse(req.body);
+      const item = await store.setIdeaDependencies(
+        accessFromResponse(req),
+        routeParam(req.params.id),
+        dependsOnIds,
+      );
+      res.json({ item });
+    }),
+  );
+
+  app.post(
+    "/api/ideas/:id/dependencies",
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      const { dependsOnId } = dependencySchema.parse(req.body);
+      const item = await store.addIdeaDependency(
+        accessFromResponse(req),
+        routeParam(req.params.id),
+        dependsOnId,
+      );
+      res.status(201).json({ item });
+    }),
+  );
+
+  app.delete(
+    "/api/ideas/:id/dependencies/:dependsOnId",
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      const item = await store.removeIdeaDependency(
+        accessFromResponse(req),
+        routeParam(req.params.id),
+        routeParam(req.params.dependsOnId),
+      );
+      res.json({ item });
+    }),
+  );
+
+  app.get(
+    "/api/work-order",
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      const workOrder = await store.getWorkOrder(
+        accessFromResponse(req),
+        queryParam(req.query.projectId),
+      );
+      res.json(workOrder);
     }),
   );
 
@@ -531,6 +598,17 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
   }
   if (message.includes("Only ready ideas")) {
     res.status(409).json({ error: message });
+    return;
+  }
+  if (message.includes("Dependency cycle")) {
+    res.status(409).json({ error: message });
+    return;
+  }
+  if (
+    message.includes("cannot depend on itself") ||
+    message.includes("same project")
+  ) {
+    res.status(400).json({ error: message });
     return;
   }
   if (message.includes("already used")) {

@@ -1,3 +1,4 @@
+import type { TaskWorkOrder } from "../shared/dependencies.js";
 import type {
   ApiTokenSummary,
   BoardCard,
@@ -56,6 +57,25 @@ export interface BoardDataStore {
     id: string,
     input: UpdateIdeaInput,
   ): Promise<Idea>;
+  addIdeaDependency(
+    access: AccessContext,
+    id: string,
+    dependsOnId: string,
+  ): Promise<Idea>;
+  removeIdeaDependency(
+    access: AccessContext,
+    id: string,
+    dependsOnId: string,
+  ): Promise<Idea>;
+  setIdeaDependencies(
+    access: AccessContext,
+    id: string,
+    dependsOnIds: string[],
+  ): Promise<Idea>;
+  getWorkOrder(
+    access: AccessContext,
+    projectId?: string,
+  ): Promise<TaskWorkOrder>;
   markIdeaReady(access: AccessContext, id: string): Promise<Idea>;
   setIdeaBoardAvailability(
     access: AccessContext,

@@ -18,6 +18,9 @@ const task = (patch: Partial<Idea> = {}): Idea => ({
   taskNumber: 7,
   labels: ["ui", "board"],
   acceptanceCriteria: [],
+  dependsOn: [],
+  blocks: [],
+  blockedBy: [],
   createdAt: "2026-06-04T00:00:00.000Z",
   updatedAt: "2026-06-04T00:00:00.000Z",
   ...patch,
@@ -33,6 +36,8 @@ const columns: BoardColumns = {
       column: "ready",
       ideaId: "idea-1",
       labels: [],
+      dependsOn: [],
+      blockedBy: [],
       createdAt: "2026-06-04T00:00:00.000Z",
       updatedAt: "2026-06-04T00:00:00.000Z",
     },
@@ -54,6 +59,8 @@ describe("task card utilities", () => {
       status: "ready",
       labels: ["ui", "board"],
       isReady: true,
+      isBlocked: false,
+      blockedByCount: 0,
     });
     expect(Object.keys(view)).not.toContain("summary");
     expect(Object.keys(view)).not.toContain("details");

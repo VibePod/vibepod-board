@@ -17,6 +17,9 @@ const task = (patch: Partial<Idea> = {}): Idea => ({
   status: "idea",
   labels: [],
   acceptanceCriteria: [],
+  dependsOn: [],
+  blocks: [],
+  blockedBy: [],
   createdAt: "2026-06-04T00:00:00.000Z",
   updatedAt: "2026-06-04T00:00:00.000Z",
   ...patch,
@@ -29,6 +32,7 @@ describe("task draft utilities", () => {
       description: "",
       labels: [],
       acceptanceCriteria: "",
+      dependsOn: [],
       repositoryLocalPath: "",
       repositoryRemoteUrl: "",
       status: "idea",
@@ -68,6 +72,7 @@ describe("task draft utilities", () => {
         labels: ["ui", "modal"],
         acceptanceCriteria:
           "Status and labels share a row\nCriteria uses a full width box",
+        dependsOn: [],
         repositoryLocalPath: "/workspace/vibepod-board",
         repositoryRemoteUrl: "git@github.com:vibepod/vibepod-board.git",
         status: "ready",
@@ -81,6 +86,7 @@ describe("task draft utilities", () => {
         "Status and labels share a row",
         "Criteria uses a full width box",
       ],
+      dependsOn: [],
       repositoryLocalPath: "/workspace/vibepod-board",
       repositoryRemoteUrl: "git@github.com:vibepod/vibepod-board.git",
     });

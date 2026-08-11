@@ -542,4 +542,163 @@ describe("API", () => {
       .get(`/api/ideas/${idea.body.item.id}/readiness`)
       .expect(401);
   });
+
+  it("manages task dependencies through the API", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+
+    const project = await agent
+      .post("/api/projects")
+      .send({ title: "App", key: "APP" })
+      .expect(201);
+    const projectId = project.body.item.id;
+    const schema = await agent
+      .post("/api/ideas")
+      .send({ projectId, title: "Schema" })
+      .expect(201);
+    const api = await agent
+      .post("/api/ideas")
+      .send({ projectId, title: "API", dependsOn: [schema.body.item.id] })
+      .expect(201);
+    expect(api.body.item.dependsOn).toEqual([schema.body.item.id]);
+    expect(api.body.item.blockedBy).toEqual([schema.body.item.id]);
+
+    const docs = await agent
+      .post("/api/ideas")
+      .send({ projectId, title: "Docs" })
+      .expect(201);
+    const added = await agent
+      .post(`/api/ideas/${docs.body.item.id}/dependencies`)
+      .send({ dependsOnId: api.body.item.id })
+      .expect(201);
+    expect(added.body.item.dependsOn).toEqual([api.body.item.id]);
+
+    const replaced = await agent
+      .put(`/api/ideas/${docs.body.item.id}/dependencies`)
+      .send({ dependsOnIds: [schema.body.item.id, api.body.item.id] })
+      .expect(200);
+    expect(replaced.body.item.dependsOn.sort()).toEqual(
+      [schema.body.item.id, api.body.item.id].sort(),
+    );
+
+    const removed = await agent
+      .delete(
+        `/api/ideas/${docs.body.item.id}/dependencies/${schema.body.item.id}`,
+      )
+      .expect(200);
+    expect(removed.body.item.dependsOn).toEqual([api.body.item.id]);
+
+    await request(app)
+      .post(`/api/ideas/${docs.body.item.id}/dependencies`)
+      .send({ dependsOnId: schema.body.item.id })
+      .expect(401);
+  });
+
+  it("rejects self, cross-project, and cyclic dependencies", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+
+    const project = await agent
+      .post("/api/projects")
+      .send({ title: "App", key: "APP" })
+      .expect(201);
+    const otherProject = await agent
+      .post("/api/projects")
+      .send({ title: "Ops", key: "OPS" })
+      .expect(201);
+    const schema = await agent
+      .post("/api/ideas")
+      .send({ projectId: project.body.item.id, title: "Schema" })
+      .expect(201);
+    const api = await agent
+      .post("/api/ideas")
+      .send({ projectId: project.body.item.id, title: "API" })
+      .expect(201);
+    const outside = await agent
+      .post("/api/ideas")
+      .send({ projectId: otherProject.body.item.id, title: "Outside" })
+      .expect(201);
+
+    await agent
+      .post(`/api/ideas/${api.body.item.id}/dependencies`)
+      .send({ dependsOnId: api.body.item.id })
+      .expect(400);
+    await agent
+      .post(`/api/ideas/${api.body.item.id}/dependencies`)
+      .send({ dependsOnId: outside.body.item.id })
+      .expect(400);
+    await agent
+      .post(`/api/ideas/${api.body.item.id}/dependencies`)
+      .send({ dependsOnId: "missing" })
+      .expect(404);
+
+    await agent
+      .post(`/api/ideas/${api.body.item.id}/dependencies`)
+      .send({ dependsOnId: schema.body.item.id })
+      .expect(201);
+    const cycle = await agent
+      .post(`/api/ideas/${schema.body.item.id}/dependencies`)
+      .send({ dependsOnId: api.body.item.id })
+      .expect(409);
+    expect(cycle.body.error).toContain("Dependency cycle detected");
+  });
+
+  it("serves a dependency-resolved work order", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+
+    const project = await agent
+      .post("/api/projects")
+      .send({ title: "App", key: "APP" })
+      .expect(201);
+    const projectId = project.body.item.id;
+    const schema = await agent
+      .post("/api/ideas")
+      .send({ projectId, title: "Schema" })
+      .expect(201);
+    const api = await agent
+      .post("/api/ideas")
+      .send({ projectId, title: "API", dependsOn: [schema.body.item.id] })
+      .expect(201);
+
+    const workOrder = await agent
+      .get("/api/work-order")
+      .query({ projectId })
+      .expect(200);
+    expect(workOrder.body.items.map((item: { id: string }) => item.id)).toEqual(
+      [schema.body.item.id, api.body.item.id],
+    );
+    expect(workOrder.body.items[1]).toMatchObject({
+      taskId: "APP-2",
+      position: 2,
+      wave: 1,
+      isBlocked: true,
+      isActionable: false,
+    });
+    expect(workOrder.body.cyclicTaskIds).toEqual([]);
+
+    await agent
+      .post(`/api/ideas/${schema.body.item.id}/ready`)
+      .send({ available: true })
+      .expect(200);
+    const board = await agent
+      .get("/api/board")
+      .query({ projectId })
+      .expect(200);
+    await agent
+      .patch(`/api/board/${board.body.columns.ready[0].id}`)
+      .send({ column: "done" })
+      .expect(200);
+
+    const unblocked = await agent
+      .get("/api/work-order")
+      .query({ projectId })
+      .expect(200);
+    expect(unblocked.body.items[1]).toMatchObject({
+      isBlocked: false,
+      isActionable: true,
+    });
+
+    await request(app).get("/api/work-order").expect(401);
+  });
 });

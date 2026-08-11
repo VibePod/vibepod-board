@@ -99,6 +99,12 @@ export const createMcpServer = (
         details: z.string().optional(),
         labels: z.array(z.string()).optional(),
         acceptanceCriteria: z.array(z.string()).optional(),
+        dependsOn: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Ids of tasks in the same project that must be done first.",
+          ),
         repositoryLocalPath: z.string().optional(),
         repositoryRemoteUrl: z.string().optional(),
       },
@@ -119,12 +125,71 @@ export const createMcpServer = (
         details: z.string().optional(),
         labels: z.array(z.string()).optional(),
         acceptanceCriteria: z.array(z.string()).optional(),
+        dependsOn: z
+          .array(z.string())
+          .optional()
+          .describe("Replaces the full set of blocking task ids when given."),
         repositoryLocalPath: z.string().optional(),
         repositoryRemoteUrl: z.string().optional(),
         status: z.enum(ideaStatuses).optional(),
       },
     },
     async (input) => jsonContent(await handlers.update_idea(input)),
+  );
+
+  server.registerTool(
+    "add_idea_dependency",
+    {
+      title: "Add Task Dependency",
+      description:
+        "Make a task depend on another task in the same project. The dependency must be finished (board column done) or denied before the task is unblocked. Cycles are rejected.",
+      inputSchema: {
+        id: z.string().min(1).describe("Task that is blocked."),
+        dependsOnId: z.string().min(1).describe("Task that must finish first."),
+      },
+    },
+    async (input) => jsonContent(await handlers.add_idea_dependency(input)),
+  );
+
+  server.registerTool(
+    "remove_idea_dependency",
+    {
+      title: "Remove Task Dependency",
+      description: "Drop one dependency edge between two tasks.",
+      inputSchema: {
+        id: z.string().min(1),
+        dependsOnId: z.string().min(1),
+      },
+    },
+    async (input) => jsonContent(await handlers.remove_idea_dependency(input)),
+  );
+
+  server.registerTool(
+    "set_idea_dependencies",
+    {
+      title: "Set Task Dependencies",
+      description:
+        "Replace the full set of tasks a task depends on. Pass an empty list to clear all dependencies.",
+      inputSchema: {
+        id: z.string().min(1),
+        dependsOnIds: z.array(z.string()),
+      },
+    },
+    async (input) => jsonContent(await handlers.set_idea_dependencies(input)),
+  );
+
+  server.registerTool(
+    "list_work_order",
+    {
+      title: "List Work Order",
+      description:
+        "List tasks in dependency-resolved execution order. Each item reports position, wave (0 = no dependencies), blockedBy, isBlocked, isComplete, and isActionable. Work items with isActionable true can be started now; anything in cyclicTaskIds could not be ordered.",
+      inputSchema: {
+        projectId: z.string().optional(),
+      },
+    },
+    async ({ projectId }) =>
+      jsonContent(await handlers.list_work_order({ projectId })),
   );
 
   server.registerTool(

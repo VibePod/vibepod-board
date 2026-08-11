@@ -194,6 +194,28 @@ export const importBoardJsonFile = async (
       );
     }
 
+    const ideaProjects = new Map(
+      data.ideas.map((idea) => [idea.id, idea.projectId]),
+    );
+    for (const idea of data.ideas) {
+      for (const dependsOnId of new Set(idea.dependsOn ?? [])) {
+        // Skip edges that point outside the import or across projects; they
+        // cannot be represented and would fail the foreign key anyway.
+        if (
+          dependsOnId === idea.id ||
+          ideaProjects.get(dependsOnId) !== idea.projectId
+        ) {
+          continue;
+        }
+        await client.query(
+          `insert into task_dependencies (idea_id, depends_on_idea_id, created_at)
+           values ($1, $2, $3)
+           on conflict do nothing`,
+          [idea.id, dependsOnId, idea.updatedAt],
+        );
+      }
+    }
+
     const importedIdeaIds = new Set(data.ideas.map((idea) => idea.id));
     for (const event of data.readinessEvents) {
       if (!importedIdeaIds.has(event.ideaId)) {

@@ -40,6 +40,32 @@ export const createMcpToolHandlers = (
   async mark_idea_ready(input: { id: string }) {
     return { item: await store.markIdeaReady(access, input.id) };
   },
+  async add_idea_dependency(input: { id: string; dependsOnId: string }) {
+    return {
+      item: await store.addIdeaDependency(access, input.id, input.dependsOnId),
+    };
+  },
+  async remove_idea_dependency(input: { id: string; dependsOnId: string }) {
+    return {
+      item: await store.removeIdeaDependency(
+        access,
+        input.id,
+        input.dependsOnId,
+      ),
+    };
+  },
+  async set_idea_dependencies(input: { id: string; dependsOnIds: string[] }) {
+    return {
+      item: await store.setIdeaDependencies(
+        access,
+        input.id,
+        input.dependsOnIds,
+      ),
+    };
+  },
+  async list_work_order(input: { projectId?: string }) {
+    return await store.getWorkOrder(access, input.projectId);
+  },
   async list_board(input: { projectId?: string }) {
     return { columns: await store.getBoardColumns(access, input.projectId) };
   },

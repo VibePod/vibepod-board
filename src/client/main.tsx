@@ -37,6 +37,7 @@ import {
   GitBranch,
   KeyRound,
   ListChecks,
+  Lock,
   LogOut,
   Moon,
   Pencil,
@@ -48,6 +49,7 @@ import {
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { buildWorkOrder } from "../shared/dependencies.js";
 import {
   endpointOptions,
   integrationExamples,
@@ -90,6 +92,7 @@ import {
   readinessColor,
   taskListCardView,
 } from "./taskCardUtils.js";
+import { dependencyLinks, dependencyOptions } from "./taskDependencyUtils.js";
 import {
   emptyTaskDraft,
   type TaskDraft,
@@ -596,11 +599,41 @@ const App = () => {
   const taskModalLabelOptions = Array.from(
     new Set([...taskLabelOptions, ...(taskModal?.draft.labels ?? [])]),
   ).sort((a, b) => a.localeCompare(b));
+  const projectCards = boardColumns.flatMap(
+    (column) => projectColumns[column] ?? [],
+  );
+  const projectWorkOrder = selectedProject
+    ? buildWorkOrder(
+        projectIdeas,
+        projectCards,
+        new Map([[selectedProject.id, selectedProject.key]]),
+      )
+    : { items: [], cyclicTaskIds: [] };
+  const workOrderPositions = new Map(
+    projectWorkOrder.items.map((item) => [item.id, item.position]),
+  );
+  const taskDependencyOptions = selectedProject
+    ? dependencyOptions(projectIdeas, selectedProject.key, taskModal?.draft.id)
+    : [];
+  const taskViewBlockedBy =
+    taskViewIdea && taskViewProject
+      ? dependencyLinks(
+          taskViewIdea.dependsOn,
+          ideaById,
+          taskViewProject.key,
+          taskViewIdea.blockedBy,
+        )
+      : [];
+  const taskViewBlocks =
+    taskViewIdea && taskViewProject
+      ? dependencyLinks(taskViewIdea.blocks, ideaById, taskViewProject.key)
+      : [];
   const visibleProjectIdeas = filterAndSortTasks(projectIdeas, {
     sort: taskSort,
     status: taskStatusFilter,
     label: taskLabelFilter,
     search: taskSearch,
+    workOrder: workOrderPositions,
   });
   const showProjectSidebar = shouldShowProjectSidebar(
     activeView,
@@ -1350,6 +1383,7 @@ const App = () => {
                     { value: "title_asc", label: "Title A-Z" },
                     { value: "status_asc", label: "Status" },
                     { value: "rating_desc", label: "Rating" },
+                    { value: "dependency_asc", label: "Dependency order" },
                   ]}
                 />
                 <Select
@@ -1438,6 +1472,16 @@ const App = () => {
                             {taskCard.taskId}
                           </Badge>
                           <Title order={3}>{taskCard.title}</Title>
+                          {taskCard.isBlocked && (
+                            <Badge
+                              variant="light"
+                              color="orange"
+                              size="sm"
+                              leftSection={<Lock size={12} aria-hidden />}
+                            >
+                              Blocked by {taskCard.blockedByCount}
+                            </Badge>
+                          )}
                         </Group>
                         {labelBadges(taskCard.labels)}
                         {idea.readinessScore !== undefined && (
@@ -1602,6 +1646,21 @@ const App = () => {
                         >
                           <Stack gap="xs">
                             <Title order={4}>{card.title}</Title>
+                            {card.blockedBy.length > 0 && (
+                              <Group
+                                className="board-card-blocked"
+                                justify="flex-start"
+                              >
+                                <Badge
+                                  variant="light"
+                                  color="orange"
+                                  size="sm"
+                                  leftSection={<Lock size={12} aria-hidden />}
+                                >
+                                  Blocked by {card.blockedBy.length}
+                                </Badge>
+                              </Group>
+                            )}
                             {labelBadges(card.labels, "xs")}
                             {card.readinessScore !== undefined && (
                               <Group
@@ -1880,6 +1939,53 @@ const App = () => {
               )}
             </Paper>
 
+            {(taskViewBlockedBy.length > 0 || taskViewBlocks.length > 0) && (
+              <Paper className="overview-section" withBorder radius="md" p="md">
+                <Text size="xs" fw={700} tt="uppercase" c="dimmed" mb="xs">
+                  Dependencies
+                </Text>
+                <Stack gap="sm">
+                  {taskViewBlockedBy.length > 0 && (
+                    <Stack gap={4}>
+                      <Text size="sm" fw={600}>
+                        Depends on
+                      </Text>
+                      {taskViewBlockedBy.map((link) => (
+                        <Group key={link.id} gap="xs">
+                          <Badge variant="light" color="gray" size="sm">
+                            {link.taskId}
+                          </Badge>
+                          <Text size="sm">{link.title}</Text>
+                          <Badge
+                            variant="light"
+                            color={link.isBlocking ? "orange" : "green"}
+                            size="sm"
+                          >
+                            {link.isBlocking ? "open" : "done"}
+                          </Badge>
+                        </Group>
+                      ))}
+                    </Stack>
+                  )}
+                  {taskViewBlocks.length > 0 && (
+                    <Stack gap={4}>
+                      <Text size="sm" fw={600}>
+                        Blocks
+                      </Text>
+                      {taskViewBlocks.map((link) => (
+                        <Group key={link.id} gap="xs">
+                          <Badge variant="light" color="gray" size="sm">
+                            {link.taskId}
+                          </Badge>
+                          <Text size="sm">{link.title}</Text>
+                        </Group>
+                      ))}
+                    </Stack>
+                  )}
+                </Stack>
+              </Paper>
+            )}
+
             <Group justify="flex-end">
               <Button
                 type="button"
@@ -2080,6 +2186,21 @@ const App = () => {
                   placeholder="git@github.com:owner/repo.git"
                 />
               </SimpleGrid>
+              <MultiSelect
+                label="Depends on"
+                description="Tasks that must be done before this one. Options that would create a cycle are hidden."
+                placeholder={
+                  taskDependencyOptions.length > 0
+                    ? "Select blocking tasks"
+                    : "No other tasks in this project yet"
+                }
+                value={taskModal.draft.dependsOn}
+                onChange={(dependsOn) => updateTaskDraft({ dependsOn })}
+                data={taskDependencyOptions}
+                disabled={taskDependencyOptions.length === 0}
+                searchable
+                clearable
+              />
               <Textarea
                 label="Description"
                 value={taskModal.draft.description}

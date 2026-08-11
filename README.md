@@ -54,6 +54,10 @@ GITHUB_REPOSITORY=owner/repo
 - `POST /api/ideas`
 - `PATCH /api/ideas/:id`
 - `POST /api/ideas/:id/ready`
+- `POST /api/ideas/:id/dependencies`
+- `PUT /api/ideas/:id/dependencies`
+- `DELETE /api/ideas/:id/dependencies/:dependsOnId`
+- `GET /api/work-order`
 - `POST /api/ideas/:id/sync-github`
 - `GET /api/board`
 - `PATCH /api/board/:id`
@@ -66,7 +70,7 @@ GITHUB_REPOSITORY=owner/repo
 - `POST /api/tokens/:id/revoke`
 - `GET /api/mcp-info`
 
-`GET /api/ideas`, `GET /api/board`, and `GET /api/documents` accept `projectId` query params for project-scoped reads.
+`GET /api/ideas`, `GET /api/board`, `GET /api/documents`, and `GET /api/work-order` accept `projectId` query params for project-scoped reads.
 
 Browser/full REST access uses the admin session cookie. Project-scoped API clients use `Authorization: Bearer <token>`.
 
@@ -88,6 +92,10 @@ Tools:
 - `create_idea`
 - `update_idea`
 - `mark_idea_ready`
+- `add_idea_dependency`
+- `remove_idea_dependency`
+- `set_idea_dependencies`
+- `list_work_order`
 - `list_board`
 - `move_board_card`
 - `create_document`
@@ -97,6 +105,18 @@ Tools:
 Resource:
 
 - `vibepod-board://state`
+
+## Task Dependencies
+
+A task can depend on other tasks in the same project. Dependencies drive the execution order that agents and the UI consume.
+
+- Set them with `POST /api/ideas`/`PATCH /api/ideas/:id` (`dependsOn` replaces the full set), with the dedicated `dependencies` endpoints, or with the `*_idea_dependency` MCP tools.
+- Every task carries `dependsOn` (its blockers), `blocks` (tasks waiting on it), and `blockedBy` (blockers that are not finished yet). Board cards mirror `dependsOn` and `blockedBy` from their task.
+- A blocker counts as finished when its board card reached the `done` column, or when the task was denied — denied work never arrives and must not wedge the graph.
+- Dependencies must stay inside one project, and cycles are rejected (`409`).
+- `GET /api/work-order` and the `list_work_order` MCP tool return tasks in dependency-resolved order. Each item reports `position`, `wave` (0 = no dependencies), `blockedBy`, `isBlocked`, `isComplete`, and `isActionable`; anything listed in `cyclicTaskIds` could not be ordered.
+
+Blocked work is flagged, never forced: moving a blocked card on the board is always allowed.
 
 ## Local Development
 
