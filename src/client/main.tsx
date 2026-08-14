@@ -1,4 +1,5 @@
 import {
+  Accordion,
   ActionIcon,
   Alert,
   Anchor,
@@ -15,6 +16,7 @@ import {
   Modal,
   MultiSelect,
   Paper,
+  SegmentedControl,
   Select,
   SimpleGrid,
   Stack,
@@ -29,6 +31,8 @@ import {
 } from "@mantine/core";
 import "@mantine/core/styles.css";
 import {
+  ChevronLeft,
+  ChevronRight,
   Columns3,
   ExternalLink,
   FileText,
@@ -36,10 +40,12 @@ import {
   Fullscreen,
   GitBranch,
   KeyRound,
+  List,
   ListChecks,
   Lock,
   LogOut,
   Moon,
+  Network,
   Pencil,
   PlugZap,
   Plus,
@@ -47,7 +53,7 @@ import {
   Save,
   Sun,
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { buildWorkOrder } from "../shared/dependencies.js";
 import {
@@ -93,6 +99,7 @@ import {
   parseNavigationPath,
 } from "./navigation.js";
 import { githubRemoteToHttpsUrl } from "./repositoryUtils.js";
+import { TaskGraph } from "./TaskGraph.js";
 import {
   isCardReadinessStale,
   isReadinessStale,
@@ -108,6 +115,7 @@ import {
 } from "./taskDraftUtils.js";
 import { formatTaskId } from "./taskIdentity.js";
 import { filterAndSortTasks, type TaskSortOption } from "./taskListUtils.js";
+import { taskNavigationFor } from "./taskNavigation.js";
 import { taskOverviewForIdea } from "./taskOverviewUtils.js";
 import "./styles.css";
 
@@ -119,6 +127,9 @@ type AppState = {
 };
 
 type ActiveView = NavigationView;
+
+/** How the task list renders: flat cards, or the dependency graph. */
+type TaskViewMode = "list" | "tree";
 
 type AuthState =
   | { status: "checking" }
@@ -296,10 +307,11 @@ const App = () => {
     null,
   );
   const [taskModal, setTaskModal] = useState<TaskModalState | null>(null);
-  const taskModalRef = useRef<HTMLFormElement>(null);
   const [descriptionMode, setDescriptionMode] =
     useState<MarkdownFieldMode>("edit");
   const [criteriaMode, setCriteriaMode] = useState<MarkdownFieldMode>("edit");
+  // Notes start collapsed; ids of the notes the user has expanded.
+  const [openNoteIds, setOpenNoteIds] = useState<string[]>([]);
   const [taskViewModal, setTaskViewModal] = useState<TaskViewModalState | null>(
     null,
   );
@@ -310,6 +322,7 @@ const App = () => {
   >(null);
   const [readinessError, setReadinessError] = useState("");
   const [noteModal, setNoteModal] = useState<NoteModalState | null>(null);
+  const [taskViewMode, setTaskViewMode] = useState<TaskViewMode>("list");
   const [taskSort, setTaskSort] = useState<TaskSortOption>("created_desc");
   const [taskStatusFilter, setTaskStatusFilter] = useState<IdeaStatus | "">("");
   const [taskLabelFilter, setTaskLabelFilter] = useState("");
@@ -443,7 +456,7 @@ const App = () => {
         activeElement instanceof HTMLSelectElement ||
         activeElement?.getAttribute("contenteditable") === "true";
 
-      if (!isInInput && activeElement === taskModalRef.current) {
+      if (!isInInput) {
         if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
           event.preventDefault();
           const direction = event.key === "ArrowLeft" ? -1 : 1;
@@ -455,25 +468,6 @@ const App = () => {
     window.addEventListener("keydown", handleTaskModalKeydown);
     return () => window.removeEventListener("keydown", handleTaskModalKeydown);
   }, [taskModal, selectedProjectId, state.ideas]);
-
-  const navigateToAdjacentTask = (direction: number) => {
-    if (!selectedProject) return;
-    const projectIdeasList = state.ideas.filter(
-      (idea) => idea.projectId === selectedProject.id,
-    );
-    if (projectIdeasList.length === 0) return;
-
-    // Find current idea index
-    const currentIdea = taskViewIdea ?? projectIdeasList[0];
-    const currentIndex = projectIdeasList.findIndex(
-      (idea) => idea.id === currentIdea.id,
-    );
-    if (currentIndex === -1) return;
-
-    const newIndex = (currentIndex + direction + projectIdeasList.length) % projectIdeasList.length;
-    const nextIdea = projectIdeasList[newIndex];
-    openEditTask(nextIdea);
-  };
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: bootstrap must run once on mount only
   useEffect(() => {
@@ -581,6 +575,18 @@ const App = () => {
   const projectIdeas = selectedProject
     ? state.ideas.filter((idea) => idea.projectId === selectedProject.id)
     : [];
+  const taskModalNavigation = taskNavigationFor(
+    projectIdeas,
+    taskModal?.mode === "edit" ? taskModal.draft.id : undefined,
+  );
+  const navigateToAdjacentTask = (direction: number) => {
+    if (!taskModalNavigation || taskModalNavigation.total < 2) {
+      return;
+    }
+    openEditTask(
+      direction < 0 ? taskModalNavigation.previous : taskModalNavigation.next,
+    );
+  };
   const projectColumns = selectedProject
     ? filterColumnsByProject(state.columns, selectedProject.id)
     : emptyColumns;
@@ -611,6 +617,13 @@ const App = () => {
   ).sort((a, b) => a.localeCompare(b));
   const projectCards = boardColumns.flatMap(
     (column) => projectColumns[column] ?? [],
+  );
+  const projectCardColumns = new Map(
+    projectCards
+      .filter((card): card is BoardCard & { ideaId: string } =>
+        Boolean(card.ideaId),
+      )
+      .map((card) => [card.ideaId, card.column]),
   );
   const projectWorkOrder = selectedProject
     ? buildWorkOrder(
@@ -830,16 +843,7 @@ const App = () => {
 
   const updateTaskDraft = (patch: Partial<TaskDraft>) => {
     setTaskModal((current) =>
-      current
-        ? {
-            ...current,
-            draft: { ...current.draft, ...patch },
-            originalDraft:
-              current.mode === "edit" && current.originalDraft
-                ? { ...current.originalDraft, ...patch }
-                : current.originalDraft,
-          }
-        : current,
+      current ? { ...current, draft: { ...current.draft, ...patch } } : current,
     );
   };
 
@@ -855,6 +859,7 @@ const App = () => {
       d.acceptanceCriteria !== o.acceptanceCriteria ||
       d.status !== o.status ||
       JSON.stringify(d.labels) !== JSON.stringify(o.labels) ||
+      JSON.stringify(d.dependsOn) !== JSON.stringify(o.dependsOn) ||
       d.repositoryLocalPath !== o.repositoryLocalPath ||
       d.repositoryRemoteUrl !== o.repositoryRemoteUrl
     );
@@ -1376,6 +1381,38 @@ const App = () => {
         {activeView === "ideas" && selectedProject && (
           <Stack gap="sm">
             <Paper className="task-filters" withBorder radius="md" p="md">
+              <Group justify="space-between" align="center" gap="sm" mb="sm">
+                <Text size="sm" fw={600} c="dimmed">
+                  {visibleProjectIdeas.length} of {projectIdeas.length} tasks
+                </Text>
+                <SegmentedControl
+                  className="task-view-switch"
+                  size="sm"
+                  value={taskViewMode}
+                  onChange={(value) => setTaskViewMode(value as TaskViewMode)}
+                  data={[
+                    {
+                      value: "list",
+                      label: (
+                        <Group gap={6} wrap="nowrap">
+                          <List size={14} aria-hidden />
+                          <span>List</span>
+                        </Group>
+                      ),
+                    },
+                    {
+                      value: "tree",
+                      label: (
+                        <Group gap={6} wrap="nowrap">
+                          <Network size={14} aria-hidden />
+                          <span>Tree</span>
+                        </Group>
+                      ),
+                    },
+                  ]}
+                  aria-label="Task view mode"
+                />
+              </Group>
               <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm">
                 <TextInput
                   label="Search"
@@ -1446,116 +1483,132 @@ const App = () => {
                 <Text c="dimmed">No tasks match the current filters.</Text>
               </Paper>
             )}
-            {visibleProjectIdeas.map((idea) => {
-              const taskCard = taskListCardView(
-                idea,
-                state.columns,
-                selectedProject.key,
-              );
-              return (
-                <Card
-                  className="item task-list-card"
-                  withBorder
-                  shadow="xs"
-                  radius="md"
-                  padding={0}
-                  key={taskCard.id}
-                >
-                  <Box
-                    className="task-card-edit-area"
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => openEditTask(idea)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        openEditTask(idea);
-                      }
-                    }}
+            {taskViewMode === "tree" && visibleProjectIdeas.length > 0 && (
+              <TaskGraph
+                tasks={visibleProjectIdeas}
+                projectKey={selectedProject.key}
+                cardColumns={projectCardColumns}
+                onOpenTask={openEditTask}
+              />
+            )}
+            {taskViewMode === "list" &&
+              visibleProjectIdeas.map((idea) => {
+                const taskCard = taskListCardView(
+                  idea,
+                  state.columns,
+                  selectedProject.key,
+                );
+                return (
+                  <Card
+                    className="item task-list-card"
+                    withBorder
+                    shadow="xs"
+                    radius="md"
+                    padding={0}
+                    key={taskCard.id}
                   >
-                    <Group align="flex-start" justify="space-between" gap="sm">
-                      <Box className="task-card-title">
-                        <Group
-                          className="task-card-title-row"
-                          gap="xs"
-                          wrap="nowrap"
-                        >
-                          <Badge variant="light" color="gray" size="sm">
-                            {taskCard.taskId}
-                          </Badge>
-                          <Title order={3}>{taskCard.title}</Title>
-                          {taskCard.isBlocked && (
+                    <Box
+                      className="task-card-edit-area"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => openEditTask(idea)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          openEditTask(idea);
+                        }
+                      }}
+                    >
+                      <Group
+                        align="flex-start"
+                        justify="space-between"
+                        gap="sm"
+                      >
+                        <Box className="task-card-title">
+                          <Group
+                            className="task-card-title-row"
+                            gap="xs"
+                            wrap="nowrap"
+                          >
+                            <Badge variant="light" color="gray" size="sm">
+                              {taskCard.taskId}
+                            </Badge>
+                            <Title order={3}>{taskCard.title}</Title>
+                            {taskCard.isBlocked && (
+                              <Badge
+                                variant="light"
+                                color="orange"
+                                size="sm"
+                                leftSection={<Lock size={12} aria-hidden />}
+                              >
+                                Blocked by {taskCard.blockedByCount}
+                              </Badge>
+                            )}
+                          </Group>
+                          {labelBadges(taskCard.labels)}
+                          {idea.readinessScore !== undefined && (
                             <Badge
                               variant="light"
-                              color="orange"
+                              color={
+                                isReadinessStale(idea)
+                                  ? "gray"
+                                  : readinessColor(idea.readinessScore)
+                              }
                               size="sm"
-                              leftSection={<Lock size={12} aria-hidden />}
-                            >
-                              Blocked by {taskCard.blockedByCount}
-                            </Badge>
-                          )}
-                        </Group>
-                        {labelBadges(taskCard.labels)}
-                        {idea.readinessScore !== undefined && (
-                          <Badge
-                            variant="light"
-                            color={
-                              isReadinessStale(idea)
-                                ? "gray"
-                                : readinessColor(idea.readinessScore)
-                            }
-                            size="sm"
-                            opacity={isReadinessStale(idea) ? 0.6 : 1}
-                            mt="xs"
-                            style={{ cursor: "pointer" }}
-                            role="button"
-                            tabIndex={0}
-                            aria-label={`Show readiness history for ${idea.title}`}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setReadinessModal({
-                                ideaId: idea.id,
-                                ideaTitle: idea.title,
-                              });
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter" || event.key === " ") {
-                                event.preventDefault();
+                              opacity={isReadinessStale(idea) ? 0.6 : 1}
+                              mt="xs"
+                              style={{ cursor: "pointer" }}
+                              role="button"
+                              tabIndex={0}
+                              aria-label={`Show readiness history for ${idea.title}`}
+                              onClick={(event) => {
                                 event.stopPropagation();
                                 setReadinessModal({
                                   ideaId: idea.id,
                                   ideaTitle: idea.title,
                                 });
-                              }
-                            }}
-                          >
-                            {idea.readinessScore}/10
-                            {isReadinessStale(idea) ? " · stale" : ""}
-                          </Badge>
-                        )}
-                      </Box>
-                      {statusBadge(taskCard.status)}
-                    </Group>
-                  </Box>
-                  <Box
-                    className="task-ready-control"
-                    onClick={(event) => event.stopPropagation()}
-                    onPointerDown={(event) => event.stopPropagation()}
-                  >
-                    <Checkbox
-                      label="Ready"
-                      checked={taskCard.isReady}
-                      onChange={(event) =>
-                        void setBoardAvailability(
-                          idea,
-                          event.currentTarget.checked,
-                        )
-                      }
-                    />
-                  </Box>
-                </Card>
-              );
-            })}
+                              }}
+                              onKeyDown={(event) => {
+                                if (
+                                  event.key === "Enter" ||
+                                  event.key === " "
+                                ) {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  setReadinessModal({
+                                    ideaId: idea.id,
+                                    ideaTitle: idea.title,
+                                  });
+                                }
+                              }}
+                            >
+                              {idea.readinessScore}/10
+                              {isReadinessStale(idea) ? " · stale" : ""}
+                            </Badge>
+                          )}
+                        </Box>
+                        {statusBadge(taskCard.status)}
+                      </Group>
+                    </Box>
+                    <Box
+                      className="task-ready-control"
+                      onClick={(event) => event.stopPropagation()}
+                      onPointerDown={(event) => event.stopPropagation()}
+                    >
+                      <Checkbox
+                        label="Ready"
+                        checked={taskCard.isReady}
+                        onChange={(event) =>
+                          void setBoardAvailability(
+                            idea,
+                            event.currentTarget.checked,
+                          )
+                        }
+                      />
+                    </Box>
+                  </Card>
+                );
+              })}
           </Stack>
         )}
 
@@ -1810,35 +1863,60 @@ const App = () => {
                 <Text c="dimmed">No notes in this project yet.</Text>
               </Paper>
             )}
-            {projectDocuments.map((document) => (
-              <Card
-                className="item document"
-                withBorder
-                shadow="xs"
+            {projectDocuments.length > 0 && (
+              <Accordion
+                className="document-accordion"
+                variant="separated"
                 radius="md"
-                padding="md"
-                key={document.id}
+                multiple
+                value={openNoteIds}
+                onChange={setOpenNoteIds}
+                chevronPosition="left"
               >
-                <Group align="flex-start" justify="space-between">
-                  <Title order={3}>{document.title}</Title>
-                  <Badge variant="light" color="violet">
-                    {document.kind}
-                  </Badge>
-                </Group>
-                <pre>{document.content || "No note content yet."}</pre>
-                <Group gap="xs">
-                  <Button
-                    type="button"
-                    variant="light"
-                    color="gray"
-                    leftSection={<Pencil size={16} />}
-                    onClick={() => openEditNote(document)}
+                {projectDocuments.map((document) => (
+                  <Accordion.Item
+                    className="item document"
+                    value={document.id}
+                    key={document.id}
                   >
-                    Edit
-                  </Button>
-                </Group>
-              </Card>
-            ))}
+                    <Accordion.Control>
+                      <Group
+                        align="center"
+                        justify="space-between"
+                        gap="sm"
+                        wrap="nowrap"
+                      >
+                        <Text fw={700} size="md">
+                          {document.title}
+                        </Text>
+                        <Badge variant="light" color="violet">
+                          {document.kind}
+                        </Badge>
+                      </Group>
+                    </Accordion.Control>
+                    <Accordion.Panel>
+                      <Stack gap="md">
+                        <MarkdownPreview
+                          value={document.content}
+                          emptyText="No note content yet."
+                        />
+                        <Group gap="xs">
+                          <Button
+                            type="button"
+                            variant="light"
+                            color="gray"
+                            leftSection={<Pencil size={16} />}
+                            onClick={() => openEditNote(document)}
+                          >
+                            Edit
+                          </Button>
+                        </Group>
+                      </Stack>
+                    </Accordion.Panel>
+                  </Accordion.Item>
+                ))}
+              </Accordion>
+            )}
           </Stack>
         )}
       </section>
@@ -2102,9 +2180,8 @@ const App = () => {
         }
         centered
         size="xl"
-        fullscreen={taskModal?.isFullscreen ?? false}
-        overlayOpacity={0.5}
-        overlayColor="var(--app-sidebar-bg)"
+        fullScreen={taskModal?.isFullscreen ?? false}
+        overlayProps={{ opacity: 0.5, color: "var(--app-sidebar-bg)" }}
         classNames={{
           header: "task-modal-header",
           body: "task-modal-body",
@@ -2115,7 +2192,6 @@ const App = () => {
           <form
             className="modal-form"
             onSubmit={(event) => void saveTaskWithoutClose(event)}
-            ref={taskModalRef}
           >
             <Stack gap="md">
               <Group justify="space-between">
@@ -2134,23 +2210,65 @@ const App = () => {
                     </Badge>
                   )}
                 </Group>
-                {taskModal.mode === "edit" && (
-                  <ActionIcon
-                    variant="subtle"
-                    color="gray"
-                    size="md"
-                    onClick={() =>
-                      setTaskModal((current) =>
-                        current
-                          ? { ...current, isFullscreen: !current.isFullscreen }
-                          : current,
-                      )
-                    }
-                    title={taskModal.isFullscreen ? "Exit fullscreen" : "Toggle fullscreen"}
-                  >
-                    <Fullscreen size={16} />
-                  </ActionIcon>
-                )}
+                <Group gap="xs">
+                  {taskModalNavigation && taskModalNavigation.total > 1 && (
+                    <Group className="task-modal-nav" gap={4}>
+                      <ActionIcon
+                        variant="subtle"
+                        color="gray"
+                        size="md"
+                        onClick={() => navigateToAdjacentTask(-1)}
+                        title="Previous task (Left arrow)"
+                        aria-label="Previous task"
+                      >
+                        <ChevronLeft size={16} />
+                      </ActionIcon>
+                      <Text size="xs" c="dimmed">
+                        {taskModalNavigation.index + 1} /{" "}
+                        {taskModalNavigation.total}
+                      </Text>
+                      <ActionIcon
+                        variant="subtle"
+                        color="gray"
+                        size="md"
+                        onClick={() => navigateToAdjacentTask(1)}
+                        title="Next task (Right arrow)"
+                        aria-label="Next task"
+                      >
+                        <ChevronRight size={16} />
+                      </ActionIcon>
+                    </Group>
+                  )}
+                  {taskModal.mode === "edit" && (
+                    <ActionIcon
+                      variant="subtle"
+                      color="gray"
+                      size="md"
+                      onClick={() =>
+                        setTaskModal((current) =>
+                          current
+                            ? {
+                                ...current,
+                                isFullscreen: !current.isFullscreen,
+                              }
+                            : current,
+                        )
+                      }
+                      title={
+                        taskModal.isFullscreen
+                          ? "Exit fullscreen"
+                          : "Toggle fullscreen"
+                      }
+                      aria-label={
+                        taskModal.isFullscreen
+                          ? "Exit fullscreen"
+                          : "Toggle fullscreen"
+                      }
+                    >
+                      <Fullscreen size={16} />
+                    </ActionIcon>
+                  )}
+                </Group>
               </Group>
               <Divider my="xs" />
               <TextInput
@@ -2238,17 +2356,6 @@ const App = () => {
                   rows={7}
                 />
               </MarkdownField>
-              <MarkdownField
-                label="Acceptance Criteria"
-                mode={criteriaMode}
-                onModeChange={setCriteriaMode}
-                preview={
-                  <CriteriaPreview
-                    value={taskModal.draft.acceptanceCriteria}
-                    emptyText="No acceptance criteria yet."
-                  />
-                }
-              />
               <MarkdownField
                 label="Acceptance Criteria"
                 mode={criteriaMode}

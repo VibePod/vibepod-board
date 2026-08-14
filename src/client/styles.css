@@ -52,6 +52,8 @@
   --app-drop-border: #6aa2ec;
   --app-drag-border: #1f6feb;
   --app-drag-shadow: rgba(31, 111, 235, 0.18);
+  --app-graph-edge-blocking: #e8890c;
+  --app-graph-edge-satisfied: #9db1c6;
 }
 
 [data-mantine-color-scheme="dark"] {
@@ -102,6 +104,8 @@
   --app-drop-border: #4a80c2;
   --app-drag-border: #5fa0f4;
   --app-drag-shadow: rgba(95, 160, 244, 0.2);
+  --app-graph-edge-blocking: #f5a742;
+  --app-graph-edge-satisfied: #55708c;
 }
 
 * {
@@ -320,9 +324,17 @@ body {
   overflow: hidden;
 }
 
-.document {
-  display: grid;
-  gap: 12px;
+.document-accordion .mantine-Accordion-control:hover {
+  background: var(--app-surface-muted);
+}
+
+.document-accordion .mantine-Accordion-label {
+  color: var(--app-text-strong);
+  padding: 12px 0;
+}
+
+.document-accordion .mantine-Accordion-content {
+  color: var(--app-text);
 }
 
 .task-card-edit-area {
@@ -379,6 +391,225 @@ body {
 
 .empty-state {
   margin-bottom: 0;
+}
+
+.task-view-switch {
+  flex: 0 0 auto;
+}
+
+.task-graph {
+  background: var(--app-surface);
+  border-color: var(--app-border);
+  color: var(--app-text);
+  min-width: 0;
+}
+
+.task-graph-legend-line {
+  border-radius: 2px;
+  display: inline-block;
+  height: 3px;
+  width: 22px;
+}
+
+.task-graph-legend-line.blocking {
+  background: var(--app-graph-edge-blocking);
+}
+
+.task-graph-legend-line.satisfied {
+  background: var(--app-graph-edge-satisfied);
+}
+
+.task-graph-viewport {
+  overflow: auto;
+  padding-bottom: 4px;
+}
+
+.task-graph-canvas {
+  position: relative;
+}
+
+.task-graph-edges {
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+  position: absolute;
+}
+
+.task-graph-edge {
+  fill: none;
+  stroke-width: 2;
+  transition:
+    opacity 160ms ease,
+    stroke-width 160ms ease;
+}
+
+.task-graph-edges marker path.blocking {
+  fill: var(--app-graph-edge-blocking);
+  stroke: none;
+}
+
+.task-graph-edges marker path.satisfied {
+  fill: var(--app-graph-edge-satisfied);
+  stroke: none;
+}
+
+.task-graph-edges marker path.selected {
+  fill: var(--app-accent-hover);
+  stroke: none;
+}
+
+.task-graph-edge.blocking {
+  stroke: var(--app-graph-edge-blocking);
+}
+
+.task-graph-edge.satisfied {
+  stroke: var(--app-graph-edge-satisfied);
+  stroke-dasharray: 5 4;
+}
+
+.task-graph-edge.selected {
+  stroke: var(--app-accent-hover);
+  stroke-width: 3;
+}
+
+/* Thin curves are hard to hit, so each edge carries an invisible wide stroke. */
+.task-graph-edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 16;
+}
+
+.task-graph-edge-group {
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.task-graph-edge-group:hover .task-graph-edge,
+.task-graph-edge-group:focus-visible .task-graph-edge {
+  stroke-width: 3.5;
+}
+
+.task-graph-edge-group:focus-visible {
+  outline: none;
+}
+
+.task-graph-edge-group:focus-visible .task-graph-edge-hit {
+  stroke: var(--app-accent);
+  stroke-opacity: 0.25;
+}
+
+.task-graph-edge-group[data-faded="true"] {
+  opacity: 0.16;
+}
+
+.task-graph-lane-label {
+  color: var(--app-dimmed);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  position: absolute;
+  text-transform: uppercase;
+  top: 0;
+}
+
+.task-graph-lane-label.cycle {
+  color: var(--mantine-color-orange-7);
+}
+
+.task-graph-node {
+  background: var(--app-surface-elevated);
+  border: 1px solid var(--app-border);
+  border-left: 4px solid var(--app-accent);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px var(--app-card-shadow-soft);
+  color: var(--app-text);
+  cursor: pointer;
+  display: grid;
+  font: inherit;
+  gap: 4px;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  padding: 8px 10px;
+  position: absolute;
+  text-align: left;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.task-graph-node:hover,
+.task-graph-node:focus-visible {
+  border-color: var(--app-accent);
+  box-shadow: 0 10px 24px var(--app-card-shadow);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.task-graph-node[data-blocked="true"] {
+  border-left-color: var(--app-graph-edge-blocking);
+}
+
+.task-graph-node[data-complete="true"] {
+  border-left-color: var(--app-border-strong);
+  opacity: 0.72;
+}
+
+.task-graph-node[data-status="denied"] {
+  border-left-color: var(--mantine-color-red-6);
+}
+
+.task-graph-node[data-faded="true"] {
+  box-shadow: none;
+  opacity: 0.25;
+}
+
+.task-graph-node[data-focused="true"] {
+  border-color: var(--app-accent);
+  box-shadow: 0 10px 24px var(--app-card-shadow);
+}
+
+.task-graph-selection {
+  background: var(--app-surface-subtle);
+  border: 1px solid var(--app-border-muted);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
+.task-graph-node-head {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  justify-content: space-between;
+}
+
+.task-graph-node-title {
+  color: var(--app-text-strong);
+  display: -webkit-box;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.task-graph-node-meta {
+  align-items: center;
+  color: var(--app-dimmed);
+  display: flex;
+  font-size: 11px;
+  gap: 8px;
+  min-height: 14px;
+}
+
+.task-graph-node-blocked {
+  align-items: center;
+  color: var(--app-graph-edge-blocking);
+  display: inline-flex;
+  gap: 3px;
 }
 
 .board-shell {
@@ -754,11 +985,11 @@ body {
   gap: 8px;
 }
 
-.task-modal-body .mantine-Modal-fullscreenClose {
-  color: var(--app-sidebar-text);
-  right: 16px;
-  top: 16px;
-  z-index: 100;
+.task-modal-nav {
+  align-items: center;
+  border: 1px solid var(--app-border);
+  border-radius: 999px;
+  padding: 2px 6px;
 }
 
 .task-modal-body {
