@@ -11,8 +11,11 @@ import type {
   CreateIdeaInput,
   CreateProjectInput,
   Idea,
+  ImportProjectOptions,
+  ImportProjectResult,
   PlanDocument,
   Project,
+  ProjectBundle,
   ReadinessEvent,
   SetCardReadinessInput,
   UpdateApiTokenInput,
@@ -47,6 +50,11 @@ export type CreatedApiToken = {
 
 export interface BoardDataStore {
   getState(access: AccessContext): Promise<BoardData>;
+  exportProject(id: string): Promise<ProjectBundle>;
+  importProject(
+    bundle: ProjectBundle,
+    options: ImportProjectOptions,
+  ): Promise<ImportProjectResult>;
   listProjects(access: AccessContext): Promise<Project[]>;
   createProject(input: CreateProjectInput): Promise<Project>;
   updateProject(id: string, input: UpdateProjectInput): Promise<Project>;

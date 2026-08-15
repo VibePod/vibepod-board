@@ -10,6 +10,7 @@ import {
   normalizeDependencyIds,
   type TaskWorkOrder,
 } from "../shared/dependencies.js";
+import { parseProjectBundle } from "../shared/projectBundle.js";
 import {
   type ActivityEvent,
   type ApiTokenSummary,
@@ -24,8 +25,11 @@ import {
   type CreateIdeaInput,
   type CreateProjectInput,
   type Idea,
+  type ImportProjectOptions,
+  type ImportProjectResult,
   type PlanDocument,
   type Project,
+  type ProjectBundle,
   type ReadinessEvent,
   type SetCardReadinessInput,
   type UpdateApiTokenInput,
@@ -43,6 +47,7 @@ import {
   type CreatedApiToken,
   defaultProjectIdForCreate,
   filterProjectIds,
+  tokenAccess,
 } from "./store.js";
 
 const emptyData = (): BoardData => ({
@@ -248,6 +253,108 @@ export class PostgresBoardStore implements BoardDataStore {
       documents: await this.listDocuments(access),
       activity: await this.listActivity(access),
     };
+  }
+
+  async exportProject(id: string): Promise<ProjectBundle> {
+    const project = await this.requireProject(this.pool, id);
+    const access = tokenAccess("project-export", [project.id]);
+    const ideas = await this.listIdeas(access, project.id);
+    const events = ideas.length
+      ? await this.pool.query<ReadinessEventRow>(
+          "select * from idea_readiness_events where idea_id = any($1::text[]) order by created_at desc",
+          [ideas.map((idea) => idea.id)],
+        )
+      : { rows: [] as ReadinessEventRow[] };
+
+    return parseProjectBundle({
+      bundleVersion: 1,
+      exportedAt: nowIso(),
+      project,
+      ideas,
+      boardCards: await this.listBoardCards(access, project.id),
+      readinessEvents: events.rows.map(readinessEventFromRow),
+      documents: await this.listDocuments(access, project.id),
+    });
+  }
+
+  async importProject(
+    input: ProjectBundle,
+    options: ImportProjectOptions,
+  ): Promise<ImportProjectResult> {
+    const bundle = parseProjectBundle(input);
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const existingByKey = await client.query<ProjectRow>(
+        "select * from projects where key = $1",
+        [bundle.project.key],
+      );
+      const existing = existingByKey.rows[0];
+      if (existing && !options.replaceExisting) {
+        throw new Error(
+          `Project key ${bundle.project.key} already exists; replacement confirmation is required`,
+        );
+      }
+
+      const destinationProjectId = existing?.id ?? bundle.project.id;
+      if (!existing) {
+        const idCollision = await client.query<ProjectRow>(
+          "select * from projects where id = $1",
+          [bundle.project.id],
+        );
+        if (idCollision.rows[0]) {
+          throw new Error(`Project ID is already used: ${bundle.project.id}`);
+        }
+      }
+      await this.assertImportedIdsAvailable(
+        client,
+        bundle,
+        destinationProjectId,
+      );
+
+      if (existing) {
+        await client.query("delete from board_cards where project_id = $1", [
+          destinationProjectId,
+        ]);
+        await client.query("delete from documents where project_id = $1", [
+          destinationProjectId,
+        ]);
+        await client.query("delete from ideas where project_id = $1", [
+          destinationProjectId,
+        ]);
+        await client.query(
+          `update projects
+           set title = $2, summary = $3, created_at = $4, updated_at = $5
+           where id = $1`,
+          [
+            destinationProjectId,
+            bundle.project.title,
+            bundle.project.summary,
+            bundle.project.createdAt,
+            bundle.project.updatedAt,
+          ],
+        );
+        await this.insertImportedChildren(client, bundle, destinationProjectId);
+      } else {
+        await this.insertImportedProject(client, bundle, destinationProjectId);
+      }
+      await this.addActivity(
+        client,
+        "project.imported",
+        `Imported project: ${bundle.project.title}`,
+        nowIso(),
+      );
+      await client.query("commit");
+      return {
+        item: { ...bundle.project, id: destinationProjectId },
+        replaced: Boolean(existing),
+      };
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async listProjects(access?: AccessContext): Promise<Project[]> {
@@ -1734,6 +1841,192 @@ export class PostgresBoardStore implements BoardDataStore {
        where id = $1`,
       [ideaId, options.githubIssueUrl, options.githubIssueNumber, timestamp],
     );
+  }
+
+  private async assertImportedIdsAvailable(
+    client: PoolClient,
+    bundle: ProjectBundle,
+    destinationProjectId: string,
+  ) {
+    const assertTableIdsAvailable = async (
+      entity: string,
+      table: "ideas" | "board_cards" | "documents",
+      ids: string[],
+    ) => {
+      if (ids.length === 0) {
+        return;
+      }
+      const collision = await client.query<{ id: string }>(
+        `select id from ${table}
+         where id = any($1::text[]) and project_id <> $2
+         limit 1`,
+        [ids, destinationProjectId],
+      );
+      if (collision.rows[0]) {
+        throw new Error(
+          `${entity} ID is already used by another project: ${collision.rows[0].id}`,
+        );
+      }
+    };
+
+    await assertTableIdsAvailable(
+      "Idea",
+      "ideas",
+      bundle.ideas.map((idea) => idea.id),
+    );
+    await assertTableIdsAvailable(
+      "Board card",
+      "board_cards",
+      bundle.boardCards.map((card) => card.id),
+    );
+    await assertTableIdsAvailable(
+      "Document",
+      "documents",
+      bundle.documents.map((document) => document.id),
+    );
+
+    const readinessIds = bundle.readinessEvents.map((event) => event.id);
+    if (readinessIds.length > 0) {
+      const collision = await client.query<{ id: string }>(
+        `select events.id
+         from idea_readiness_events events
+         join ideas on ideas.id = events.idea_id
+         where events.id = any($1::text[]) and ideas.project_id <> $2
+         limit 1`,
+        [readinessIds, destinationProjectId],
+      );
+      if (collision.rows[0]) {
+        throw new Error(
+          `Readiness event ID is already used by another project: ${collision.rows[0].id}`,
+        );
+      }
+    }
+  }
+
+  private async insertImportedProject(
+    client: PoolClient,
+    bundle: ProjectBundle,
+    destinationProjectId: string,
+  ) {
+    await client.query(
+      `insert into projects (id, key, title, summary, created_at, updated_at)
+       values ($1, $2, $3, $4, $5, $6)`,
+      [
+        destinationProjectId,
+        bundle.project.key,
+        bundle.project.title,
+        bundle.project.summary,
+        bundle.project.createdAt,
+        bundle.project.updatedAt,
+      ],
+    );
+    await this.insertImportedChildren(client, bundle, destinationProjectId);
+  }
+
+  private async insertImportedChildren(
+    client: PoolClient,
+    bundle: ProjectBundle,
+    destinationProjectId: string,
+  ) {
+    for (const idea of bundle.ideas) {
+      await client.query(
+        `insert into ideas (
+           id, project_id, task_number, title, summary, details, status, labels,
+           acceptance_criteria, github_issue_url, github_issue_number, repository_local_path,
+           repository_remote_url, readiness_score, readiness_reason, readiness_evaluated_at,
+           created_at, updated_at
+         )
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+        [
+          idea.id,
+          destinationProjectId,
+          idea.taskNumber,
+          idea.title,
+          idea.summary,
+          idea.details,
+          idea.status,
+          JSON.stringify(idea.labels),
+          JSON.stringify(idea.acceptanceCriteria),
+          idea.githubIssueUrl ?? null,
+          idea.githubIssueNumber ?? null,
+          idea.repositoryLocalPath ?? null,
+          idea.repositoryRemoteUrl ?? null,
+          idea.readinessScore ?? null,
+          idea.readinessReason ?? null,
+          idea.readinessEvaluatedAt ?? null,
+          idea.createdAt,
+          idea.updatedAt,
+        ],
+      );
+    }
+
+    for (const idea of bundle.ideas) {
+      for (const dependsOnId of new Set(idea.dependsOn)) {
+        await client.query(
+          `insert into task_dependencies (idea_id, depends_on_idea_id, created_at)
+           values ($1, $2, $3)`,
+          [idea.id, dependsOnId, idea.updatedAt],
+        );
+      }
+    }
+
+    for (const card of bundle.boardCards) {
+      await client.query(
+        `insert into board_cards (
+           id, project_id, idea_id, title, details, column_name, branch_name, github_issue_url,
+           github_issue_number, repository_local_path, repository_remote_url, labels,
+           readiness_score, readiness_reason, readiness_evaluated_at, created_at, updated_at
+         )
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+        [
+          card.id,
+          destinationProjectId,
+          card.ideaId ?? null,
+          card.title,
+          card.details,
+          card.column,
+          card.branchName ?? null,
+          card.githubIssueUrl ?? null,
+          card.githubIssueNumber ?? null,
+          card.repositoryLocalPath ?? null,
+          card.repositoryRemoteUrl ?? null,
+          JSON.stringify(card.labels),
+          card.readinessScore ?? null,
+          card.readinessReason ?? null,
+          card.readinessEvaluatedAt ?? null,
+          card.createdAt,
+          card.updatedAt,
+        ],
+      );
+    }
+
+    for (const event of bundle.readinessEvents) {
+      await client.query(
+        `insert into idea_readiness_events (id, idea_id, score, reason, created_at)
+         values ($1, $2, $3, $4, $5)`,
+        [event.id, event.ideaId, event.score, event.reason, event.createdAt],
+      );
+    }
+
+    for (const document of bundle.documents) {
+      await client.query(
+        `insert into documents (
+           id, project_id, title, kind, content, linked_idea_ids, linked_card_ids, created_at, updated_at
+         )
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          document.id,
+          destinationProjectId,
+          document.title,
+          document.kind,
+          document.content,
+          JSON.stringify(document.linkedIdeaIds),
+          JSON.stringify(document.linkedCardIds),
+          document.createdAt,
+          document.updatedAt,
+        ],
+      );
+    }
   }
 
   private async addActivity(
