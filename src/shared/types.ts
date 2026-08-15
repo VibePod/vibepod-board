@@ -111,6 +111,25 @@ export type BoardData = {
   activity: ActivityEvent[];
 };
 
+export type ProjectBundle = {
+  bundleVersion: 1;
+  exportedAt: string;
+  project: Project;
+  ideas: Idea[];
+  boardCards: BoardCard[];
+  readinessEvents: ReadinessEvent[];
+  documents: PlanDocument[];
+};
+
+export type ImportProjectOptions = {
+  replaceExisting: boolean;
+};
+
+export type ImportProjectResult = {
+  item: Project;
+  replaced: boolean;
+};
+
 export type CreateProjectInput = {
   key: string;
   title: string;
