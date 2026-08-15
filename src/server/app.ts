@@ -8,6 +8,7 @@ import express, {
 } from "express";
 import { z } from "zod";
 
+import { projectBundleSchema } from "../shared/projectBundle.js";
 import { boardColumns, documentKinds, ideaStatuses } from "../shared/types.js";
 import {
   type AdminSessionManager,
@@ -110,6 +111,13 @@ const updateProjectSchema = z.object({
   summary: z.string().optional(),
 });
 
+const importProjectRequestSchema = z
+  .object({
+    bundle: projectBundleSchema,
+    replaceExisting: z.boolean().optional().default(false),
+  })
+  .strict();
+
 const documentSchema = z.object({
   projectId: z.string().optional(),
   title: z.string().trim().min(1),
@@ -141,6 +149,7 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
   const app = express();
   app.disable("x-powered-by");
   app.use(cors());
+  app.use("/api/projects/import", express.json({ limit: "10mb" }));
   app.use(express.json({ limit: "2mb" }));
 
   app.get("/api/health", (_req, res) => {
@@ -214,6 +223,18 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
   );
 
   app.post(
+    "/api/projects/import",
+    requireAdmin(store, sessions),
+    asyncHandler(async (req, res) => {
+      const { bundle, replaceExisting } = importProjectRequestSchema.parse(
+        req.body,
+      );
+      const result = await store.importProject(bundle, { replaceExisting });
+      res.status(result.replaced ? 200 : 201).json(result);
+    }),
+  );
+
+  app.post(
     "/api/projects",
     requireAdmin(store, sessions),
     asyncHandler(async (req, res) => {
@@ -231,6 +252,18 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
         updateProjectSchema.parse(req.body),
       );
       res.json({ item });
+    }),
+  );
+
+  app.get(
+    "/api/projects/:id/export",
+    requireAdmin(store, sessions),
+    asyncHandler(async (req, res) => {
+      const bundle = await store.exportProject(routeParam(req.params.id));
+      res
+        .attachment(`${bundle.project.key}-project.json`)
+        .type("application/json")
+        .send(JSON.stringify(bundle, null, 2));
     }),
   );
 
@@ -578,6 +611,17 @@ const accessFromResponse = (req: Request): AccessContext =>
 
 const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
   const message = error instanceof Error ? error.message : "Unknown error";
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "type" in error &&
+    error.type === "entity.too.large"
+  ) {
+    res
+      .status(413)
+      .json({ error: "Project import file must be 10 MiB or smaller" });
+    return;
+  }
   if (error instanceof z.ZodError) {
     res
       .status(400)
@@ -612,6 +656,10 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     return;
   }
   if (message.includes("already used")) {
+    res.status(409).json({ error: message });
+    return;
+  }
+  if (message.includes("replacement confirmation is required")) {
     res.status(409).json({ error: message });
     return;
   }

@@ -3,7 +3,9 @@ import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { createAdminSessionManager } from "../src/server/auth.js";
+import { initializeDatabase } from "../src/server/db.js";
 import type { PostgresBoardStore } from "../src/server/storage.js";
+import { resetDatabase } from "./helpers/postgres.js";
 import { closeTestPool, createTestStore } from "./helpers/store.js";
 
 let pool: Pool;
@@ -66,6 +68,111 @@ describe("API", () => {
     expect((await agent.get("/api/auth/me").expect(200)).body).toEqual({
       authenticated: true,
       username: "admin",
+    });
+  });
+
+  it("exports projects only for admins", async () => {
+    const { app } = createAuthedApp();
+    const project = await store.createProject({
+      key: "APP",
+      title: "Application",
+    });
+    const createdToken = await store.createApiToken({
+      name: "Project client",
+      projectIds: [project.id],
+    });
+
+    await request(app).get(`/api/projects/${project.id}/export`).expect(401);
+    await request(app)
+      .get(`/api/projects/${project.id}/export`)
+      .set("Authorization", `Bearer ${createdToken.token}`)
+      .expect(403);
+
+    const agent = await login(app);
+    const response = await agent
+      .get(`/api/projects/${project.id}/export`)
+      .expect(200)
+      .expect("Content-Type", /application\/json/)
+      .expect("Content-Disposition", 'attachment; filename="APP-project.json"');
+    expect(response.body).toMatchObject({
+      bundleVersion: 1,
+      project: { id: project.id, key: "APP" },
+    });
+    await agent.get("/api/projects/missing/export").expect(404);
+  });
+
+  it("creates and replaces projects through the import endpoint", async () => {
+    const { app } = createAuthedApp();
+    const source = await store.createProject({
+      key: "APP",
+      title: "Application",
+    });
+    await store.createIdea(
+      { kind: "admin", username: "admin" },
+      { projectId: source.id, title: "Portable task" },
+    );
+    const bundle = await store.exportProject(source.id);
+    const createdToken = await store.createApiToken({
+      name: "Project client",
+      projectIds: [source.id],
+    });
+
+    await request(app)
+      .post("/api/projects/import")
+      .send({ bundle, replaceExisting: false })
+      .expect(401);
+    await request(app)
+      .post("/api/projects/import")
+      .set("Authorization", `Bearer ${createdToken.token}`)
+      .send({ bundle, replaceExisting: false })
+      .expect(403);
+
+    await resetDatabase(pool);
+    await initializeDatabase(pool);
+    const agent = await login(app);
+    const created = await agent
+      .post("/api/projects/import")
+      .send({ bundle, replaceExisting: false })
+      .expect(201);
+    expect(created.body).toMatchObject({
+      item: { id: source.id, key: "APP" },
+      replaced: false,
+    });
+
+    await agent
+      .post("/api/projects/import")
+      .send({ bundle, replaceExisting: false })
+      .expect(409);
+    const replaced = await agent
+      .post("/api/projects/import")
+      .send({ bundle, replaceExisting: true })
+      .expect(200);
+    expect(replaced.body).toMatchObject({
+      item: { id: source.id, key: "APP" },
+      replaced: true,
+    });
+  });
+
+  it("validates and limits project import payloads", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+
+    await agent
+      .post("/api/projects/import")
+      .send({ bundle: { bundleVersion: 99 }, replaceExisting: false })
+      .expect(400);
+
+    const response = await agent
+      .post("/api/projects/import")
+      .set("Content-Type", "application/json")
+      .send(
+        JSON.stringify({
+          bundle: { padding: "x".repeat(10 * 1024 * 1024) },
+        }),
+      )
+      .expect(413);
+    expect(response.body).toEqual({
+      error: "Project import file must be 10 MiB or smaller",
     });
   });
 
