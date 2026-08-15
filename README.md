@@ -50,6 +50,8 @@ GITHUB_REPOSITORY=owner/repo
 - `GET /api/projects`
 - `POST /api/projects`
 - `PATCH /api/projects/:id`
+- `GET /api/projects/:id/export`
+- `POST /api/projects/import`
 - `GET /api/ideas`
 - `POST /api/ideas`
 - `PATCH /api/ideas/:id`
@@ -73,6 +75,19 @@ GITHUB_REPOSITORY=owner/repo
 `GET /api/ideas`, `GET /api/board`, `GET /api/documents`, and `GET /api/work-order` accept `projectId` query params for project-scoped reads.
 
 Browser/full REST access uses the admin session cookie. Project-scoped API clients use `Authorization: Bearer <token>`.
+
+## Project Import and Export
+
+Admins can download a project's data with **Export** on its project card and
+upload a project bundle with **Import Project** on the Projects screen. Bundles
+include the project, tasks and dependencies, board cards, readiness history,
+and documents. API tokens and global activity history are not copied.
+
+Imports match projects by their 1–3 letter project key. A new key creates a new
+project. An existing key requires explicit confirmation and replaces that
+project's current data in one transaction. Replacement retains the destination
+project's internal ID, so its API-token assignments remain intact. Project
+bundle uploads are limited to 10 MiB.
 
 ## MCP
 

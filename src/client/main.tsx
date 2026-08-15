@@ -11,6 +11,7 @@ import {
   Code,
   createTheme,
   Divider,
+  FileInput,
   Group,
   MantineProvider,
   Modal,
@@ -34,6 +35,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Columns3,
+  Download,
   ExternalLink,
   FileText,
   FolderKanban,
@@ -52,6 +54,7 @@ import {
   RefreshCcw,
   Save,
   Sun,
+  Upload,
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -74,9 +77,11 @@ import {
   documentKinds,
   type Idea,
   type IdeaStatus,
+  type ImportProjectResult,
   ideaStatuses,
   type PlanDocument,
   type Project,
+  type ProjectBundle,
   type ReadinessEvent,
 } from "../shared/types.js";
 import vibepodIconUrl from "./assets/icon.png";
@@ -98,6 +103,12 @@ import {
   type NavigationView,
   parseNavigationPath,
 } from "./navigation.js";
+import {
+  downloadResponse,
+  parseProjectBundleText,
+  projectBundlePreview,
+  projectExportFileName,
+} from "./projectTransfer.js";
 import { githubRemoteToHttpsUrl } from "./repositoryUtils.js";
 import { TaskGraph } from "./TaskGraph.js";
 import {
@@ -183,6 +194,12 @@ type ProjectModalState = {
   draft: ProjectDraft;
 };
 
+type ProjectImportState = {
+  bundle: ProjectBundle | null;
+  error: string;
+  isSubmitting: boolean;
+};
+
 type CreatedTokenState = {
   name: string;
   token: string;
@@ -208,6 +225,12 @@ const emptyProjectDraft = (): ProjectDraft => ({
   key: "",
   title: "",
   summary: "",
+});
+
+const emptyProjectImportState = (): ProjectImportState => ({
+  bundle: null,
+  error: "",
+  isSubmitting: false,
 });
 
 const emptyNoteDraft = (): NoteDraft => ({
@@ -306,6 +329,9 @@ const App = () => {
   const [projectModal, setProjectModal] = useState<ProjectModalState | null>(
     null,
   );
+  const [projectImport, setProjectImport] = useState<ProjectImportState | null>(
+    null,
+  );
   const [taskModal, setTaskModal] = useState<TaskModalState | null>(null);
   const [descriptionMode, setDescriptionMode] =
     useState<MarkdownFieldMode>("edit");
@@ -332,6 +358,7 @@ const App = () => {
     null,
   );
   const [error, setError] = useState<string>("");
+  const [notice, setNotice] = useState<string>("");
   const [isLoading, setIsLoading] = useState(true);
   const [isMcpGuideOpen, setIsMcpGuideOpen] = useState(false);
   const [isTokenManagerOpen, setIsTokenManagerOpen] = useState(false);
@@ -537,6 +564,7 @@ const App = () => {
       !isMcpGuideOpen &&
       !isTokenManagerOpen &&
       !projectModal &&
+      !projectImport &&
       !taskModal &&
       !taskViewModal &&
       !noteModal &&
@@ -550,6 +578,7 @@ const App = () => {
         setIsMcpGuideOpen(false);
         setIsTokenManagerOpen(false);
         setProjectModal(null);
+        setProjectImport(null);
         setTaskModal(null);
         setTaskViewModal(null);
         setNoteModal(null);
@@ -563,6 +592,7 @@ const App = () => {
     isMcpGuideOpen,
     isTokenManagerOpen,
     projectModal,
+    projectImport,
     taskModal,
     taskViewModal,
     noteModal,
@@ -572,6 +602,9 @@ const App = () => {
   const selectedProject = state.projects.find(
     (project) => project.id === selectedProjectId,
   );
+  const importPreview = projectImport?.bundle
+    ? projectBundlePreview(projectImport.bundle, state.projects)
+    : null;
   const projectIdeas = selectedProject
     ? state.ideas.filter((idea) => idea.projectId === selectedProject.id)
     : [];
@@ -812,6 +845,97 @@ const App = () => {
       await loadState();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save project");
+    }
+  };
+
+  const openProjectImport = () => {
+    setError("");
+    setNotice("");
+    setProjectImport(emptyProjectImportState());
+  };
+
+  const selectProjectImportFile = async (file: File | null) => {
+    setProjectImport((current) =>
+      current ? { ...current, bundle: null, error: "" } : current,
+    );
+    if (!file) {
+      return;
+    }
+    try {
+      const bundle = parseProjectBundleText(await file.text());
+      setProjectImport((current) =>
+        current ? { ...current, bundle, error: "" } : current,
+      );
+    } catch (err) {
+      setProjectImport((current) =>
+        current
+          ? {
+              ...current,
+              bundle: null,
+              error:
+                err instanceof Error
+                  ? err.message
+                  : "Failed to read project file",
+            }
+          : current,
+      );
+    }
+  };
+
+  const exportProject = async (project: Project) => {
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch(`/api/projects/${project.id}/export`, {
+        credentials: "include",
+      });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(body.error ?? `Request failed: ${response.status}`);
+      }
+      await downloadResponse(response, projectExportFileName(project));
+      setNotice(`Project ${project.key} exported successfully.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to export project");
+    }
+  };
+
+  const submitProjectImport = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!projectImport?.bundle) {
+      return;
+    }
+    const bundle = projectImport.bundle;
+    const preview = projectBundlePreview(bundle, state.projects);
+    setProjectImport((current) =>
+      current ? { ...current, error: "", isSubmitting: true } : current,
+    );
+    setError("");
+    setNotice("");
+    try {
+      await api<ImportProjectResult>("/api/projects/import", {
+        method: "POST",
+        body: JSON.stringify({
+          bundle,
+          replaceExisting: Boolean(preview.existingProjectId),
+        }),
+      });
+      await loadState();
+      setProjectImport(null);
+      setNotice(`Project ${bundle.project.key} imported successfully.`);
+    } catch (err) {
+      setProjectImport((current) =>
+        current
+          ? {
+              ...current,
+              error:
+                err instanceof Error ? err.message : "Failed to import project",
+              isSubmitting: false,
+            }
+          : current,
+      );
     }
   };
 
@@ -1192,13 +1316,23 @@ const App = () => {
           </div>
           <Group className="topbar-actions" gap="xs">
             {activeView === "projects" && (
-              <Button
-                type="button"
-                leftSection={<Plus size={18} />}
-                onClick={openCreateProject}
-              >
-                Add Project
-              </Button>
+              <>
+                <Button
+                  type="button"
+                  variant="light"
+                  leftSection={<Upload size={18} />}
+                  onClick={openProjectImport}
+                >
+                  Import Project
+                </Button>
+                <Button
+                  type="button"
+                  leftSection={<Plus size={18} />}
+                  onClick={openCreateProject}
+                >
+                  Add Project
+                </Button>
+              </>
             )}
             {activeView === "ideas" && selectedProject && (
               <Button
@@ -1233,6 +1367,11 @@ const App = () => {
         {error && (
           <Alert color="red" variant="light">
             {error}
+          </Alert>
+        )}
+        {notice && (
+          <Alert color="green" variant="light">
+            {notice}
           </Alert>
         )}
         {isLoading ? (
@@ -1321,6 +1460,19 @@ const App = () => {
                         </Badge>
                       </Group>
                       <Group mt="auto" justify="flex-end">
+                        <Button
+                          type="button"
+                          variant="light"
+                          color="gray"
+                          leftSection={<Download size={16} />}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void exportProject(project);
+                          }}
+                        >
+                          Export
+                        </Button>
                         <Button
                           type="button"
                           variant="light"
@@ -1920,6 +2072,90 @@ const App = () => {
           </Stack>
         )}
       </section>
+
+      <Modal
+        opened={!!projectImport}
+        onClose={() => {
+          if (!projectImport?.isSubmitting) {
+            setProjectImport(null);
+          }
+        }}
+        title="Import Project"
+        centered
+        size="lg"
+        closeOnClickOutside={!projectImport?.isSubmitting}
+      >
+        {projectImport && (
+          <form
+            className="modal-form"
+            onSubmit={(event) => void submitProjectImport(event)}
+          >
+            <Stack gap="md">
+              <FileInput
+                label="Project JSON file"
+                placeholder="Choose a project export"
+                accept="application/json,.json"
+                clearable
+                disabled={projectImport.isSubmitting}
+                onChange={(file) => void selectProjectImportFile(file)}
+              />
+              {projectImport.error && (
+                <Alert color="red" variant="light">
+                  {projectImport.error}
+                </Alert>
+              )}
+              {importPreview && (
+                <Stack gap="sm">
+                  <Text fw={700}>
+                    {importPreview.title} ({importPreview.key})
+                  </Text>
+                  <Group gap="xs">
+                    <Badge variant="light" color="green">
+                      {importPreview.tasks} tasks
+                    </Badge>
+                    <Badge variant="light" color="blue">
+                      {importPreview.cards}{" "}
+                      {importPreview.cards === 1 ? "board card" : "board cards"}
+                    </Badge>
+                    <Badge variant="light" color="grape">
+                      {importPreview.documents}{" "}
+                      {importPreview.documents === 1 ? "document" : "documents"}
+                    </Badge>
+                  </Group>
+                  {importPreview.existingProjectId && (
+                    <Alert color="red" variant="light">
+                      This will replace all current project data for{" "}
+                      {importPreview.key}. API token access to the destination
+                      project will be retained.
+                    </Alert>
+                  )}
+                </Stack>
+              )}
+              <Group justify="flex-end">
+                <Button
+                  type="button"
+                  variant="default"
+                  disabled={projectImport.isSubmitting}
+                  onClick={() => setProjectImport(null)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  color={importPreview?.existingProjectId ? "red" : "teal"}
+                  loading={projectImport.isSubmitting}
+                  disabled={!projectImport.bundle}
+                  leftSection={<Upload size={16} />}
+                >
+                  {importPreview?.existingProjectId
+                    ? "Replace Project"
+                    : "Import Project"}
+                </Button>
+              </Group>
+            </Stack>
+          </form>
+        )}
+      </Modal>
 
       <Modal
         opened={!!projectModal}
