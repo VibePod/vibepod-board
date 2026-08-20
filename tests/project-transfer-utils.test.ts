@@ -150,6 +150,9 @@ describe("project transfer browser helpers", () => {
       href: "blob:project-export",
       download: "APP-project.json",
     });
+    // Revocation is deferred so the browser can start the download first.
+    expect(revokeObjectUrl).not.toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(revokeObjectUrl).toHaveBeenCalledWith("blob:project-export");
     expect(document.querySelector("a[download]")).toBeNull();
   });

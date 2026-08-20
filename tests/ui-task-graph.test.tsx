@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { MantineProvider } from "@mantine/core";
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -26,7 +26,10 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  document.body.innerHTML = "";
+  // Unmount rather than wiping the DOM: several tests end with an edge
+  // selected, and only unmounting runs the effect cleanup that drops the
+  // window click and keydown listeners.
+  cleanup();
 });
 
 const task = (

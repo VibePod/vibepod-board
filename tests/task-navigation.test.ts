@@ -13,6 +13,9 @@ const task = (id: string): Idea => ({
   status: "idea",
   labels: [],
   acceptanceCriteria: [],
+  dependsOn: [],
+  blocks: [],
+  blockedBy: [],
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
 });

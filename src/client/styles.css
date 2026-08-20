@@ -419,8 +419,15 @@ body {
   background: var(--app-graph-edge-satisfied);
 }
 
+/*
+ * The canvas is sized to the whole dependency graph, so without a ceiling a
+ * large project pushes the view switch and the filters off screen. Capping the
+ * viewport keeps them in place and scrolls the graph in both directions.
+ */
 .task-graph-viewport {
+  max-height: min(65vh, 720px);
   overflow: auto;
+  overscroll-behavior: contain;
   padding-bottom: 4px;
 }
 

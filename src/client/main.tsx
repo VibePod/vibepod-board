@@ -56,7 +56,13 @@ import {
   Sun,
   Upload,
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useEffect, useState } from "react";
+import {
+  type FormEvent,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { createRoot } from "react-dom/client";
 import { buildWorkOrder } from "../shared/dependencies.js";
 import {
@@ -455,6 +461,16 @@ const App = () => {
     await loadTokens();
   };
 
+  // The task modal handlers are recreated on every render and are declared far
+  // below, after the derived task lists they read. Keeping the latest ones in a
+  // ref lets the key listeners stay subscribed to `taskModal` alone while still
+  // seeing the current filters and draft.
+  const taskModalHandlersRef = useRef({
+    save: (_event: FormEvent) => {},
+    navigate: (_direction: number) => {},
+    close: () => {},
+  });
+
   // Keyboard shortcuts for task modal
   useEffect(() => {
     if (!taskModal) {
@@ -462,16 +478,11 @@ const App = () => {
     }
 
     const handleTaskModalKeydown = (event: KeyboardEvent) => {
-      // Ctrl+S to save
+      // Ctrl+S to save. Escape is left to the shared close handler below, which
+      // applies the unsaved-changes guard.
       if ((event.ctrlKey || event.metaKey) && event.key === "s") {
         event.preventDefault();
-        void saveTaskWithoutClose(event as unknown as FormEvent);
-        return;
-      }
-
-      // Escape closes the modal
-      if (event.key === "Escape") {
-        setTaskModal(null);
+        taskModalHandlersRef.current.save(event as unknown as FormEvent);
         return;
       }
 
@@ -487,14 +498,14 @@ const App = () => {
         if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
           event.preventDefault();
           const direction = event.key === "ArrowLeft" ? -1 : 1;
-          navigateToAdjacentTask(direction);
+          taskModalHandlersRef.current.navigate(direction);
         }
       }
     };
 
     window.addEventListener("keydown", handleTaskModalKeydown);
     return () => window.removeEventListener("keydown", handleTaskModalKeydown);
-  }, [taskModal, selectedProjectId, state.ideas]);
+  }, [taskModal]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: bootstrap must run once on mount only
   useEffect(() => {
@@ -574,16 +585,20 @@ const App = () => {
     }
 
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setIsMcpGuideOpen(false);
-        setIsTokenManagerOpen(false);
-        setProjectModal(null);
-        setProjectImport(null);
-        setTaskModal(null);
-        setTaskViewModal(null);
-        setNoteModal(null);
-        setReadinessModal(null);
+      if (event.key !== "Escape") {
+        return;
       }
+      setIsMcpGuideOpen(false);
+      setIsTokenManagerOpen(false);
+      setProjectModal(null);
+      // An import in flight owns the dialog until the request settles, the same
+      // rule the modal's own onClose and closeOnClickOutside guards apply.
+      setProjectImport((current) => (current?.isSubmitting ? current : null));
+      // Routed through closeTaskModal so the unsaved-changes guard applies.
+      taskModalHandlersRef.current.close();
+      setTaskViewModal(null);
+      setNoteModal(null);
+      setReadinessModal(null);
     };
 
     window.addEventListener("keydown", closeOnEscape);
@@ -608,18 +623,6 @@ const App = () => {
   const projectIdeas = selectedProject
     ? state.ideas.filter((idea) => idea.projectId === selectedProject.id)
     : [];
-  const taskModalNavigation = taskNavigationFor(
-    projectIdeas,
-    taskModal?.mode === "edit" ? taskModal.draft.id : undefined,
-  );
-  const navigateToAdjacentTask = (direction: number) => {
-    if (!taskModalNavigation || taskModalNavigation.total < 2) {
-      return;
-    }
-    openEditTask(
-      direction < 0 ? taskModalNavigation.previous : taskModalNavigation.next,
-    );
-  };
   const projectColumns = selectedProject
     ? filterColumnsByProject(state.columns, selectedProject.id)
     : emptyColumns;
@@ -691,6 +694,20 @@ const App = () => {
     search: taskSearch,
     workOrder: workOrderPositions,
   });
+  // Navigation follows the list the user actually sees, so the counter matches
+  // the filtered total and the arrows never jump to a hidden task.
+  const taskModalNavigation = taskNavigationFor(
+    visibleProjectIdeas,
+    taskModal?.mode === "edit" ? taskModal.draft.id : undefined,
+  );
+  const navigateToAdjacentTask = (direction: number) => {
+    if (!taskModalNavigation || taskModalNavigation.total < 2) {
+      return;
+    }
+    openEditTask(
+      direction < 0 ? taskModalNavigation.previous : taskModalNavigation.next,
+    );
+  };
   const showProjectSidebar = shouldShowProjectSidebar(
     activeView,
     !!selectedProject,
@@ -973,23 +990,33 @@ const App = () => {
 
   const hasTaskModalChanges = () => {
     if (!taskModal) return false;
-    if (taskModal.mode === "create") return true;
-    if (!taskModal.originalDraft) return false;
-    const d = taskModal.draft;
-    const o = taskModal.originalDraft;
+    // A create draft is compared against a blank one, so closing an untouched
+    // "Add Task" dialog does not count as discarding work.
+    const baseline =
+      taskModal.mode === "create"
+        ? emptyTaskDraft()
+        : (taskModal.originalDraft ?? null);
+    if (!baseline) return false;
+    const draft = taskModal.draft;
     return (
-      d.title !== o.title ||
-      d.description !== o.description ||
-      d.acceptanceCriteria !== o.acceptanceCriteria ||
-      d.status !== o.status ||
-      JSON.stringify(d.labels) !== JSON.stringify(o.labels) ||
-      JSON.stringify(d.dependsOn) !== JSON.stringify(o.dependsOn) ||
-      d.repositoryLocalPath !== o.repositoryLocalPath ||
-      d.repositoryRemoteUrl !== o.repositoryRemoteUrl
+      draft.title !== baseline.title ||
+      draft.description !== baseline.description ||
+      draft.acceptanceCriteria !== baseline.acceptanceCriteria ||
+      draft.status !== baseline.status ||
+      JSON.stringify(draft.labels) !== JSON.stringify(baseline.labels) ||
+      JSON.stringify(draft.dependsOn) !== JSON.stringify(baseline.dependsOn) ||
+      draft.repositoryLocalPath !== baseline.repositoryLocalPath ||
+      draft.repositoryRemoteUrl !== baseline.repositoryRemoteUrl
     );
   };
 
   const closeTaskModal = () => {
+    if (
+      hasTaskModalChanges() &&
+      !window.confirm("Discard unsaved changes to this task?")
+    ) {
+      return;
+    }
     setTaskModal(null);
   };
 
@@ -1001,39 +1028,57 @@ const App = () => {
     setError("");
     const payload = taskDraftToIdeaPayload(taskModal.draft);
 
-    if (taskModal.mode === "create") {
-      const created = await api<{ item: Idea }>("/api/ideas", {
-        method: "POST",
-        body: JSON.stringify({
-          ...payload,
-          projectId: selectedProject?.id,
-        }),
-      });
-      if (taskModal.draft.status !== "idea") {
-        await api(`/api/ideas/${created.item.id}`, {
+    try {
+      let savedId = taskModal.draft.id;
+      if (taskModal.mode === "create") {
+        const created = await api<{ item: Idea }>("/api/ideas", {
+          method: "POST",
+          body: JSON.stringify({
+            ...payload,
+            projectId: selectedProject?.id,
+          }),
+        });
+        savedId = created.item.id;
+        if (taskModal.draft.status !== "idea") {
+          await api(`/api/ideas/${created.item.id}`, {
+            method: "PATCH",
+            body: JSON.stringify({ status: taskModal.draft.status }),
+          });
+        }
+      } else if (taskModal.draft.id) {
+        await api(`/api/ideas/${taskModal.draft.id}`, {
           method: "PATCH",
-          body: JSON.stringify({ status: taskModal.draft.status }),
+          body: JSON.stringify({
+            ...payload,
+            status: taskModal.draft.status,
+          }),
         });
       }
-    } else if (taskModal.draft.id) {
-      await api(`/api/ideas/${taskModal.draft.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          ...payload,
-          status: taskModal.draft.status,
-        }),
-      });
+      await loadState();
+      // Keep the modal open and mark the draft clean. Switching to edit mode
+      // keeps a second save updating the task just created instead of adding
+      // another one.
+      setTaskModal((current) =>
+        current
+          ? {
+              ...current,
+              mode: "edit",
+              draft: { ...current.draft, id: savedId },
+              originalDraft: { ...current.draft, id: savedId },
+            }
+          : current,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save task");
     }
-    await loadState();
-    // Keep modal open, update original to mark as clean
-    setTaskModal((current) =>
-      current
-        ? {
-            ...current,
-            originalDraft: { ...current.draft },
-          }
-        : current,
-    );
+  };
+
+  // Assigned every render, below the handlers, so the key listeners above
+  // always call the current versions.
+  taskModalHandlersRef.current = {
+    save: (event: FormEvent) => void saveTaskWithoutClose(event),
+    navigate: navigateToAdjacentTask,
+    close: closeTaskModal,
   };
 
   const openCreateNote = () => {
@@ -2291,7 +2336,7 @@ const App = () => {
                             color={link.isBlocking ? "orange" : "green"}
                             size="sm"
                           >
-                            {link.isBlocking ? "open" : "done"}
+                            {link.isBlocking ? "open" : link.status}
                           </Badge>
                         </Group>
                       ))}
@@ -2619,7 +2664,7 @@ const App = () => {
                 <Button
                   type="button"
                   variant="default"
-                  onClick={() => setTaskModal(null)}
+                  onClick={closeTaskModal}
                 >
                   Close
                 </Button>

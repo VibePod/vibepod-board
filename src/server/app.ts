@@ -609,7 +609,7 @@ const getAccess = async (
 const accessFromResponse = (req: Request): AccessContext =>
   req.res?.locals.access as AccessContext;
 
-const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
+const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
   const message = error instanceof Error ? error.message : "Unknown error";
   if (
     typeof error === "object" &&
@@ -617,9 +617,12 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     "type" in error &&
     error.type === "entity.too.large"
   ) {
-    res
-      .status(413)
-      .json({ error: "Project import file must be 10 MiB or smaller" });
+    // The import route carries its own larger limit, so name the right one.
+    res.status(413).json({
+      error: req.path.startsWith("/api/projects/import")
+        ? "Project import file must be 10 MiB or smaller"
+        : "Request body must be 2 MiB or smaller",
+    });
     return;
   }
   if (error instanceof z.ZodError) {

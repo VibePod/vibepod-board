@@ -285,8 +285,11 @@ export class PostgresBoardStore implements BoardDataStore {
     const client = await this.pool.connect();
     try {
       await client.query("begin");
+      // `for update` serialises concurrent imports of the same key. Without it
+      // both transactions read the same state under read committed and the
+      // second one dies on a unique constraint instead of waiting its turn.
       const existingByKey = await client.query<ProjectRow>(
-        "select * from projects where key = $1",
+        "select * from projects where key = $1 for update",
         [bundle.project.key],
       );
       const existing = existingByKey.rows[0];

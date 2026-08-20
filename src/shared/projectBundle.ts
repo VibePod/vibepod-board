@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { dependencyMap, findCyclicTaskIds } from "./dependencies.js";
 import {
   boardColumns,
   documentKinds,
@@ -117,39 +118,12 @@ const duplicateValues = <T>(values: T[]): Set<T> => {
   return duplicates;
 };
 
-const cyclicIdeaIds = (bundle: ProjectBundle): Set<string> => {
-  const graph = new Map(
-    bundle.ideas.map((idea) => [idea.id, idea.dependsOn] as const),
-  );
-  const visiting = new Set<string>();
-  const visited = new Set<string>();
-  const cyclic = new Set<string>();
-
-  const visit = (id: string): boolean => {
-    if (visiting.has(id)) {
-      cyclic.add(id);
-      return true;
-    }
-    if (visited.has(id)) {
-      return false;
-    }
-    visiting.add(id);
-    const hasCycle = (graph.get(id) ?? []).some((dependencyId) =>
-      visit(dependencyId),
-    );
-    visiting.delete(id);
-    visited.add(id);
-    if (hasCycle) {
-      cyclic.add(id);
-    }
-    return hasCycle;
-  };
-
-  for (const id of graph.keys()) {
-    visit(id);
-  }
-  return cyclic;
-};
+/**
+ * Same rule the store applies when it orders work, so a bundle can never
+ * validate here and then fail to order after import.
+ */
+const cyclicIdeaIds = (bundle: ProjectBundle): string[] =>
+  findCyclicTaskIds(dependencyMap(bundle.ideas));
 
 const validateRelationships = (bundle: ProjectBundle, ctx: z.RefinementCtx) => {
   const ideaIds = new Set(bundle.ideas.map((idea) => idea.id));

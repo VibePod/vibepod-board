@@ -289,6 +289,9 @@ describe("project transfer UI", () => {
         type: "application/json",
       }),
     );
+    // Wait for the preview before the negative assertion, otherwise it passes
+    // while the dialog is still rendering nothing at all.
+    expect(await within(dialog).findByText(/New Project/)).toBeTruthy();
     expect(
       within(dialog).queryByText(/will replace all current project data/i),
     ).toBeNull();

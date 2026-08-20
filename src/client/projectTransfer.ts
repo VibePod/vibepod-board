@@ -1,5 +1,31 @@
+import { ZodError } from "zod";
+
 import { parseProjectBundle } from "../shared/projectBundle.js";
 import type { Project, ProjectBundle } from "../shared/types.js";
+
+const maxReportedIssues = 3;
+
+/**
+ * A ZodError message is the JSON dump of every issue, which is unreadable in a
+ * dialog. Report the first few as `path: message` lines instead.
+ */
+const validationSummary = (error: unknown): string => {
+  if (!(error instanceof ZodError)) {
+    return error instanceof Error ? error.message : "Validation failed";
+  }
+  const lines = error.issues
+    .slice(0, maxReportedIssues)
+    .map((issue) =>
+      issue.path.length > 0
+        ? `${issue.path.join(".")}: ${issue.message}`
+        : issue.message,
+    );
+  const remaining = error.issues.length - lines.length;
+  if (remaining > 0) {
+    lines.push(`and ${remaining} more problem${remaining === 1 ? "" : "s"}`);
+  }
+  return lines.join("; ");
+};
 
 export const parseProjectBundleText = (text: string): ProjectBundle => {
   let parsed: unknown;
@@ -12,9 +38,7 @@ export const parseProjectBundleText = (text: string): ProjectBundle => {
   try {
     return parseProjectBundle(parsed);
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Validation failed";
-    throw new Error(`Project file is invalid: ${message}`);
+    throw new Error(`Project file is invalid: ${validationSummary(error)}`);
   }
 };
 
@@ -48,6 +72,8 @@ export const downloadResponse = async (
     anchor.click();
   } finally {
     anchor.remove();
-    URL.revokeObjectURL(url);
+    // The click starts the download asynchronously, so revoking in the same
+    // tick can invalidate the URL before the browser has read it.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 };
