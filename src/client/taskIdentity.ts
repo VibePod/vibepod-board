@@ -1,2 +1,1 @@
-export const formatTaskId = (projectKey: string, taskNumber: number) =>
-  `${projectKey}-${taskNumber}`;
+export { formatTaskKey as formatTaskId } from "../shared/dependencies.js";

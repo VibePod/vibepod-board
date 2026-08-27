@@ -3,7 +3,9 @@ import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { createAdminSessionManager } from "../src/server/auth.js";
+import { initializeDatabase } from "../src/server/db.js";
 import type { PostgresBoardStore } from "../src/server/storage.js";
+import { resetDatabase } from "./helpers/postgres.js";
 import { closeTestPool, createTestStore } from "./helpers/store.js";
 
 let pool: Pool;
@@ -66,6 +68,111 @@ describe("API", () => {
     expect((await agent.get("/api/auth/me").expect(200)).body).toEqual({
       authenticated: true,
       username: "admin",
+    });
+  });
+
+  it("exports projects only for admins", async () => {
+    const { app } = createAuthedApp();
+    const project = await store.createProject({
+      key: "APP",
+      title: "Application",
+    });
+    const createdToken = await store.createApiToken({
+      name: "Project client",
+      projectIds: [project.id],
+    });
+
+    await request(app).get(`/api/projects/${project.id}/export`).expect(401);
+    await request(app)
+      .get(`/api/projects/${project.id}/export`)
+      .set("Authorization", `Bearer ${createdToken.token}`)
+      .expect(403);
+
+    const agent = await login(app);
+    const response = await agent
+      .get(`/api/projects/${project.id}/export`)
+      .expect(200)
+      .expect("Content-Type", /application\/json/)
+      .expect("Content-Disposition", 'attachment; filename="APP-project.json"');
+    expect(response.body).toMatchObject({
+      bundleVersion: 1,
+      project: { id: project.id, key: "APP" },
+    });
+    await agent.get("/api/projects/missing/export").expect(404);
+  });
+
+  it("creates and replaces projects through the import endpoint", async () => {
+    const { app } = createAuthedApp();
+    const source = await store.createProject({
+      key: "APP",
+      title: "Application",
+    });
+    await store.createIdea(
+      { kind: "admin", username: "admin" },
+      { projectId: source.id, title: "Portable task" },
+    );
+    const bundle = await store.exportProject(source.id);
+    const createdToken = await store.createApiToken({
+      name: "Project client",
+      projectIds: [source.id],
+    });
+
+    await request(app)
+      .post("/api/projects/import")
+      .send({ bundle, replaceExisting: false })
+      .expect(401);
+    await request(app)
+      .post("/api/projects/import")
+      .set("Authorization", `Bearer ${createdToken.token}`)
+      .send({ bundle, replaceExisting: false })
+      .expect(403);
+
+    await resetDatabase(pool);
+    await initializeDatabase(pool);
+    const agent = await login(app);
+    const created = await agent
+      .post("/api/projects/import")
+      .send({ bundle, replaceExisting: false })
+      .expect(201);
+    expect(created.body).toMatchObject({
+      item: { id: source.id, key: "APP" },
+      replaced: false,
+    });
+
+    await agent
+      .post("/api/projects/import")
+      .send({ bundle, replaceExisting: false })
+      .expect(409);
+    const replaced = await agent
+      .post("/api/projects/import")
+      .send({ bundle, replaceExisting: true })
+      .expect(200);
+    expect(replaced.body).toMatchObject({
+      item: { id: source.id, key: "APP" },
+      replaced: true,
+    });
+  });
+
+  it("validates and limits project import payloads", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+
+    await agent
+      .post("/api/projects/import")
+      .send({ bundle: { bundleVersion: 99 }, replaceExisting: false })
+      .expect(400);
+
+    const response = await agent
+      .post("/api/projects/import")
+      .set("Content-Type", "application/json")
+      .send(
+        JSON.stringify({
+          bundle: { padding: "x".repeat(10 * 1024 * 1024) },
+        }),
+      )
+      .expect(413);
+    expect(response.body).toEqual({
+      error: "Project import file must be 10 MiB or smaller",
     });
   });
 
@@ -541,5 +648,164 @@ describe("API", () => {
     await request(app)
       .get(`/api/ideas/${idea.body.item.id}/readiness`)
       .expect(401);
+  });
+
+  it("manages task dependencies through the API", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+
+    const project = await agent
+      .post("/api/projects")
+      .send({ title: "App", key: "APP" })
+      .expect(201);
+    const projectId = project.body.item.id;
+    const schema = await agent
+      .post("/api/ideas")
+      .send({ projectId, title: "Schema" })
+      .expect(201);
+    const api = await agent
+      .post("/api/ideas")
+      .send({ projectId, title: "API", dependsOn: [schema.body.item.id] })
+      .expect(201);
+    expect(api.body.item.dependsOn).toEqual([schema.body.item.id]);
+    expect(api.body.item.blockedBy).toEqual([schema.body.item.id]);
+
+    const docs = await agent
+      .post("/api/ideas")
+      .send({ projectId, title: "Docs" })
+      .expect(201);
+    const added = await agent
+      .post(`/api/ideas/${docs.body.item.id}/dependencies`)
+      .send({ dependsOnId: api.body.item.id })
+      .expect(201);
+    expect(added.body.item.dependsOn).toEqual([api.body.item.id]);
+
+    const replaced = await agent
+      .put(`/api/ideas/${docs.body.item.id}/dependencies`)
+      .send({ dependsOnIds: [schema.body.item.id, api.body.item.id] })
+      .expect(200);
+    expect(replaced.body.item.dependsOn.sort()).toEqual(
+      [schema.body.item.id, api.body.item.id].sort(),
+    );
+
+    const removed = await agent
+      .delete(
+        `/api/ideas/${docs.body.item.id}/dependencies/${schema.body.item.id}`,
+      )
+      .expect(200);
+    expect(removed.body.item.dependsOn).toEqual([api.body.item.id]);
+
+    await request(app)
+      .post(`/api/ideas/${docs.body.item.id}/dependencies`)
+      .send({ dependsOnId: schema.body.item.id })
+      .expect(401);
+  });
+
+  it("rejects self, cross-project, and cyclic dependencies", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+
+    const project = await agent
+      .post("/api/projects")
+      .send({ title: "App", key: "APP" })
+      .expect(201);
+    const otherProject = await agent
+      .post("/api/projects")
+      .send({ title: "Ops", key: "OPS" })
+      .expect(201);
+    const schema = await agent
+      .post("/api/ideas")
+      .send({ projectId: project.body.item.id, title: "Schema" })
+      .expect(201);
+    const api = await agent
+      .post("/api/ideas")
+      .send({ projectId: project.body.item.id, title: "API" })
+      .expect(201);
+    const outside = await agent
+      .post("/api/ideas")
+      .send({ projectId: otherProject.body.item.id, title: "Outside" })
+      .expect(201);
+
+    await agent
+      .post(`/api/ideas/${api.body.item.id}/dependencies`)
+      .send({ dependsOnId: api.body.item.id })
+      .expect(400);
+    await agent
+      .post(`/api/ideas/${api.body.item.id}/dependencies`)
+      .send({ dependsOnId: outside.body.item.id })
+      .expect(400);
+    await agent
+      .post(`/api/ideas/${api.body.item.id}/dependencies`)
+      .send({ dependsOnId: "missing" })
+      .expect(404);
+
+    await agent
+      .post(`/api/ideas/${api.body.item.id}/dependencies`)
+      .send({ dependsOnId: schema.body.item.id })
+      .expect(201);
+    const cycle = await agent
+      .post(`/api/ideas/${schema.body.item.id}/dependencies`)
+      .send({ dependsOnId: api.body.item.id })
+      .expect(409);
+    expect(cycle.body.error).toContain("Dependency cycle detected");
+  });
+
+  it("serves a dependency-resolved work order", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+
+    const project = await agent
+      .post("/api/projects")
+      .send({ title: "App", key: "APP" })
+      .expect(201);
+    const projectId = project.body.item.id;
+    const schema = await agent
+      .post("/api/ideas")
+      .send({ projectId, title: "Schema" })
+      .expect(201);
+    const api = await agent
+      .post("/api/ideas")
+      .send({ projectId, title: "API", dependsOn: [schema.body.item.id] })
+      .expect(201);
+
+    const workOrder = await agent
+      .get("/api/work-order")
+      .query({ projectId })
+      .expect(200);
+    expect(workOrder.body.items.map((item: { id: string }) => item.id)).toEqual(
+      [schema.body.item.id, api.body.item.id],
+    );
+    expect(workOrder.body.items[1]).toMatchObject({
+      taskId: "APP-2",
+      position: 2,
+      wave: 1,
+      isBlocked: true,
+      isActionable: false,
+    });
+    expect(workOrder.body.cyclicTaskIds).toEqual([]);
+
+    await agent
+      .post(`/api/ideas/${schema.body.item.id}/ready`)
+      .send({ available: true })
+      .expect(200);
+    const board = await agent
+      .get("/api/board")
+      .query({ projectId })
+      .expect(200);
+    await agent
+      .patch(`/api/board/${board.body.columns.ready[0].id}`)
+      .send({ column: "done" })
+      .expect(200);
+
+    const unblocked = await agent
+      .get("/api/work-order")
+      .query({ projectId })
+      .expect(200);
+    expect(unblocked.body.items[1]).toMatchObject({
+      isBlocked: false,
+      isActionable: true,
+    });
+
+    await request(app).get("/api/work-order").expect(401);
   });
 });

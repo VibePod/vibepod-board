@@ -38,6 +38,7 @@ describe("PostgreSQL schema", () => {
       "idea_readiness_events",
       "ideas",
       "projects",
+      "task_dependencies",
     ]);
   });
 

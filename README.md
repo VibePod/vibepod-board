@@ -50,10 +50,16 @@ GITHUB_REPOSITORY=owner/repo
 - `GET /api/projects`
 - `POST /api/projects`
 - `PATCH /api/projects/:id`
+- `GET /api/projects/:id/export`
+- `POST /api/projects/import`
 - `GET /api/ideas`
 - `POST /api/ideas`
 - `PATCH /api/ideas/:id`
 - `POST /api/ideas/:id/ready`
+- `POST /api/ideas/:id/dependencies`
+- `PUT /api/ideas/:id/dependencies`
+- `DELETE /api/ideas/:id/dependencies/:dependsOnId`
+- `GET /api/work-order`
 - `POST /api/ideas/:id/sync-github`
 - `GET /api/board`
 - `PATCH /api/board/:id`
@@ -66,9 +72,22 @@ GITHUB_REPOSITORY=owner/repo
 - `POST /api/tokens/:id/revoke`
 - `GET /api/mcp-info`
 
-`GET /api/ideas`, `GET /api/board`, and `GET /api/documents` accept `projectId` query params for project-scoped reads.
+`GET /api/ideas`, `GET /api/board`, `GET /api/documents`, and `GET /api/work-order` accept `projectId` query params for project-scoped reads.
 
 Browser/full REST access uses the admin session cookie. Project-scoped API clients use `Authorization: Bearer <token>`.
+
+## Project Import and Export
+
+Admins can download a project's data with **Export** on its project card and
+upload a project bundle with **Import Project** on the Projects screen. Bundles
+include the project, tasks and dependencies, board cards, readiness history,
+and documents. API tokens and global activity history are not copied.
+
+Imports match projects by their 1–3 letter project key. A new key creates a new
+project. An existing key requires explicit confirmation and replaces that
+project's current data in one transaction. Replacement retains the destination
+project's internal ID, so its API-token assignments remain intact. Project
+bundle uploads are limited to 10 MiB.
 
 ## MCP
 
@@ -88,6 +107,10 @@ Tools:
 - `create_idea`
 - `update_idea`
 - `mark_idea_ready`
+- `add_idea_dependency`
+- `remove_idea_dependency`
+- `set_idea_dependencies`
+- `list_work_order`
 - `list_board`
 - `move_board_card`
 - `create_document`
@@ -97,6 +120,26 @@ Tools:
 Resource:
 
 - `vibepod-board://state`
+
+## Task Dependencies
+
+A task can depend on other tasks in the same project. Dependencies drive the execution order that agents and the UI consume.
+
+- Set them with `POST /api/ideas`/`PATCH /api/ideas/:id` (`dependsOn` replaces the full set), with the dedicated `dependencies` endpoints, or with the `*_idea_dependency` MCP tools.
+- Every task carries `dependsOn` (its blockers), `blocks` (tasks waiting on it), and `blockedBy` (blockers that are not finished yet). Board cards mirror `dependsOn` and `blockedBy` from their task.
+- A blocker counts as finished when its board card reached the `done` column, or when the task was denied — denied work never arrives and must not wedge the graph.
+- Dependencies must stay inside one project, and cycles are rejected (`409`).
+- `GET /api/work-order` and the `list_work_order` MCP tool return tasks in dependency-resolved order. Each item reports `position`, `wave` (0 = no dependencies), `blockedBy`, `isBlocked`, `isComplete`, and `isActionable`; anything listed in `cyclicTaskIds` could not be ordered.
+
+Blocked work is flagged, never forced: moving a blocked card on the board is always allowed.
+
+### Dependency Tree View
+
+The task view has a **List / Tree** switch. Tree draws the dependency graph of the tasks currently visible: blockers sit left of the tasks waiting for them, one lane per dependency wave (wave 0 is unblocked work). Solid orange edges still block; dashed grey edges point out of a blocker that is done or denied. Clicking a node opens that task.
+
+Arrows into and out of a task fan out over its side, so several dependencies on one task stay tellable apart. Click an arrow (or focus it and press Enter) to follow a single dependency: the two tasks it connects stay lit while everything else fades. Escape, a click anywhere else, or a second click on the same arrow brings the full graph back.
+
+The graph follows the search, status, and label filters. A dependency on a task the filters removed is not drawn but counted on the node instead, so nothing silently disappears. Tasks in a dependency cycle cannot be ordered and are grouped in a trailing **Cycle** lane.
 
 ## Local Development
 

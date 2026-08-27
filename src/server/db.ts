@@ -103,6 +103,16 @@ alter table ideas add column if not exists readiness_score integer;
 alter table ideas add column if not exists readiness_reason text;
 alter table ideas add column if not exists readiness_evaluated_at timestamptz;
 
+create table if not exists task_dependencies (
+  idea_id text not null references ideas(id) on delete cascade,
+  depends_on_idea_id text not null references ideas(id) on delete cascade,
+  created_at timestamptz not null,
+  primary key (idea_id, depends_on_idea_id),
+  check (idea_id <> depends_on_idea_id)
+);
+create index if not exists task_dependencies_depends_on_idx
+  on task_dependencies(depends_on_idea_id);
+
 create table if not exists idea_readiness_events (
   id text primary key,
   idea_id text not null references ideas(id) on delete cascade,

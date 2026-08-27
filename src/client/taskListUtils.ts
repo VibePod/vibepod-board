@@ -6,6 +6,7 @@ export const taskSortOptions = [
   "title_asc",
   "status_asc",
   "rating_desc",
+  "dependency_asc",
 ] as const;
 
 export type TaskSortOption = (typeof taskSortOptions)[number];
@@ -15,6 +16,8 @@ export type TaskListFilters = {
   status?: IdeaStatus | "";
   label?: string;
   search?: string;
+  /** Task id to work-order position, used by the dependency_asc sort. */
+  workOrder?: Map<string, number>;
 };
 
 export const filterAndSortTasks = (
@@ -42,10 +45,21 @@ export const filterAndSortTasks = (
         .toLocaleLowerCase()
         .includes(search);
     })
-    .sort((a, b) => compareTasks(a, b, sort));
+    .sort((a, b) => compareTasks(a, b, sort, filters.workOrder));
 };
 
-const compareTasks = (a: Idea, b: Idea, sort: TaskSortOption) => {
+const compareTasks = (
+  a: Idea,
+  b: Idea,
+  sort: TaskSortOption,
+  workOrder?: Map<string, number>,
+) => {
+  if (sort === "dependency_asc") {
+    // Tasks missing from the work order sit in a dependency cycle; park them last.
+    const aPosition = workOrder?.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+    const bPosition = workOrder?.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+    return aPosition - bPosition || a.taskNumber - b.taskNumber;
+  }
   if (sort === "updated_desc") {
     return (
       b.updatedAt.localeCompare(a.updatedAt) ||

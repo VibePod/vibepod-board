@@ -4,6 +4,14 @@ import { dirname } from "node:path";
 import type { Pool, PoolClient } from "pg";
 
 import {
+  buildWorkOrder,
+  findCyclicTaskIds,
+  isTaskComplete,
+  normalizeDependencyIds,
+  type TaskWorkOrder,
+} from "../shared/dependencies.js";
+import { parseProjectBundle } from "../shared/projectBundle.js";
+import {
   type ActivityEvent,
   type ApiTokenSummary,
   type BoardCard,
@@ -17,8 +25,11 @@ import {
   type CreateIdeaInput,
   type CreateProjectInput,
   type Idea,
+  type ImportProjectOptions,
+  type ImportProjectResult,
   type PlanDocument,
   type Project,
+  type ProjectBundle,
   type ReadinessEvent,
   type SetCardReadinessInput,
   type UpdateApiTokenInput,
@@ -36,6 +47,7 @@ import {
   type CreatedApiToken,
   defaultProjectIdForCreate,
   filterProjectIds,
+  tokenAccess,
 } from "./store.js";
 
 const emptyData = (): BoardData => ({
@@ -195,6 +207,17 @@ type DocumentRow = {
   updated_at: Date | string;
 };
 
+type DependencyRow = {
+  idea_id: string;
+  depends_on_idea_id: string;
+};
+
+type TaskStateRow = {
+  id: string;
+  status: Idea["status"];
+  column_name: BoardColumn | null;
+};
+
 type ActivityRow = {
   id: string;
   type: string;
@@ -230,6 +253,111 @@ export class PostgresBoardStore implements BoardDataStore {
       documents: await this.listDocuments(access),
       activity: await this.listActivity(access),
     };
+  }
+
+  async exportProject(id: string): Promise<ProjectBundle> {
+    const project = await this.requireProject(this.pool, id);
+    const access = tokenAccess("project-export", [project.id]);
+    const ideas = await this.listIdeas(access, project.id);
+    const events = ideas.length
+      ? await this.pool.query<ReadinessEventRow>(
+          "select * from idea_readiness_events where idea_id = any($1::text[]) order by created_at desc",
+          [ideas.map((idea) => idea.id)],
+        )
+      : { rows: [] as ReadinessEventRow[] };
+
+    return parseProjectBundle({
+      bundleVersion: 1,
+      exportedAt: nowIso(),
+      project,
+      ideas,
+      boardCards: await this.listBoardCards(access, project.id),
+      readinessEvents: events.rows.map(readinessEventFromRow),
+      documents: await this.listDocuments(access, project.id),
+    });
+  }
+
+  async importProject(
+    input: ProjectBundle,
+    options: ImportProjectOptions,
+  ): Promise<ImportProjectResult> {
+    const bundle = parseProjectBundle(input);
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      // `for update` serialises concurrent imports of the same key. Without it
+      // both transactions read the same state under read committed and the
+      // second one dies on a unique constraint instead of waiting its turn.
+      const existingByKey = await client.query<ProjectRow>(
+        "select * from projects where key = $1 for update",
+        [bundle.project.key],
+      );
+      const existing = existingByKey.rows[0];
+      if (existing && !options.replaceExisting) {
+        throw new Error(
+          `Project key ${bundle.project.key} already exists; replacement confirmation is required`,
+        );
+      }
+
+      const destinationProjectId = existing?.id ?? bundle.project.id;
+      if (!existing) {
+        const idCollision = await client.query<ProjectRow>(
+          "select * from projects where id = $1",
+          [bundle.project.id],
+        );
+        if (idCollision.rows[0]) {
+          throw new Error(`Project ID is already used: ${bundle.project.id}`);
+        }
+      }
+      await this.assertImportedIdsAvailable(
+        client,
+        bundle,
+        destinationProjectId,
+      );
+
+      if (existing) {
+        await client.query("delete from board_cards where project_id = $1", [
+          destinationProjectId,
+        ]);
+        await client.query("delete from documents where project_id = $1", [
+          destinationProjectId,
+        ]);
+        await client.query("delete from ideas where project_id = $1", [
+          destinationProjectId,
+        ]);
+        await client.query(
+          `update projects
+           set title = $2, summary = $3, created_at = $4, updated_at = $5
+           where id = $1`,
+          [
+            destinationProjectId,
+            bundle.project.title,
+            bundle.project.summary,
+            bundle.project.createdAt,
+            bundle.project.updatedAt,
+          ],
+        );
+        await this.insertImportedChildren(client, bundle, destinationProjectId);
+      } else {
+        await this.insertImportedProject(client, bundle, destinationProjectId);
+      }
+      await this.addActivity(
+        client,
+        "project.imported",
+        `Imported project: ${bundle.project.title}`,
+        nowIso(),
+      );
+      await client.query("commit");
+      return {
+        item: { ...bundle.project, id: destinationProjectId },
+        replaced: Boolean(existing),
+      };
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async listProjects(access?: AccessContext): Promise<Project[]> {
@@ -331,7 +459,7 @@ export class PostgresBoardStore implements BoardDataStore {
         "select * from ideas where project_id = $1 order by updated_at desc, title asc",
         [project.id],
       );
-      return result.rows.map(ideaFromRow);
+      return this.decorateIdeas(this.pool, result.rows.map(ideaFromRow));
     }
 
     if (access.kind === "token" && access.projectIds.length === 0) {
@@ -347,7 +475,7 @@ export class PostgresBoardStore implements BoardDataStore {
             "select * from ideas where project_id = any($1::text[]) order by updated_at desc, title asc",
             [filterProjectIds(access, access.projectIds)],
           );
-    return result.rows.map(ideaFromRow);
+    return this.decorateIdeas(this.pool, result.rows.map(ideaFromRow));
   }
 
   async createIdea(
@@ -387,14 +515,23 @@ export class PostgresBoardStore implements BoardDataStore {
         ],
       );
       const idea = ideaFromRow(result.rows[0]);
+      if (input.dependsOn?.length) {
+        await this.replaceIdeaDependencies(
+          client,
+          idea,
+          input.dependsOn,
+          timestamp,
+        );
+      }
       await this.addActivity(
         client,
         "idea.created",
         `Created idea: ${idea.title}`,
         timestamp,
       );
+      const decorated = await this.decorateIdea(client, idea);
       await client.query("commit");
-      return idea;
+      return decorated;
     } catch (error) {
       await client.query("rollback");
       throw error;
@@ -475,6 +612,14 @@ export class PostgresBoardStore implements BoardDataStore {
         ],
       );
       const idea = ideaFromRow(result.rows[0]);
+      if (input.dependsOn !== undefined) {
+        await this.replaceIdeaDependencies(
+          client,
+          idea,
+          input.dependsOn,
+          timestamp,
+        );
+      }
       await this.syncBoardCardFromIdea(client, idea, timestamp);
       await this.addActivity(
         client,
@@ -482,8 +627,9 @@ export class PostgresBoardStore implements BoardDataStore {
         `Updated idea: ${idea.title}`,
         timestamp,
       );
+      const decorated = await this.decorateIdea(client, idea);
       await client.query("commit");
-      return idea;
+      return decorated;
     } catch (error) {
       await client.query("rollback");
       throw error;
@@ -527,8 +673,9 @@ export class PostgresBoardStore implements BoardDataStore {
           `Marked idea ready: ${ready.title}`,
           timestamp,
         );
+        const decorated = await this.decorateIdea(client, ready);
         await client.query("commit");
-        return ready;
+        return decorated;
       }
 
       await client.query("delete from board_cards where idea_id = $1", [
@@ -550,8 +697,90 @@ export class PostgresBoardStore implements BoardDataStore {
         `Removed idea from board: ${idea.title}`,
         timestamp,
       );
+      const decorated = await this.decorateIdea(client, unavailable);
       await client.query("commit");
-      return unavailable;
+      return decorated;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async addIdeaDependency(
+    access: AccessContext,
+    id: string,
+    dependsOnId: string,
+  ): Promise<Idea> {
+    return this.writeIdeaDependencies(access, id, (current) => [
+      ...current,
+      dependsOnId,
+    ]);
+  }
+
+  async removeIdeaDependency(
+    access: AccessContext,
+    id: string,
+    dependsOnId: string,
+  ): Promise<Idea> {
+    return this.writeIdeaDependencies(access, id, (current) =>
+      current.filter((item) => item !== dependsOnId),
+    );
+  }
+
+  async setIdeaDependencies(
+    access: AccessContext,
+    id: string,
+    dependsOnIds: string[],
+  ): Promise<Idea> {
+    return this.writeIdeaDependencies(access, id, () => dependsOnIds);
+  }
+
+  async getWorkOrder(
+    access: AccessContext,
+    projectId?: string,
+  ): Promise<TaskWorkOrder> {
+    const [tasks, cards, projects] = await Promise.all([
+      this.listIdeas(access, projectId),
+      this.listBoardCards(access, projectId),
+      this.listProjects(access),
+    ]);
+    return buildWorkOrder(
+      tasks,
+      cards,
+      new Map(projects.map((project) => [project.id, project.key])),
+    );
+  }
+
+  private async writeIdeaDependencies(
+    access: AccessContext,
+    id: string,
+    change: (current: string[]) => string[],
+  ): Promise<Idea> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const idea = await this.requireIdea(client, id);
+      assertCanAccessProject(access, idea.projectId);
+      const current = await client.query<DependencyRow>(
+        "select idea_id, depends_on_idea_id from task_dependencies where idea_id = $1 order by depends_on_idea_id asc",
+        [id],
+      );
+      const timestamp = nowIso();
+      const next = normalizeDependencyIds(
+        change(current.rows.map((row) => row.depends_on_idea_id)),
+      );
+      await this.replaceIdeaDependencies(client, idea, next, timestamp);
+      const decorated = await this.decorateIdea(client, idea);
+      await this.addActivity(
+        client,
+        "idea.dependencies",
+        `Updated dependencies: ${idea.title}`,
+        timestamp,
+      );
+      await client.query("commit");
+      return decorated;
     } catch (error) {
       await client.query("rollback");
       throw error;
@@ -573,7 +802,10 @@ export class PostgresBoardStore implements BoardDataStore {
       if (idea.status !== "ready") {
         throw new Error("Only ready ideas can be moved to the board");
       }
-      const card = await this.ensureBoardCard(client, idea, options);
+      const card = await this.decorateCard(
+        client,
+        await this.ensureBoardCard(client, idea, options),
+      );
       await client.query("commit");
       return card;
     } catch (error) {
@@ -595,7 +827,7 @@ export class PostgresBoardStore implements BoardDataStore {
         "select * from board_cards where project_id = $1 order by updated_at desc, title asc",
         [project.id],
       );
-      return result.rows.map(boardCardFromRow);
+      return this.decorateCards(this.pool, result.rows.map(boardCardFromRow));
     }
 
     if (access.kind === "token" && access.projectIds.length === 0) {
@@ -611,7 +843,7 @@ export class PostgresBoardStore implements BoardDataStore {
             "select * from board_cards where project_id = any($1::text[]) order by updated_at desc, title asc",
             [access.projectIds],
           );
-    return result.rows.map(boardCardFromRow);
+    return this.decorateCards(this.pool, result.rows.map(boardCardFromRow));
   }
 
   async getBoardColumns(
@@ -681,7 +913,10 @@ export class PostgresBoardStore implements BoardDataStore {
           timestamp,
         ],
       );
-      const card = boardCardFromRow(result.rows[0]);
+      const card = await this.decorateCard(
+        client,
+        boardCardFromRow(result.rows[0]),
+      );
       await this.addActivity(
         client,
         "board.updated",
@@ -716,7 +951,10 @@ export class PostgresBoardStore implements BoardDataStore {
          returning *`,
         [id, column, timestamp],
       );
-      const card = boardCardFromRow(result.rows[0]);
+      const card = await this.decorateCard(
+        client,
+        boardCardFromRow(result.rows[0]),
+      );
       await this.addActivity(
         client,
         "board.moved",
@@ -754,7 +992,7 @@ export class PostgresBoardStore implements BoardDataStore {
         "select * from board_cards where id = $1",
         [id],
       );
-      return boardCardFromRow(reread.rows[0]);
+      return this.decorateCard(this.pool, boardCardFromRow(reread.rows[0]));
     }
 
     const { score, reason } = normalizeReadinessInput(input);
@@ -768,7 +1006,7 @@ export class PostgresBoardStore implements BoardDataStore {
        returning *`,
       [id, score, reason, timestamp],
     );
-    return boardCardFromRow(result.rows[0]);
+    return this.decorateCard(this.pool, boardCardFromRow(result.rows[0]));
   }
 
   async setIdeaReadiness(
@@ -805,7 +1043,7 @@ export class PostgresBoardStore implements BoardDataStore {
          values ($1, $2, $3, $4, $5)`,
         [randomUUID(), id, score, reason, timestamp],
       );
-      const idea = ideaFromRow(result.rows[0]);
+      const idea = await this.decorateIdea(client, ideaFromRow(result.rows[0]));
       await this.addActivity(
         client,
         "idea.readiness",
@@ -1109,6 +1347,211 @@ export class PostgresBoardStore implements BoardDataStore {
     return { tokenId: row.id, projectIds };
   }
 
+  /**
+   * Loads the dependency edges touching the given tasks plus the completion
+   * state of every blocker, so ideas and cards can carry dependsOn/blockedBy.
+   */
+  private async dependencyContext(
+    queryable: Pick<Pool | PoolClient, "query">,
+    ideaIds: string[],
+  ): Promise<{
+    dependsOn: Map<string, string[]>;
+    blocks: Map<string, string[]>;
+    complete: Map<string, boolean>;
+  }> {
+    const dependsOn = new Map<string, string[]>();
+    const blocks = new Map<string, string[]>();
+    const complete = new Map<string, boolean>();
+    const ids = [...new Set(ideaIds)];
+    if (ids.length === 0) {
+      return { dependsOn, blocks, complete };
+    }
+
+    const edges = await queryable.query<DependencyRow>(
+      `select idea_id, depends_on_idea_id
+       from task_dependencies
+       where idea_id = any($1::text[]) or depends_on_idea_id = any($1::text[])
+       order by idea_id asc, depends_on_idea_id asc`,
+      [ids],
+    );
+    for (const row of edges.rows) {
+      dependsOn.set(row.idea_id, [
+        ...(dependsOn.get(row.idea_id) ?? []),
+        row.depends_on_idea_id,
+      ]);
+      blocks.set(row.depends_on_idea_id, [
+        ...(blocks.get(row.depends_on_idea_id) ?? []),
+        row.idea_id,
+      ]);
+    }
+
+    const blockerIds = [
+      ...new Set(edges.rows.map((row) => row.depends_on_idea_id)),
+    ];
+    if (blockerIds.length > 0) {
+      const states = await queryable.query<TaskStateRow>(
+        `select ideas.id, ideas.status, board_cards.column_name
+         from ideas
+         left join board_cards on board_cards.idea_id = ideas.id
+         where ideas.id = any($1::text[])`,
+        [blockerIds],
+      );
+      for (const row of states.rows) {
+        const resolved =
+          isTaskComplete({
+            status: row.status,
+            column: row.column_name ?? undefined,
+          }) ||
+          (complete.get(row.id) ?? false);
+        complete.set(row.id, resolved);
+      }
+    }
+
+    return { dependsOn, blocks, complete };
+  }
+
+  private async decorateIdeas(
+    queryable: Pick<Pool | PoolClient, "query">,
+    ideas: Idea[],
+  ): Promise<Idea[]> {
+    if (ideas.length === 0) {
+      return ideas;
+    }
+    const context = await this.dependencyContext(
+      queryable,
+      ideas.map((idea) => idea.id),
+    );
+    return ideas.map((idea) => {
+      const dependsOn = context.dependsOn.get(idea.id) ?? [];
+      return {
+        ...idea,
+        dependsOn,
+        blocks: context.blocks.get(idea.id) ?? [],
+        blockedBy: dependsOn.filter((id) => !context.complete.get(id)),
+      };
+    });
+  }
+
+  private async decorateIdea(
+    queryable: Pick<Pool | PoolClient, "query">,
+    idea: Idea,
+  ): Promise<Idea> {
+    const [decorated] = await this.decorateIdeas(queryable, [idea]);
+    return decorated ?? idea;
+  }
+
+  private async decorateCards(
+    queryable: Pick<Pool | PoolClient, "query">,
+    cards: BoardCard[],
+  ): Promise<BoardCard[]> {
+    const ideaIds = cards
+      .map((card) => card.ideaId)
+      .filter((id): id is string => Boolean(id));
+    if (ideaIds.length === 0) {
+      return cards;
+    }
+    const context = await this.dependencyContext(queryable, ideaIds);
+    return cards.map((card) => {
+      const dependsOn = card.ideaId
+        ? (context.dependsOn.get(card.ideaId) ?? [])
+        : [];
+      return {
+        ...card,
+        dependsOn,
+        blockedBy: dependsOn.filter((id) => !context.complete.get(id)),
+      };
+    });
+  }
+
+  private async decorateCard(
+    queryable: Pick<Pool | PoolClient, "query">,
+    card: BoardCard,
+  ): Promise<BoardCard> {
+    const [decorated] = await this.decorateCards(queryable, [card]);
+    return decorated ?? card;
+  }
+
+  /**
+   * Replaces a task's blockers inside an open transaction. Blockers must live in
+   * the same project, and the resulting graph must stay acyclic so the work
+   * order can always be computed.
+   */
+  private async replaceIdeaDependencies(
+    client: PoolClient,
+    idea: Idea,
+    dependsOnIds: string[],
+    timestamp: string,
+  ) {
+    const requested = normalizeDependencyIds(dependsOnIds);
+    if (requested.includes(idea.id)) {
+      throw new Error("A task cannot depend on itself");
+    }
+
+    if (requested.length > 0) {
+      const blockers = await client.query<{ id: string; project_id: string }>(
+        "select id, project_id from ideas where id = any($1::text[])",
+        [requested],
+      );
+      const byId = new Map(blockers.rows.map((row) => [row.id, row]));
+      for (const id of requested) {
+        const blocker = byId.get(id);
+        if (!blocker) {
+          throw new Error(`Task not found: ${id}`);
+        }
+        if (blocker.project_id !== idea.projectId) {
+          throw new Error(
+            `Dependencies must stay in the same project: ${id} belongs to another project`,
+          );
+        }
+      }
+    }
+
+    await this.assertAcyclicDependencies(client, idea, requested);
+
+    await client.query("delete from task_dependencies where idea_id = $1", [
+      idea.id,
+    ]);
+    for (const dependsOnId of requested) {
+      await client.query(
+        `insert into task_dependencies (idea_id, depends_on_idea_id, created_at)
+         values ($1, $2, $3)
+         on conflict do nothing`,
+        [idea.id, dependsOnId, timestamp],
+      );
+    }
+  }
+
+  private async assertAcyclicDependencies(
+    client: PoolClient,
+    idea: Idea,
+    dependsOnIds: string[],
+  ) {
+    const existing = await client.query<DependencyRow>(
+      `select task_dependencies.idea_id, task_dependencies.depends_on_idea_id
+       from task_dependencies
+       inner join ideas on ideas.id = task_dependencies.idea_id
+       where ideas.project_id = $1 and task_dependencies.idea_id <> $2`,
+      [idea.projectId, idea.id],
+    );
+    const edges = new Map<string, string[]>();
+    for (const row of existing.rows) {
+      edges.set(row.idea_id, [
+        ...(edges.get(row.idea_id) ?? []),
+        row.depends_on_idea_id,
+      ]);
+    }
+    if (dependsOnIds.length > 0) {
+      edges.set(idea.id, dependsOnIds);
+    }
+
+    const cyclic = findCyclicTaskIds(edges);
+    if (cyclic.length > 0) {
+      throw new Error(
+        `Dependency cycle detected between tasks: ${cyclic.sort().join(", ")}`,
+      );
+    }
+  }
+
   private async requireProject(
     queryable: Pick<Pool | PoolClient, "query">,
     id: string,
@@ -1403,6 +1846,192 @@ export class PostgresBoardStore implements BoardDataStore {
     );
   }
 
+  private async assertImportedIdsAvailable(
+    client: PoolClient,
+    bundle: ProjectBundle,
+    destinationProjectId: string,
+  ) {
+    const assertTableIdsAvailable = async (
+      entity: string,
+      table: "ideas" | "board_cards" | "documents",
+      ids: string[],
+    ) => {
+      if (ids.length === 0) {
+        return;
+      }
+      const collision = await client.query<{ id: string }>(
+        `select id from ${table}
+         where id = any($1::text[]) and project_id <> $2
+         limit 1`,
+        [ids, destinationProjectId],
+      );
+      if (collision.rows[0]) {
+        throw new Error(
+          `${entity} ID is already used by another project: ${collision.rows[0].id}`,
+        );
+      }
+    };
+
+    await assertTableIdsAvailable(
+      "Idea",
+      "ideas",
+      bundle.ideas.map((idea) => idea.id),
+    );
+    await assertTableIdsAvailable(
+      "Board card",
+      "board_cards",
+      bundle.boardCards.map((card) => card.id),
+    );
+    await assertTableIdsAvailable(
+      "Document",
+      "documents",
+      bundle.documents.map((document) => document.id),
+    );
+
+    const readinessIds = bundle.readinessEvents.map((event) => event.id);
+    if (readinessIds.length > 0) {
+      const collision = await client.query<{ id: string }>(
+        `select events.id
+         from idea_readiness_events events
+         join ideas on ideas.id = events.idea_id
+         where events.id = any($1::text[]) and ideas.project_id <> $2
+         limit 1`,
+        [readinessIds, destinationProjectId],
+      );
+      if (collision.rows[0]) {
+        throw new Error(
+          `Readiness event ID is already used by another project: ${collision.rows[0].id}`,
+        );
+      }
+    }
+  }
+
+  private async insertImportedProject(
+    client: PoolClient,
+    bundle: ProjectBundle,
+    destinationProjectId: string,
+  ) {
+    await client.query(
+      `insert into projects (id, key, title, summary, created_at, updated_at)
+       values ($1, $2, $3, $4, $5, $6)`,
+      [
+        destinationProjectId,
+        bundle.project.key,
+        bundle.project.title,
+        bundle.project.summary,
+        bundle.project.createdAt,
+        bundle.project.updatedAt,
+      ],
+    );
+    await this.insertImportedChildren(client, bundle, destinationProjectId);
+  }
+
+  private async insertImportedChildren(
+    client: PoolClient,
+    bundle: ProjectBundle,
+    destinationProjectId: string,
+  ) {
+    for (const idea of bundle.ideas) {
+      await client.query(
+        `insert into ideas (
+           id, project_id, task_number, title, summary, details, status, labels,
+           acceptance_criteria, github_issue_url, github_issue_number, repository_local_path,
+           repository_remote_url, readiness_score, readiness_reason, readiness_evaluated_at,
+           created_at, updated_at
+         )
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+        [
+          idea.id,
+          destinationProjectId,
+          idea.taskNumber,
+          idea.title,
+          idea.summary,
+          idea.details,
+          idea.status,
+          JSON.stringify(idea.labels),
+          JSON.stringify(idea.acceptanceCriteria),
+          idea.githubIssueUrl ?? null,
+          idea.githubIssueNumber ?? null,
+          idea.repositoryLocalPath ?? null,
+          idea.repositoryRemoteUrl ?? null,
+          idea.readinessScore ?? null,
+          idea.readinessReason ?? null,
+          idea.readinessEvaluatedAt ?? null,
+          idea.createdAt,
+          idea.updatedAt,
+        ],
+      );
+    }
+
+    for (const idea of bundle.ideas) {
+      for (const dependsOnId of new Set(idea.dependsOn)) {
+        await client.query(
+          `insert into task_dependencies (idea_id, depends_on_idea_id, created_at)
+           values ($1, $2, $3)`,
+          [idea.id, dependsOnId, idea.updatedAt],
+        );
+      }
+    }
+
+    for (const card of bundle.boardCards) {
+      await client.query(
+        `insert into board_cards (
+           id, project_id, idea_id, title, details, column_name, branch_name, github_issue_url,
+           github_issue_number, repository_local_path, repository_remote_url, labels,
+           readiness_score, readiness_reason, readiness_evaluated_at, created_at, updated_at
+         )
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+        [
+          card.id,
+          destinationProjectId,
+          card.ideaId ?? null,
+          card.title,
+          card.details,
+          card.column,
+          card.branchName ?? null,
+          card.githubIssueUrl ?? null,
+          card.githubIssueNumber ?? null,
+          card.repositoryLocalPath ?? null,
+          card.repositoryRemoteUrl ?? null,
+          JSON.stringify(card.labels),
+          card.readinessScore ?? null,
+          card.readinessReason ?? null,
+          card.readinessEvaluatedAt ?? null,
+          card.createdAt,
+          card.updatedAt,
+        ],
+      );
+    }
+
+    for (const event of bundle.readinessEvents) {
+      await client.query(
+        `insert into idea_readiness_events (id, idea_id, score, reason, created_at)
+         values ($1, $2, $3, $4, $5)`,
+        [event.id, event.ideaId, event.score, event.reason, event.createdAt],
+      );
+    }
+
+    for (const document of bundle.documents) {
+      await client.query(
+        `insert into documents (
+           id, project_id, title, kind, content, linked_idea_ids, linked_card_ids, created_at, updated_at
+         )
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          document.id,
+          destinationProjectId,
+          document.title,
+          document.kind,
+          document.content,
+          JSON.stringify(document.linkedIdeaIds),
+          JSON.stringify(document.linkedCardIds),
+          document.createdAt,
+          document.updatedAt,
+        ],
+      );
+    }
+  }
+
   private async addActivity(
     queryable: Pick<Pool | PoolClient, "query">,
     type: string,
@@ -1490,6 +2119,9 @@ const ideaFromRow = (row: IdeaRow): Idea => ({
   status: row.status,
   labels: jsonStringArray(row.labels),
   acceptanceCriteria: jsonStringArray(row.acceptance_criteria),
+  dependsOn: [],
+  blocks: [],
+  blockedBy: [],
   githubIssueUrl: row.github_issue_url ?? undefined,
   githubIssueNumber: row.github_issue_number ?? undefined,
   repositoryLocalPath: row.repository_local_path ?? undefined,
@@ -1524,6 +2156,8 @@ const boardCardFromRow = (row: BoardCardRow): BoardCard => ({
   repositoryLocalPath: row.repository_local_path ?? undefined,
   repositoryRemoteUrl: row.repository_remote_url ?? undefined,
   labels: jsonStringArray(row.labels),
+  dependsOn: [],
+  blockedBy: [],
   readinessScore: row.readiness_score ?? undefined,
   readinessReason: row.readiness_reason ?? undefined,
   readinessEvaluatedAt: row.readiness_evaluated_at
@@ -1639,6 +2273,9 @@ export class BoardStore {
       status: "idea",
       labels: normalizeList(input.labels),
       acceptanceCriteria: normalizeList(input.acceptanceCriteria),
+      dependsOn: normalizeDependencyIds(input.dependsOn),
+      blocks: [],
+      blockedBy: [],
       repositoryLocalPath: normalizeOptionalText(input.repositoryLocalPath),
       repositoryRemoteUrl: normalizeOptionalText(input.repositoryRemoteUrl),
       createdAt: timestamp,
@@ -1674,6 +2311,9 @@ export class BoardStore {
       if (idea.status === "idea") {
         idea.status = "refining";
       }
+    }
+    if (input.dependsOn !== undefined) {
+      idea.dependsOn = normalizeDependencyIds(input.dependsOn);
     }
     if (input.repositoryLocalPath !== undefined) {
       idea.repositoryLocalPath = normalizeOptionalText(
@@ -1773,6 +2413,8 @@ export class BoardStore {
       repositoryLocalPath: idea.repositoryLocalPath,
       repositoryRemoteUrl: idea.repositoryRemoteUrl,
       labels: [...idea.labels],
+      dependsOn: [...idea.dependsOn],
+      blockedBy: [...idea.blockedBy],
       readinessScore: idea.readinessScore,
       readinessReason: idea.readinessReason,
       readinessEvaluatedAt: idea.readinessEvaluatedAt,
@@ -1994,8 +2636,17 @@ export class BoardStore {
     const data: BoardData = {
       schemaVersion: 3,
       projects: normalizedProjects.projects,
-      ideas: (parsed.ideas ?? []) as Idea[],
-      boardCards: (parsed.boardCards ?? []) as BoardCard[],
+      ideas: ((parsed.ideas ?? []) as Idea[]).map((idea) => ({
+        ...idea,
+        dependsOn: normalizeDependencyIds(idea.dependsOn),
+        blocks: idea.blocks ?? [],
+        blockedBy: idea.blockedBy ?? [],
+      })),
+      boardCards: ((parsed.boardCards ?? []) as BoardCard[]).map((card) => ({
+        ...card,
+        dependsOn: normalizeDependencyIds(card.dependsOn),
+        blockedBy: card.blockedBy ?? [],
+      })),
       readinessEvents: (parsed.readinessEvents ?? []) as ReadinessEvent[],
       documents: (parsed.documents ?? []) as PlanDocument[],
       activity: parsed.activity ?? [],

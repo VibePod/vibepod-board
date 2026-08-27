@@ -1,4 +1,5 @@
 import {
+  Accordion,
   ActionIcon,
   Alert,
   Anchor,
@@ -9,11 +10,14 @@ import {
   Checkbox,
   Code,
   createTheme,
+  Divider,
+  FileInput,
   Group,
   MantineProvider,
   Modal,
   MultiSelect,
   Paper,
+  SegmentedControl,
   Select,
   SimpleGrid,
   Stack,
@@ -28,24 +32,39 @@ import {
 } from "@mantine/core";
 import "@mantine/core/styles.css";
 import {
+  ChevronLeft,
+  ChevronRight,
   Columns3,
+  Download,
   ExternalLink,
   FileText,
   FolderKanban,
+  Fullscreen,
   GitBranch,
   KeyRound,
+  List,
   ListChecks,
+  Lock,
   LogOut,
   Moon,
+  Network,
   Pencil,
   PlugZap,
   Plus,
   RefreshCcw,
   Save,
   Sun,
+  Upload,
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useEffect, useState } from "react";
+import {
+  type FormEvent,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { createRoot } from "react-dom/client";
+import { buildWorkOrder } from "../shared/dependencies.js";
 import {
   endpointOptions,
   integrationExamples,
@@ -64,9 +83,11 @@ import {
   documentKinds,
   type Idea,
   type IdeaStatus,
+  type ImportProjectResult,
   ideaStatuses,
   type PlanDocument,
   type Project,
+  type ProjectBundle,
   type ReadinessEvent,
 } from "../shared/types.js";
 import vibepodIconUrl from "./assets/icon.png";
@@ -75,19 +96,34 @@ import {
   projectSelectorOptions,
   shouldShowProjectSidebar,
 } from "./layoutNavigation.js";
+import { InlineMarkdown, MarkdownText } from "./Markdown.js";
+import {
+  CriteriaPreview,
+  MarkdownField,
+  MarkdownPreview,
+} from "./MarkdownField.js";
+import type { MarkdownFieldMode } from "./markdownField.js";
 import {
   formatNavigationPath,
   type NavigationState,
   type NavigationView,
   parseNavigationPath,
 } from "./navigation.js";
+import {
+  downloadResponse,
+  parseProjectBundleText,
+  projectBundlePreview,
+  projectExportFileName,
+} from "./projectTransfer.js";
 import { githubRemoteToHttpsUrl } from "./repositoryUtils.js";
+import { TaskGraph } from "./TaskGraph.js";
 import {
   isCardReadinessStale,
   isReadinessStale,
   readinessColor,
   taskListCardView,
 } from "./taskCardUtils.js";
+import { dependencyLinks, dependencyOptions } from "./taskDependencyUtils.js";
 import {
   emptyTaskDraft,
   type TaskDraft,
@@ -96,6 +132,7 @@ import {
 } from "./taskDraftUtils.js";
 import { formatTaskId } from "./taskIdentity.js";
 import { filterAndSortTasks, type TaskSortOption } from "./taskListUtils.js";
+import { taskNavigationFor } from "./taskNavigation.js";
 import { taskOverviewForIdea } from "./taskOverviewUtils.js";
 import "./styles.css";
 
@@ -107,6 +144,9 @@ type AppState = {
 };
 
 type ActiveView = NavigationView;
+
+/** How the task list renders: flat cards, or the dependency graph. */
+type TaskViewMode = "list" | "tree";
 
 type AuthState =
   | { status: "checking" }
@@ -136,6 +176,8 @@ type NoteDraft = {
 type TaskModalState = {
   mode: "create" | "edit";
   draft: TaskDraft;
+  originalDraft: TaskDraft | null;
+  isFullscreen: boolean;
 };
 
 type TaskViewModalState = {
@@ -156,6 +198,12 @@ type NoteModalState = {
 type ProjectModalState = {
   mode: "create" | "edit";
   draft: ProjectDraft;
+};
+
+type ProjectImportState = {
+  bundle: ProjectBundle | null;
+  error: string;
+  isSubmitting: boolean;
 };
 
 type CreatedTokenState = {
@@ -183,6 +231,12 @@ const emptyProjectDraft = (): ProjectDraft => ({
   key: "",
   title: "",
   summary: "",
+});
+
+const emptyProjectImportState = (): ProjectImportState => ({
+  bundle: null,
+  error: "",
+  isSubmitting: false,
 });
 
 const emptyNoteDraft = (): NoteDraft => ({
@@ -281,7 +335,15 @@ const App = () => {
   const [projectModal, setProjectModal] = useState<ProjectModalState | null>(
     null,
   );
+  const [projectImport, setProjectImport] = useState<ProjectImportState | null>(
+    null,
+  );
   const [taskModal, setTaskModal] = useState<TaskModalState | null>(null);
+  const [descriptionMode, setDescriptionMode] =
+    useState<MarkdownFieldMode>("edit");
+  const [criteriaMode, setCriteriaMode] = useState<MarkdownFieldMode>("edit");
+  // Notes start collapsed; ids of the notes the user has expanded.
+  const [openNoteIds, setOpenNoteIds] = useState<string[]>([]);
   const [taskViewModal, setTaskViewModal] = useState<TaskViewModalState | null>(
     null,
   );
@@ -292,6 +354,7 @@ const App = () => {
   >(null);
   const [readinessError, setReadinessError] = useState("");
   const [noteModal, setNoteModal] = useState<NoteModalState | null>(null);
+  const [taskViewMode, setTaskViewMode] = useState<TaskViewMode>("list");
   const [taskSort, setTaskSort] = useState<TaskSortOption>("created_desc");
   const [taskStatusFilter, setTaskStatusFilter] = useState<IdeaStatus | "">("");
   const [taskLabelFilter, setTaskLabelFilter] = useState("");
@@ -301,6 +364,7 @@ const App = () => {
     null,
   );
   const [error, setError] = useState<string>("");
+  const [notice, setNotice] = useState<string>("");
   const [isLoading, setIsLoading] = useState(true);
   const [isMcpGuideOpen, setIsMcpGuideOpen] = useState(false);
   const [isTokenManagerOpen, setIsTokenManagerOpen] = useState(false);
@@ -397,6 +461,52 @@ const App = () => {
     await loadTokens();
   };
 
+  // The task modal handlers are recreated on every render and are declared far
+  // below, after the derived task lists they read. Keeping the latest ones in a
+  // ref lets the key listeners stay subscribed to `taskModal` alone while still
+  // seeing the current filters and draft.
+  const taskModalHandlersRef = useRef({
+    save: (_event: FormEvent) => {},
+    navigate: (_direction: number) => {},
+    close: () => {},
+  });
+
+  // Keyboard shortcuts for task modal
+  useEffect(() => {
+    if (!taskModal) {
+      return;
+    }
+
+    const handleTaskModalKeydown = (event: KeyboardEvent) => {
+      // Ctrl+S to save. Escape is left to the shared close handler below, which
+      // applies the unsaved-changes guard.
+      if ((event.ctrlKey || event.metaKey) && event.key === "s") {
+        event.preventDefault();
+        taskModalHandlersRef.current.save(event as unknown as FormEvent);
+        return;
+      }
+
+      // Arrow keys to navigate tasks (only when not in an input)
+      const activeElement = document.activeElement;
+      const isInInput =
+        activeElement instanceof HTMLInputElement ||
+        activeElement instanceof HTMLTextAreaElement ||
+        activeElement instanceof HTMLSelectElement ||
+        activeElement?.getAttribute("contenteditable") === "true";
+
+      if (!isInInput) {
+        if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+          event.preventDefault();
+          const direction = event.key === "ArrowLeft" ? -1 : 1;
+          taskModalHandlersRef.current.navigate(direction);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleTaskModalKeydown);
+    return () => window.removeEventListener("keydown", handleTaskModalKeydown);
+  }, [taskModal]);
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: bootstrap must run once on mount only
   useEffect(() => {
     const bootstrap = async () => {
@@ -465,6 +575,7 @@ const App = () => {
       !isMcpGuideOpen &&
       !isTokenManagerOpen &&
       !projectModal &&
+      !projectImport &&
       !taskModal &&
       !taskViewModal &&
       !noteModal &&
@@ -474,15 +585,20 @@ const App = () => {
     }
 
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setIsMcpGuideOpen(false);
-        setIsTokenManagerOpen(false);
-        setProjectModal(null);
-        setTaskModal(null);
-        setTaskViewModal(null);
-        setNoteModal(null);
-        setReadinessModal(null);
+      if (event.key !== "Escape") {
+        return;
       }
+      setIsMcpGuideOpen(false);
+      setIsTokenManagerOpen(false);
+      setProjectModal(null);
+      // An import in flight owns the dialog until the request settles, the same
+      // rule the modal's own onClose and closeOnClickOutside guards apply.
+      setProjectImport((current) => (current?.isSubmitting ? current : null));
+      // Routed through closeTaskModal so the unsaved-changes guard applies.
+      taskModalHandlersRef.current.close();
+      setTaskViewModal(null);
+      setNoteModal(null);
+      setReadinessModal(null);
     };
 
     window.addEventListener("keydown", closeOnEscape);
@@ -491,6 +607,7 @@ const App = () => {
     isMcpGuideOpen,
     isTokenManagerOpen,
     projectModal,
+    projectImport,
     taskModal,
     taskViewModal,
     noteModal,
@@ -500,6 +617,9 @@ const App = () => {
   const selectedProject = state.projects.find(
     (project) => project.id === selectedProjectId,
   );
+  const importPreview = projectImport?.bundle
+    ? projectBundlePreview(projectImport.bundle, state.projects)
+    : null;
   const projectIdeas = selectedProject
     ? state.ideas.filter((idea) => idea.projectId === selectedProject.id)
     : [];
@@ -531,12 +651,63 @@ const App = () => {
   const taskModalLabelOptions = Array.from(
     new Set([...taskLabelOptions, ...(taskModal?.draft.labels ?? [])]),
   ).sort((a, b) => a.localeCompare(b));
+  const projectCards = boardColumns.flatMap(
+    (column) => projectColumns[column] ?? [],
+  );
+  const projectCardColumns = new Map(
+    projectCards
+      .filter((card): card is BoardCard & { ideaId: string } =>
+        Boolean(card.ideaId),
+      )
+      .map((card) => [card.ideaId, card.column]),
+  );
+  const projectWorkOrder = selectedProject
+    ? buildWorkOrder(
+        projectIdeas,
+        projectCards,
+        new Map([[selectedProject.id, selectedProject.key]]),
+      )
+    : { items: [], cyclicTaskIds: [] };
+  const workOrderPositions = new Map(
+    projectWorkOrder.items.map((item) => [item.id, item.position]),
+  );
+  const taskDependencyOptions = selectedProject
+    ? dependencyOptions(projectIdeas, selectedProject.key, taskModal?.draft.id)
+    : [];
+  const taskViewBlockedBy =
+    taskViewIdea && taskViewProject
+      ? dependencyLinks(
+          taskViewIdea.dependsOn,
+          ideaById,
+          taskViewProject.key,
+          taskViewIdea.blockedBy,
+        )
+      : [];
+  const taskViewBlocks =
+    taskViewIdea && taskViewProject
+      ? dependencyLinks(taskViewIdea.blocks, ideaById, taskViewProject.key)
+      : [];
   const visibleProjectIdeas = filterAndSortTasks(projectIdeas, {
     sort: taskSort,
     status: taskStatusFilter,
     label: taskLabelFilter,
     search: taskSearch,
+    workOrder: workOrderPositions,
   });
+  // Navigation follows the list the user actually sees, so the counter matches
+  // the filtered total and the arrows never jump to a hidden task.
+  const taskModalNavigation = taskNavigationFor(
+    visibleProjectIdeas,
+    taskModal?.mode === "edit" ? taskModal.draft.id : undefined,
+  );
+  const navigateToAdjacentTask = (direction: number) => {
+    if (!taskModalNavigation || taskModalNavigation.total < 2) {
+      return;
+    }
+    openEditTask(
+      direction < 0 ? taskModalNavigation.previous : taskModalNavigation.next,
+    );
+  };
   const showProjectSidebar = shouldShowProjectSidebar(
     activeView,
     !!selectedProject,
@@ -694,19 +865,120 @@ const App = () => {
     }
   };
 
+  const openProjectImport = () => {
+    setError("");
+    setNotice("");
+    setProjectImport(emptyProjectImportState());
+  };
+
+  const selectProjectImportFile = async (file: File | null) => {
+    setProjectImport((current) =>
+      current ? { ...current, bundle: null, error: "" } : current,
+    );
+    if (!file) {
+      return;
+    }
+    try {
+      const bundle = parseProjectBundleText(await file.text());
+      setProjectImport((current) =>
+        current ? { ...current, bundle, error: "" } : current,
+      );
+    } catch (err) {
+      setProjectImport((current) =>
+        current
+          ? {
+              ...current,
+              bundle: null,
+              error:
+                err instanceof Error
+                  ? err.message
+                  : "Failed to read project file",
+            }
+          : current,
+      );
+    }
+  };
+
+  const exportProject = async (project: Project) => {
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch(`/api/projects/${project.id}/export`, {
+        credentials: "include",
+      });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(body.error ?? `Request failed: ${response.status}`);
+      }
+      await downloadResponse(response, projectExportFileName(project));
+      setNotice(`Project ${project.key} exported successfully.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to export project");
+    }
+  };
+
+  const submitProjectImport = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!projectImport?.bundle) {
+      return;
+    }
+    const bundle = projectImport.bundle;
+    const preview = projectBundlePreview(bundle, state.projects);
+    setProjectImport((current) =>
+      current ? { ...current, error: "", isSubmitting: true } : current,
+    );
+    setError("");
+    setNotice("");
+    try {
+      await api<ImportProjectResult>("/api/projects/import", {
+        method: "POST",
+        body: JSON.stringify({
+          bundle,
+          replaceExisting: Boolean(preview.existingProjectId),
+        }),
+      });
+      await loadState();
+      setProjectImport(null);
+      setNotice(`Project ${bundle.project.key} imported successfully.`);
+    } catch (err) {
+      setProjectImport((current) =>
+        current
+          ? {
+              ...current,
+              error:
+                err instanceof Error ? err.message : "Failed to import project",
+              isSubmitting: false,
+            }
+          : current,
+      );
+    }
+  };
+
   const openCreateTask = () => {
     if (!selectedProject) {
       returnToProjects();
       return;
     }
-    setTaskModal({ mode: "create", draft: emptyTaskDraft() });
+    setDescriptionMode("edit");
+    setCriteriaMode("edit");
+    setTaskModal({
+      mode: "create",
+      draft: emptyTaskDraft(),
+      originalDraft: null,
+      isFullscreen: false,
+    });
   };
 
   const openEditTask = (idea: Idea) => {
     const project = state.projects.find((item) => item.id === idea.projectId);
+    const draft = taskToDraft(idea, project?.key);
     setTaskModal({
       mode: "edit",
-      draft: taskToDraft(idea, project?.key),
+      draft,
+      originalDraft: { ...draft },
+      isFullscreen: false,
     });
   };
 
@@ -716,7 +988,39 @@ const App = () => {
     );
   };
 
-  const saveTask = async (event: FormEvent) => {
+  const hasTaskModalChanges = () => {
+    if (!taskModal) return false;
+    // A create draft is compared against a blank one, so closing an untouched
+    // "Add Task" dialog does not count as discarding work.
+    const baseline =
+      taskModal.mode === "create"
+        ? emptyTaskDraft()
+        : (taskModal.originalDraft ?? null);
+    if (!baseline) return false;
+    const draft = taskModal.draft;
+    return (
+      draft.title !== baseline.title ||
+      draft.description !== baseline.description ||
+      draft.acceptanceCriteria !== baseline.acceptanceCriteria ||
+      draft.status !== baseline.status ||
+      JSON.stringify(draft.labels) !== JSON.stringify(baseline.labels) ||
+      JSON.stringify(draft.dependsOn) !== JSON.stringify(baseline.dependsOn) ||
+      draft.repositoryLocalPath !== baseline.repositoryLocalPath ||
+      draft.repositoryRemoteUrl !== baseline.repositoryRemoteUrl
+    );
+  };
+
+  const closeTaskModal = () => {
+    if (
+      hasTaskModalChanges() &&
+      !window.confirm("Discard unsaved changes to this task?")
+    ) {
+      return;
+    }
+    setTaskModal(null);
+  };
+
+  const saveTaskWithoutClose = async (event: FormEvent) => {
     event.preventDefault();
     if (!taskModal) {
       return;
@@ -724,31 +1028,57 @@ const App = () => {
     setError("");
     const payload = taskDraftToIdeaPayload(taskModal.draft);
 
-    if (taskModal.mode === "create") {
-      const created = await api<{ item: Idea }>("/api/ideas", {
-        method: "POST",
-        body: JSON.stringify({
-          ...payload,
-          projectId: selectedProject?.id,
-        }),
-      });
-      if (taskModal.draft.status !== "idea") {
-        await api(`/api/ideas/${created.item.id}`, {
+    try {
+      let savedId = taskModal.draft.id;
+      if (taskModal.mode === "create") {
+        const created = await api<{ item: Idea }>("/api/ideas", {
+          method: "POST",
+          body: JSON.stringify({
+            ...payload,
+            projectId: selectedProject?.id,
+          }),
+        });
+        savedId = created.item.id;
+        if (taskModal.draft.status !== "idea") {
+          await api(`/api/ideas/${created.item.id}`, {
+            method: "PATCH",
+            body: JSON.stringify({ status: taskModal.draft.status }),
+          });
+        }
+      } else if (taskModal.draft.id) {
+        await api(`/api/ideas/${taskModal.draft.id}`, {
           method: "PATCH",
-          body: JSON.stringify({ status: taskModal.draft.status }),
+          body: JSON.stringify({
+            ...payload,
+            status: taskModal.draft.status,
+          }),
         });
       }
-    } else if (taskModal.draft.id) {
-      await api(`/api/ideas/${taskModal.draft.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          ...payload,
-          status: taskModal.draft.status,
-        }),
-      });
+      await loadState();
+      // Keep the modal open and mark the draft clean. Switching to edit mode
+      // keeps a second save updating the task just created instead of adding
+      // another one.
+      setTaskModal((current) =>
+        current
+          ? {
+              ...current,
+              mode: "edit",
+              draft: { ...current.draft, id: savedId },
+              originalDraft: { ...current.draft, id: savedId },
+            }
+          : current,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save task");
     }
-    setTaskModal(null);
-    await loadState();
+  };
+
+  // Assigned every render, below the handlers, so the key listeners above
+  // always call the current versions.
+  taskModalHandlersRef.current = {
+    save: (event: FormEvent) => void saveTaskWithoutClose(event),
+    navigate: navigateToAdjacentTask,
+    close: closeTaskModal,
   };
 
   const openCreateNote = () => {
@@ -1031,13 +1361,23 @@ const App = () => {
           </div>
           <Group className="topbar-actions" gap="xs">
             {activeView === "projects" && (
-              <Button
-                type="button"
-                leftSection={<Plus size={18} />}
-                onClick={openCreateProject}
-              >
-                Add Project
-              </Button>
+              <>
+                <Button
+                  type="button"
+                  variant="light"
+                  leftSection={<Upload size={18} />}
+                  onClick={openProjectImport}
+                >
+                  Import Project
+                </Button>
+                <Button
+                  type="button"
+                  leftSection={<Plus size={18} />}
+                  onClick={openCreateProject}
+                >
+                  Add Project
+                </Button>
+              </>
             )}
             {activeView === "ideas" && selectedProject && (
               <Button
@@ -1072,6 +1412,11 @@ const App = () => {
         {error && (
           <Alert color="red" variant="light">
             {error}
+          </Alert>
+        )}
+        {notice && (
+          <Alert color="green" variant="light">
+            {notice}
           </Alert>
         )}
         {isLoading ? (
@@ -1164,6 +1509,19 @@ const App = () => {
                           type="button"
                           variant="light"
                           color="gray"
+                          leftSection={<Download size={16} />}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void exportProject(project);
+                          }}
+                        >
+                          Export
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="light"
+                          color="gray"
                           leftSection={<Pencil size={16} />}
                           onClick={(event) => {
                             event.preventDefault();
@@ -1220,6 +1578,38 @@ const App = () => {
         {activeView === "ideas" && selectedProject && (
           <Stack gap="sm">
             <Paper className="task-filters" withBorder radius="md" p="md">
+              <Group justify="space-between" align="center" gap="sm" mb="sm">
+                <Text size="sm" fw={600} c="dimmed">
+                  {visibleProjectIdeas.length} of {projectIdeas.length} tasks
+                </Text>
+                <SegmentedControl
+                  className="task-view-switch"
+                  size="sm"
+                  value={taskViewMode}
+                  onChange={(value) => setTaskViewMode(value as TaskViewMode)}
+                  data={[
+                    {
+                      value: "list",
+                      label: (
+                        <Group gap={6} wrap="nowrap">
+                          <List size={14} aria-hidden />
+                          <span>List</span>
+                        </Group>
+                      ),
+                    },
+                    {
+                      value: "tree",
+                      label: (
+                        <Group gap={6} wrap="nowrap">
+                          <Network size={14} aria-hidden />
+                          <span>Tree</span>
+                        </Group>
+                      ),
+                    },
+                  ]}
+                  aria-label="Task view mode"
+                />
+              </Group>
               <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm">
                 <TextInput
                   label="Search"
@@ -1239,6 +1629,7 @@ const App = () => {
                     { value: "title_asc", label: "Title A-Z" },
                     { value: "status_asc", label: "Status" },
                     { value: "rating_desc", label: "Rating" },
+                    { value: "dependency_asc", label: "Dependency order" },
                   ]}
                 />
                 <Select
@@ -1289,106 +1680,132 @@ const App = () => {
                 <Text c="dimmed">No tasks match the current filters.</Text>
               </Paper>
             )}
-            {visibleProjectIdeas.map((idea) => {
-              const taskCard = taskListCardView(
-                idea,
-                state.columns,
-                selectedProject.key,
-              );
-              return (
-                <Card
-                  className="item task-list-card"
-                  withBorder
-                  shadow="xs"
-                  radius="md"
-                  padding={0}
-                  key={taskCard.id}
-                >
-                  <Box
-                    className="task-card-edit-area"
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => openEditTask(idea)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        openEditTask(idea);
-                      }
-                    }}
+            {taskViewMode === "tree" && visibleProjectIdeas.length > 0 && (
+              <TaskGraph
+                tasks={visibleProjectIdeas}
+                projectKey={selectedProject.key}
+                cardColumns={projectCardColumns}
+                onOpenTask={openEditTask}
+              />
+            )}
+            {taskViewMode === "list" &&
+              visibleProjectIdeas.map((idea) => {
+                const taskCard = taskListCardView(
+                  idea,
+                  state.columns,
+                  selectedProject.key,
+                );
+                return (
+                  <Card
+                    className="item task-list-card"
+                    withBorder
+                    shadow="xs"
+                    radius="md"
+                    padding={0}
+                    key={taskCard.id}
                   >
-                    <Group align="flex-start" justify="space-between" gap="sm">
-                      <Box className="task-card-title">
-                        <Group
-                          className="task-card-title-row"
-                          gap="xs"
-                          wrap="nowrap"
-                        >
-                          <Badge variant="light" color="gray" size="sm">
-                            {taskCard.taskId}
-                          </Badge>
-                          <Title order={3}>{taskCard.title}</Title>
-                        </Group>
-                        {labelBadges(taskCard.labels)}
-                        {idea.readinessScore !== undefined && (
-                          <Badge
-                            variant="light"
-                            color={
-                              isReadinessStale(idea)
-                                ? "gray"
-                                : readinessColor(idea.readinessScore)
-                            }
-                            size="sm"
-                            opacity={isReadinessStale(idea) ? 0.6 : 1}
-                            mt="xs"
-                            style={{ cursor: "pointer" }}
-                            role="button"
-                            tabIndex={0}
-                            aria-label={`Show readiness history for ${idea.title}`}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setReadinessModal({
-                                ideaId: idea.id,
-                                ideaTitle: idea.title,
-                              });
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter" || event.key === " ") {
-                                event.preventDefault();
+                    <Box
+                      className="task-card-edit-area"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => openEditTask(idea)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          openEditTask(idea);
+                        }
+                      }}
+                    >
+                      <Group
+                        align="flex-start"
+                        justify="space-between"
+                        gap="sm"
+                      >
+                        <Box className="task-card-title">
+                          <Group
+                            className="task-card-title-row"
+                            gap="xs"
+                            wrap="nowrap"
+                          >
+                            <Badge variant="light" color="gray" size="sm">
+                              {taskCard.taskId}
+                            </Badge>
+                            <Title order={3}>{taskCard.title}</Title>
+                            {taskCard.isBlocked && (
+                              <Badge
+                                variant="light"
+                                color="orange"
+                                size="sm"
+                                leftSection={<Lock size={12} aria-hidden />}
+                              >
+                                Blocked by {taskCard.blockedByCount}
+                              </Badge>
+                            )}
+                          </Group>
+                          {labelBadges(taskCard.labels)}
+                          {idea.readinessScore !== undefined && (
+                            <Badge
+                              variant="light"
+                              color={
+                                isReadinessStale(idea)
+                                  ? "gray"
+                                  : readinessColor(idea.readinessScore)
+                              }
+                              size="sm"
+                              opacity={isReadinessStale(idea) ? 0.6 : 1}
+                              mt="xs"
+                              style={{ cursor: "pointer" }}
+                              role="button"
+                              tabIndex={0}
+                              aria-label={`Show readiness history for ${idea.title}`}
+                              onClick={(event) => {
                                 event.stopPropagation();
                                 setReadinessModal({
                                   ideaId: idea.id,
                                   ideaTitle: idea.title,
                                 });
-                              }
-                            }}
-                          >
-                            {idea.readinessScore}/10
-                            {isReadinessStale(idea) ? " · stale" : ""}
-                          </Badge>
-                        )}
-                      </Box>
-                      {statusBadge(taskCard.status)}
-                    </Group>
-                  </Box>
-                  <Box
-                    className="task-ready-control"
-                    onClick={(event) => event.stopPropagation()}
-                    onPointerDown={(event) => event.stopPropagation()}
-                  >
-                    <Checkbox
-                      label="Ready"
-                      checked={taskCard.isReady}
-                      onChange={(event) =>
-                        void setBoardAvailability(
-                          idea,
-                          event.currentTarget.checked,
-                        )
-                      }
-                    />
-                  </Box>
-                </Card>
-              );
-            })}
+                              }}
+                              onKeyDown={(event) => {
+                                if (
+                                  event.key === "Enter" ||
+                                  event.key === " "
+                                ) {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  setReadinessModal({
+                                    ideaId: idea.id,
+                                    ideaTitle: idea.title,
+                                  });
+                                }
+                              }}
+                            >
+                              {idea.readinessScore}/10
+                              {isReadinessStale(idea) ? " · stale" : ""}
+                            </Badge>
+                          )}
+                        </Box>
+                        {statusBadge(taskCard.status)}
+                      </Group>
+                    </Box>
+                    <Box
+                      className="task-ready-control"
+                      onClick={(event) => event.stopPropagation()}
+                      onPointerDown={(event) => event.stopPropagation()}
+                    >
+                      <Checkbox
+                        label="Ready"
+                        checked={taskCard.isReady}
+                        onChange={(event) =>
+                          void setBoardAvailability(
+                            idea,
+                            event.currentTarget.checked,
+                          )
+                        }
+                      />
+                    </Box>
+                  </Card>
+                );
+              })}
           </Stack>
         )}
 
@@ -1491,6 +1908,21 @@ const App = () => {
                         >
                           <Stack gap="xs">
                             <Title order={4}>{card.title}</Title>
+                            {card.blockedBy.length > 0 && (
+                              <Group
+                                className="board-card-blocked"
+                                justify="flex-start"
+                              >
+                                <Badge
+                                  variant="light"
+                                  color="orange"
+                                  size="sm"
+                                  leftSection={<Lock size={12} aria-hidden />}
+                                >
+                                  Blocked by {card.blockedBy.length}
+                                </Badge>
+                              </Group>
+                            )}
                             {labelBadges(card.labels, "xs")}
                             {card.readinessScore !== undefined && (
                               <Group
@@ -1628,38 +2060,147 @@ const App = () => {
                 <Text c="dimmed">No notes in this project yet.</Text>
               </Paper>
             )}
-            {projectDocuments.map((document) => (
-              <Card
-                className="item document"
-                withBorder
-                shadow="xs"
+            {projectDocuments.length > 0 && (
+              <Accordion
+                className="document-accordion"
+                variant="separated"
                 radius="md"
-                padding="md"
-                key={document.id}
+                multiple
+                value={openNoteIds}
+                onChange={setOpenNoteIds}
+                chevronPosition="left"
               >
-                <Group align="flex-start" justify="space-between">
-                  <Title order={3}>{document.title}</Title>
-                  <Badge variant="light" color="violet">
-                    {document.kind}
-                  </Badge>
-                </Group>
-                <pre>{document.content || "No note content yet."}</pre>
-                <Group gap="xs">
-                  <Button
-                    type="button"
-                    variant="light"
-                    color="gray"
-                    leftSection={<Pencil size={16} />}
-                    onClick={() => openEditNote(document)}
+                {projectDocuments.map((document) => (
+                  <Accordion.Item
+                    className="item document"
+                    value={document.id}
+                    key={document.id}
                   >
-                    Edit
-                  </Button>
-                </Group>
-              </Card>
-            ))}
+                    <Accordion.Control>
+                      <Group
+                        align="center"
+                        justify="space-between"
+                        gap="sm"
+                        wrap="nowrap"
+                      >
+                        <Text fw={700} size="md">
+                          {document.title}
+                        </Text>
+                        <Badge variant="light" color="violet">
+                          {document.kind}
+                        </Badge>
+                      </Group>
+                    </Accordion.Control>
+                    <Accordion.Panel>
+                      <Stack gap="md">
+                        <MarkdownPreview
+                          value={document.content}
+                          emptyText="No note content yet."
+                        />
+                        <Group gap="xs">
+                          <Button
+                            type="button"
+                            variant="light"
+                            color="gray"
+                            leftSection={<Pencil size={16} />}
+                            onClick={() => openEditNote(document)}
+                          >
+                            Edit
+                          </Button>
+                        </Group>
+                      </Stack>
+                    </Accordion.Panel>
+                  </Accordion.Item>
+                ))}
+              </Accordion>
+            )}
           </Stack>
         )}
       </section>
+
+      <Modal
+        opened={!!projectImport}
+        onClose={() => {
+          if (!projectImport?.isSubmitting) {
+            setProjectImport(null);
+          }
+        }}
+        title="Import Project"
+        centered
+        size="lg"
+        closeOnClickOutside={!projectImport?.isSubmitting}
+      >
+        {projectImport && (
+          <form
+            className="modal-form"
+            onSubmit={(event) => void submitProjectImport(event)}
+          >
+            <Stack gap="md">
+              <FileInput
+                label="Project JSON file"
+                placeholder="Choose a project export"
+                accept="application/json,.json"
+                clearable
+                disabled={projectImport.isSubmitting}
+                onChange={(file) => void selectProjectImportFile(file)}
+              />
+              {projectImport.error && (
+                <Alert color="red" variant="light">
+                  {projectImport.error}
+                </Alert>
+              )}
+              {importPreview && (
+                <Stack gap="sm">
+                  <Text fw={700}>
+                    {importPreview.title} ({importPreview.key})
+                  </Text>
+                  <Group gap="xs">
+                    <Badge variant="light" color="green">
+                      {importPreview.tasks} tasks
+                    </Badge>
+                    <Badge variant="light" color="blue">
+                      {importPreview.cards}{" "}
+                      {importPreview.cards === 1 ? "board card" : "board cards"}
+                    </Badge>
+                    <Badge variant="light" color="grape">
+                      {importPreview.documents}{" "}
+                      {importPreview.documents === 1 ? "document" : "documents"}
+                    </Badge>
+                  </Group>
+                  {importPreview.existingProjectId && (
+                    <Alert color="red" variant="light">
+                      This will replace all current project data for{" "}
+                      {importPreview.key}. API token access to the destination
+                      project will be retained.
+                    </Alert>
+                  )}
+                </Stack>
+              )}
+              <Group justify="flex-end">
+                <Button
+                  type="button"
+                  variant="default"
+                  disabled={projectImport.isSubmitting}
+                  onClick={() => setProjectImport(null)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  color={importPreview?.existingProjectId ? "red" : "teal"}
+                  loading={projectImport.isSubmitting}
+                  disabled={!projectImport.bundle}
+                  leftSection={<Upload size={16} />}
+                >
+                  {importPreview?.existingProjectId
+                    ? "Replace Project"
+                    : "Import Project"}
+                </Button>
+              </Group>
+            </Stack>
+          </form>
+        )}
+      </Modal>
 
       <Modal
         opened={!!projectModal}
@@ -1744,9 +2285,11 @@ const App = () => {
               <Text size="xs" fw={700} tt="uppercase" c="dimmed">
                 Description
               </Text>
-              <Text className="overview-text">
-                {taskViewCard?.details?.trim() || taskOverview.description}
-              </Text>
+              <div className="overview-markdown">
+                <MarkdownText>
+                  {taskViewCard?.details?.trim() || taskOverview.description}
+                </MarkdownText>
+              </div>
             </Paper>
 
             <Paper className="overview-section" withBorder radius="md" p="md">
@@ -1761,13 +2304,62 @@ const App = () => {
               {taskOverview.acceptanceCriteria.length > 0 ? (
                 <ul className="overview-criteria-list">
                   {taskOverview.acceptanceCriteria.map((criterion) => (
-                    <li key={criterion}>{criterion}</li>
+                    <li key={criterion}>
+                      <InlineMarkdown>{criterion}</InlineMarkdown>
+                    </li>
                   ))}
                 </ul>
               ) : (
                 <Text c="dimmed">No acceptance criteria yet.</Text>
               )}
             </Paper>
+
+            {(taskViewBlockedBy.length > 0 || taskViewBlocks.length > 0) && (
+              <Paper className="overview-section" withBorder radius="md" p="md">
+                <Text size="xs" fw={700} tt="uppercase" c="dimmed" mb="xs">
+                  Dependencies
+                </Text>
+                <Stack gap="sm">
+                  {taskViewBlockedBy.length > 0 && (
+                    <Stack gap={4}>
+                      <Text size="sm" fw={600}>
+                        Depends on
+                      </Text>
+                      {taskViewBlockedBy.map((link) => (
+                        <Group key={link.id} gap="xs">
+                          <Badge variant="light" color="gray" size="sm">
+                            {link.taskId}
+                          </Badge>
+                          <Text size="sm">{link.title}</Text>
+                          <Badge
+                            variant="light"
+                            color={link.isBlocking ? "orange" : "green"}
+                            size="sm"
+                          >
+                            {link.isBlocking ? "open" : link.status}
+                          </Badge>
+                        </Group>
+                      ))}
+                    </Stack>
+                  )}
+                  {taskViewBlocks.length > 0 && (
+                    <Stack gap={4}>
+                      <Text size="sm" fw={600}>
+                        Blocks
+                      </Text>
+                      {taskViewBlocks.map((link) => (
+                        <Group key={link.id} gap="xs">
+                          <Badge variant="light" color="gray" size="sm">
+                            {link.taskId}
+                          </Badge>
+                          <Text size="sm">{link.title}</Text>
+                        </Group>
+                      ))}
+                    </Stack>
+                  )}
+                </Stack>
+              </Paper>
+            )}
 
             <Group justify="flex-end">
               <Button
@@ -1861,23 +2453,105 @@ const App = () => {
 
       <Modal
         opened={!!taskModal}
-        onClose={() => setTaskModal(null)}
-        title={taskModal?.mode === "create" ? "Add Task" : "Edit Task"}
+        onClose={closeTaskModal}
+        title={
+          taskModal?.mode === "create"
+            ? "Add Task"
+            : `Edit Task${hasTaskModalChanges() ? " *" : ""}`
+        }
         centered
         size="xl"
-        classNames={{ header: "task-modal-header", body: "task-modal-body" }}
+        fullScreen={taskModal?.isFullscreen ?? false}
+        overlayProps={{ opacity: 0.5, color: "var(--app-sidebar-bg)" }}
+        classNames={{
+          header: "task-modal-header",
+          body: "task-modal-body",
+          title: "task-modal-title",
+        }}
       >
         {taskModal && (
           <form
             className="modal-form"
-            onSubmit={(event) => void saveTask(event)}
+            onSubmit={(event) => void saveTaskWithoutClose(event)}
           >
             <Stack gap="md">
-              {taskModal.draft.taskId && (
-                <Badge variant="light" color="gray" w="fit-content">
-                  {taskModal.draft.taskId}
-                </Badge>
-              )}
+              <Group justify="space-between">
+                <Group gap="xs">
+                  {taskModal.mode === "edit" && (
+                    <Badge
+                      variant="light"
+                      color={hasTaskModalChanges() ? "yellow" : "teal"}
+                    >
+                      {hasTaskModalChanges() ? "Modified" : "Saved"}
+                    </Badge>
+                  )}
+                  {taskModal.mode === "edit" && taskModal.draft.taskId && (
+                    <Badge variant="light" color="gray">
+                      {taskModal.draft.taskId}
+                    </Badge>
+                  )}
+                </Group>
+                <Group gap="xs">
+                  {taskModalNavigation && taskModalNavigation.total > 1 && (
+                    <Group className="task-modal-nav" gap={4}>
+                      <ActionIcon
+                        variant="subtle"
+                        color="gray"
+                        size="md"
+                        onClick={() => navigateToAdjacentTask(-1)}
+                        title="Previous task (Left arrow)"
+                        aria-label="Previous task"
+                      >
+                        <ChevronLeft size={16} />
+                      </ActionIcon>
+                      <Text size="xs" c="dimmed">
+                        {taskModalNavigation.index + 1} /{" "}
+                        {taskModalNavigation.total}
+                      </Text>
+                      <ActionIcon
+                        variant="subtle"
+                        color="gray"
+                        size="md"
+                        onClick={() => navigateToAdjacentTask(1)}
+                        title="Next task (Right arrow)"
+                        aria-label="Next task"
+                      >
+                        <ChevronRight size={16} />
+                      </ActionIcon>
+                    </Group>
+                  )}
+                  {taskModal.mode === "edit" && (
+                    <ActionIcon
+                      variant="subtle"
+                      color="gray"
+                      size="md"
+                      onClick={() =>
+                        setTaskModal((current) =>
+                          current
+                            ? {
+                                ...current,
+                                isFullscreen: !current.isFullscreen,
+                              }
+                            : current,
+                        )
+                      }
+                      title={
+                        taskModal.isFullscreen
+                          ? "Exit fullscreen"
+                          : "Toggle fullscreen"
+                      }
+                      aria-label={
+                        taskModal.isFullscreen
+                          ? "Exit fullscreen"
+                          : "Toggle fullscreen"
+                      }
+                    >
+                      <Fullscreen size={16} />
+                    </ActionIcon>
+                  )}
+                </Group>
+              </Group>
+              <Divider my="xs" />
               <TextInput
                 label="Title"
                 value={taskModal.draft.title}
@@ -1927,33 +2601,72 @@ const App = () => {
                   placeholder="git@github.com:owner/repo.git"
                 />
               </SimpleGrid>
-              <Textarea
+              <MultiSelect
+                label="Depends on"
+                description="Tasks that must be done before this one. Options that would create a cycle are hidden."
+                placeholder={
+                  taskDependencyOptions.length > 0
+                    ? "Select blocking tasks"
+                    : "No other tasks in this project yet"
+                }
+                value={taskModal.draft.dependsOn}
+                onChange={(dependsOn) => updateTaskDraft({ dependsOn })}
+                data={taskDependencyOptions}
+                disabled={taskDependencyOptions.length === 0}
+                searchable
+                clearable
+              />
+              <MarkdownField
                 label="Description"
-                value={taskModal.draft.description}
-                onChange={(event) =>
-                  updateTaskDraft({ description: event.target.value })
+                mode={descriptionMode}
+                onModeChange={setDescriptionMode}
+                preview={
+                  <MarkdownPreview
+                    value={taskModal.draft.description}
+                    emptyText="No description yet."
+                  />
                 }
-                classNames={{ input: "task-description-input" }}
-                rows={7}
-              />
-              <Textarea
+              >
+                <Textarea
+                  aria-label="Description"
+                  value={taskModal.draft.description}
+                  onChange={(event) =>
+                    updateTaskDraft({ description: event.target.value })
+                  }
+                  classNames={{ input: "task-description-input" }}
+                  rows={7}
+                />
+              </MarkdownField>
+              <MarkdownField
                 label="Acceptance Criteria"
-                value={taskModal.draft.acceptanceCriteria}
-                onChange={(event) =>
-                  updateTaskDraft({ acceptanceCriteria: event.target.value })
+                mode={criteriaMode}
+                onModeChange={setCriteriaMode}
+                preview={
+                  <CriteriaPreview
+                    value={taskModal.draft.acceptanceCriteria}
+                    emptyText="No acceptance criteria yet."
+                  />
                 }
-                classNames={{ input: "task-criteria-input" }}
-                rows={7}
-                autosize
-                minRows={7}
-              />
-              <Group justify="flex-end">
+              >
+                <Textarea
+                  aria-label="Acceptance Criteria"
+                  value={taskModal.draft.acceptanceCriteria}
+                  onChange={(event) =>
+                    updateTaskDraft({ acceptanceCriteria: event.target.value })
+                  }
+                  classNames={{ input: "task-criteria-input" }}
+                  rows={7}
+                  autosize
+                  minRows={7}
+                />
+              </MarkdownField>
+              <Group justify="flex-end" gap="sm">
                 <Button
                   type="button"
                   variant="default"
-                  onClick={() => setTaskModal(null)}
+                  onClick={closeTaskModal}
                 >
-                  Cancel
+                  Close
                 </Button>
                 <Button type="submit" leftSection={<Save size={16} />}>
                   Save

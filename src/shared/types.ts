@@ -31,6 +31,12 @@ export type Idea = {
   status: IdeaStatus;
   labels: string[];
   acceptanceCriteria: string[];
+  /** Tasks that must be finished before this one can start. */
+  dependsOn: string[];
+  /** Tasks that wait for this one; derived from the dependency graph. */
+  blocks: string[];
+  /** Subset of dependsOn that is not done or denied yet; derived. */
+  blockedBy: string[];
   githubIssueUrl?: string;
   githubIssueNumber?: number;
   repositoryLocalPath?: string;
@@ -55,6 +61,10 @@ export type BoardCard = {
   repositoryLocalPath?: string;
   repositoryRemoteUrl?: string;
   labels: string[];
+  /** Task ids the linked task depends on; derived from the dependency graph. */
+  dependsOn: string[];
+  /** Subset of dependsOn that is not done or denied yet; derived. */
+  blockedBy: string[];
   readinessScore?: number;
   readinessReason?: string;
   readinessEvaluatedAt?: string;
@@ -101,6 +111,25 @@ export type BoardData = {
   activity: ActivityEvent[];
 };
 
+export type ProjectBundle = {
+  bundleVersion: 1;
+  exportedAt: string;
+  project: Project;
+  ideas: Idea[];
+  boardCards: BoardCard[];
+  readinessEvents: ReadinessEvent[];
+  documents: PlanDocument[];
+};
+
+export type ImportProjectOptions = {
+  replaceExisting: boolean;
+};
+
+export type ImportProjectResult = {
+  item: Project;
+  replaced: boolean;
+};
+
 export type CreateProjectInput = {
   key: string;
   title: string;
@@ -118,6 +147,7 @@ export type CreateIdeaInput = {
   details?: string;
   labels?: string[];
   acceptanceCriteria?: string[];
+  dependsOn?: string[];
   repositoryLocalPath?: string;
   repositoryRemoteUrl?: string;
 };
@@ -130,6 +160,7 @@ export type UpdateIdeaInput = Partial<
     | "details"
     | "labels"
     | "acceptanceCriteria"
+    | "dependsOn"
     | "status"
     | "repositoryLocalPath"
     | "repositoryRemoteUrl"

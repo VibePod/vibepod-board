@@ -17,6 +17,8 @@ export const taskListCardView = (
   status: idea.status,
   labels: [...idea.labels],
   isReady: isIdeaOnBoard(idea, columns),
+  isBlocked: idea.blockedBy.length > 0,
+  blockedByCount: idea.blockedBy.length,
 });
 
 export const readinessColor = (score: number): "red" | "yellow" | "green" => {

@@ -1,3 +1,4 @@
+import type { TaskWorkOrder } from "../shared/dependencies.js";
 import type {
   ApiTokenSummary,
   BoardCard,
@@ -10,8 +11,11 @@ import type {
   CreateIdeaInput,
   CreateProjectInput,
   Idea,
+  ImportProjectOptions,
+  ImportProjectResult,
   PlanDocument,
   Project,
+  ProjectBundle,
   ReadinessEvent,
   SetCardReadinessInput,
   UpdateApiTokenInput,
@@ -46,6 +50,11 @@ export type CreatedApiToken = {
 
 export interface BoardDataStore {
   getState(access: AccessContext): Promise<BoardData>;
+  exportProject(id: string): Promise<ProjectBundle>;
+  importProject(
+    bundle: ProjectBundle,
+    options: ImportProjectOptions,
+  ): Promise<ImportProjectResult>;
   listProjects(access: AccessContext): Promise<Project[]>;
   createProject(input: CreateProjectInput): Promise<Project>;
   updateProject(id: string, input: UpdateProjectInput): Promise<Project>;
@@ -56,6 +65,25 @@ export interface BoardDataStore {
     id: string,
     input: UpdateIdeaInput,
   ): Promise<Idea>;
+  addIdeaDependency(
+    access: AccessContext,
+    id: string,
+    dependsOnId: string,
+  ): Promise<Idea>;
+  removeIdeaDependency(
+    access: AccessContext,
+    id: string,
+    dependsOnId: string,
+  ): Promise<Idea>;
+  setIdeaDependencies(
+    access: AccessContext,
+    id: string,
+    dependsOnIds: string[],
+  ): Promise<Idea>;
+  getWorkOrder(
+    access: AccessContext,
+    projectId?: string,
+  ): Promise<TaskWorkOrder>;
   markIdeaReady(access: AccessContext, id: string): Promise<Idea>;
   setIdeaBoardAvailability(
     access: AccessContext,

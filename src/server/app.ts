@@ -8,6 +8,7 @@ import express, {
 } from "express";
 import { z } from "zod";
 
+import { projectBundleSchema } from "../shared/projectBundle.js";
 import { boardColumns, documentKinds, ideaStatuses } from "../shared/types.js";
 import {
   type AdminSessionManager,
@@ -46,6 +47,7 @@ const ideaSchema = z.object({
   details: z.string().optional().default(""),
   labels: z.array(z.string()).optional().default([]),
   acceptanceCriteria: z.array(z.string()).optional().default([]),
+  dependsOn: z.array(z.string()).optional().default([]),
   repositoryLocalPath: z.string().optional(),
   repositoryRemoteUrl: z.string().optional(),
 });
@@ -61,9 +63,18 @@ const updateIdeaSchema = z.object({
   details: z.string().optional(),
   labels: z.array(z.string()).optional(),
   acceptanceCriteria: z.array(z.string()).optional(),
+  dependsOn: z.array(z.string()).optional(),
   repositoryLocalPath: z.string().optional(),
   repositoryRemoteUrl: z.string().optional(),
   status: ideaStatusSchema.optional(),
+});
+
+const dependencySchema = z.object({
+  dependsOnId: z.string().trim().min(1),
+});
+
+const dependencyListSchema = z.object({
+  dependsOnIds: z.array(z.string().trim().min(1)),
 });
 
 const readySchema = z.object({
@@ -100,6 +111,13 @@ const updateProjectSchema = z.object({
   summary: z.string().optional(),
 });
 
+const importProjectRequestSchema = z
+  .object({
+    bundle: projectBundleSchema,
+    replaceExisting: z.boolean().optional().default(false),
+  })
+  .strict();
+
 const documentSchema = z.object({
   projectId: z.string().optional(),
   title: z.string().trim().min(1),
@@ -131,6 +149,7 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
   const app = express();
   app.disable("x-powered-by");
   app.use(cors());
+  app.use("/api/projects/import", express.json({ limit: "10mb" }));
   app.use(express.json({ limit: "2mb" }));
 
   app.get("/api/health", (_req, res) => {
@@ -181,6 +200,10 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
         "list_ideas",
         "create_idea",
         "mark_idea_ready",
+        "add_idea_dependency",
+        "remove_idea_dependency",
+        "set_idea_dependencies",
+        "list_work_order",
         "list_board",
         "move_board_card",
         "update_board_card",
@@ -196,6 +219,18 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
     requireAccess(store, sessions),
     asyncHandler(async (req, res) => {
       res.json({ items: await store.listProjects(accessFromResponse(req)) });
+    }),
+  );
+
+  app.post(
+    "/api/projects/import",
+    requireAdmin(store, sessions),
+    asyncHandler(async (req, res) => {
+      const { bundle, replaceExisting } = importProjectRequestSchema.parse(
+        req.body,
+      );
+      const result = await store.importProject(bundle, { replaceExisting });
+      res.status(result.replaced ? 200 : 201).json(result);
     }),
   );
 
@@ -217,6 +252,18 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
         updateProjectSchema.parse(req.body),
       );
       res.json({ item });
+    }),
+  );
+
+  app.get(
+    "/api/projects/:id/export",
+    requireAdmin(store, sessions),
+    asyncHandler(async (req, res) => {
+      const bundle = await store.exportProject(routeParam(req.params.id));
+      res
+        .attachment(`${bundle.project.key}-project.json`)
+        .type("application/json")
+        .send(JSON.stringify(bundle, null, 2));
     }),
   );
 
@@ -269,6 +316,59 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
         available,
       );
       res.json({ item });
+    }),
+  );
+
+  app.put(
+    "/api/ideas/:id/dependencies",
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      const { dependsOnIds } = dependencyListSchema.parse(req.body);
+      const item = await store.setIdeaDependencies(
+        accessFromResponse(req),
+        routeParam(req.params.id),
+        dependsOnIds,
+      );
+      res.json({ item });
+    }),
+  );
+
+  app.post(
+    "/api/ideas/:id/dependencies",
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      const { dependsOnId } = dependencySchema.parse(req.body);
+      const item = await store.addIdeaDependency(
+        accessFromResponse(req),
+        routeParam(req.params.id),
+        dependsOnId,
+      );
+      res.status(201).json({ item });
+    }),
+  );
+
+  app.delete(
+    "/api/ideas/:id/dependencies/:dependsOnId",
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      const item = await store.removeIdeaDependency(
+        accessFromResponse(req),
+        routeParam(req.params.id),
+        routeParam(req.params.dependsOnId),
+      );
+      res.json({ item });
+    }),
+  );
+
+  app.get(
+    "/api/work-order",
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      const workOrder = await store.getWorkOrder(
+        accessFromResponse(req),
+        queryParam(req.query.projectId),
+      );
+      res.json(workOrder);
     }),
   );
 
@@ -509,8 +609,22 @@ const getAccess = async (
 const accessFromResponse = (req: Request): AccessContext =>
   req.res?.locals.access as AccessContext;
 
-const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
+const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
   const message = error instanceof Error ? error.message : "Unknown error";
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "type" in error &&
+    error.type === "entity.too.large"
+  ) {
+    // The import route carries its own larger limit, so name the right one.
+    res.status(413).json({
+      error: req.path.startsWith("/api/projects/import")
+        ? "Project import file must be 10 MiB or smaller"
+        : "Request body must be 2 MiB or smaller",
+    });
+    return;
+  }
   if (error instanceof z.ZodError) {
     res
       .status(400)
@@ -533,7 +647,22 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     res.status(409).json({ error: message });
     return;
   }
+  if (message.includes("Dependency cycle")) {
+    res.status(409).json({ error: message });
+    return;
+  }
+  if (
+    message.includes("cannot depend on itself") ||
+    message.includes("same project")
+  ) {
+    res.status(400).json({ error: message });
+    return;
+  }
   if (message.includes("already used")) {
+    res.status(409).json({ error: message });
+    return;
+  }
+  if (message.includes("replacement confirmation is required")) {
     res.status(409).json({ error: message });
     return;
   }

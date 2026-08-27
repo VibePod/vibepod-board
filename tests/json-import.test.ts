@@ -153,6 +153,59 @@ describe("JSON import", () => {
     });
   });
 
+  it("imports task dependencies and skips edges it cannot represent", async () => {
+    const timestamp = "2026-01-01T00:00:00.000Z";
+    const filePath = join(tempDir, "board-with-dependencies.json");
+    const idea = (id: string, taskNumber: number, dependsOn: string[]) => ({
+      id,
+      projectId: "project-1",
+      taskNumber,
+      title: id,
+      summary: "",
+      details: "",
+      status: "idea",
+      labels: [],
+      acceptanceCriteria: [],
+      dependsOn,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    await writeFile(
+      filePath,
+      `${JSON.stringify({
+        schemaVersion: 3,
+        projects: [
+          {
+            id: "project-1",
+            key: "LS",
+            title: "Launch site",
+            summary: "",
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          },
+        ],
+        ideas: [
+          idea("idea-1", 1, []),
+          idea("idea-2", 2, ["idea-1", "idea-missing"]),
+        ],
+        boardCards: [],
+        documents: [],
+        activity: [],
+      })}\n`,
+      "utf8",
+    );
+
+    await importBoardJsonFile(pool, filePath);
+
+    const tasks = await store.listIdeas(admin, "project-1");
+    expect(tasks.find((task) => task.id === "idea-2")?.dependsOn).toEqual([
+      "idea-1",
+    ]);
+    expect(tasks.find((task) => task.id === "idea-1")?.blocks).toEqual([
+      "idea-2",
+    ]);
+  });
+
   it("refuses to import over existing board data", async () => {
     await store.createProject({ key: "EX", title: "Existing" });
     const filePath = join(tempDir, "empty-board.json");
