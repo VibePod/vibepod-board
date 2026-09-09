@@ -82,6 +82,7 @@ class BundleIdea(BundleModel):
     github_synced_at: BundleTimestamp | None = None
     repository_local_path: StrictStr | None = None
     repository_remote_url: StrictStr | None = None
+    assignee: StrictStr | None = None
     readiness_score: Score | None = None
     readiness_reason: StrictStr | None = None
     readiness_evaluated_at: BundleTimestamp | None = None
@@ -101,6 +102,7 @@ class BundleBoardCard(BundleModel):
     github_issue_number: StrictInt | None = None
     repository_local_path: StrictStr | None = None
     repository_remote_url: StrictStr | None = None
+    assignee: StrictStr | None = None
     labels: list[StrictStr]
     # A card mirrors the dependency state of its task, so both fields are derived.
     depends_on: list[Id] = Field(default_factory=list)

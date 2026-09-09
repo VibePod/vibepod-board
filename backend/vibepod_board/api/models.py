@@ -8,6 +8,7 @@ from pydantic import AfterValidator, BeforeValidator, Field, StrictBool, StrictI
 
 from vibepod_board.enums import BoardColumn, DocumentKind, IdeaStatus
 from vibepod_board.schemas import ApiModel
+from vibepod_board.services.listing import BATCH_LIMIT
 
 
 def _required_trimmed(value: str) -> str:
@@ -62,6 +63,12 @@ class IdeaCreate(ApiModel):
     repository_local_path: StrictStr | None = None
     repository_remote_url: StrictStr | None = None
     github_issue_url: StrictStr | None = None
+    assignee: StrictStr | None = None
+
+
+class ReadinessRequest(ApiModel):
+    score: Annotated[StrictInt, Field(ge=1, le=10)]
+    reason: RequiredText
 
 
 class IdeaUpdate(ApiModel):
@@ -74,7 +81,23 @@ class IdeaUpdate(ApiModel):
     repository_local_path: StrictStr | None = None
     repository_remote_url: StrictStr | None = None
     github_issue_url: StrictStr | None = None
+    # Free text naming whoever holds the task; an empty string releases it.
+    assignee: StrictStr | None = None
     status: Status | None = None
+    # True puts the task on the board, false removes its card.
+    on_board: StrictBool | None = None
+    # Records a readiness score in the same write.
+    readiness: ReadinessRequest | None = None
+    # Refuses the write (409) when the task changed since this updatedAt.
+    expected_updated_at: RequiredText | None = None
+
+
+class IdeaBatchItem(IdeaUpdate):
+    id: RequiredText
+
+
+class IdeaBatch(ApiModel):
+    items: Annotated[list[IdeaBatchItem], Field(max_length=BATCH_LIMIT)]
 
 
 class DependencyAdd(ApiModel):
@@ -87,6 +110,7 @@ class DependencySet(ApiModel):
 
 class ReadyRequest(ApiModel):
     available: StrictBool = True
+    readiness: ReadinessRequest | None = None
 
 
 class BoardCardUpdate(ApiModel):
@@ -95,15 +119,20 @@ class BoardCardUpdate(ApiModel):
     details: StrictStr | None = None
     repository_local_path: StrictStr | None = None
     repository_remote_url: StrictStr | None = None
+    assignee: StrictStr | None = None
+    expected_updated_at: RequiredText | None = None
+
+
+class BoardCardBatchItem(BoardCardUpdate):
+    id: RequiredText
+
+
+class BoardCardBatch(ApiModel):
+    items: Annotated[list[BoardCardBatchItem], Field(max_length=BATCH_LIMIT)]
 
 
 class ArchiveDoneRequest(ApiModel):
     project_id: RequiredText
-
-
-class ReadinessRequest(ApiModel):
-    score: Annotated[StrictInt, Field(ge=1, le=10)]
-    reason: RequiredText
 
 
 class DocumentCreate(ApiModel):

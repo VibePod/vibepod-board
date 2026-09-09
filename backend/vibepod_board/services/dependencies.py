@@ -9,15 +9,15 @@ from sqlalchemy import delete, or_
 from sqlmodel import Session, col, select
 
 from vibepod_board.access import AccessContext, assert_can_access_project
-from vibepod_board.errors import BadRequest, Conflict, NotFound
+from vibepod_board.errors import BadRequest, BoardError, Conflict, NotFound
 from vibepod_board.graph import find_cyclic_task_ids, is_task_complete, normalize_ids
 from vibepod_board.schemas import BoardCard, Idea, now
 from vibepod_board.services.common import (
     add_activity,
     idea_from_row,
-    require_idea,
     transactional,
 )
+from vibepod_board.services.references import require_idea_ref, resolve_idea_id
 from vibepod_board.tables import BoardCardRow, IdeaRow, TaskDependencyRow
 
 
@@ -130,11 +130,17 @@ def _assert_acyclic(session: Session, idea: IdeaRow, depends_on_ids: list[str]) 
 
 
 def replace_dependencies(
-    session: Session, idea: IdeaRow, depends_on_ids: Iterable[str], timestamp: datetime
+    session: Session,
+    access: AccessContext,
+    idea: IdeaRow,
+    depends_on_ids: Iterable[str],
+    timestamp: datetime,
 ) -> None:
     """Blockers must live in the same project and the graph must stay acyclic, so the work
-    order can always be computed."""
-    requested = normalize_ids(depends_on_ids)
+    order can always be computed. They may be named by key, such as `VP-236`."""
+    requested = normalize_ids(
+        resolve_idea_id(session, access, reference) for reference in normalize_ids(depends_on_ids)
+    )
     if idea.id in requested:
         raise BadRequest("A task cannot depend on itself")
 
@@ -179,12 +185,16 @@ def _write_dependencies(
     idea_id: str,
     change: Callable[[list[str]], list[str]],
 ) -> Idea:
-    idea = require_idea(session, idea_id)
+    idea = require_idea_ref(session, access, idea_id)
     assert_can_access_project(access, idea.project_id)
     timestamp = now()
     replace_dependencies(
-        session, idea, normalize_ids(change(current_dependency_ids(session, idea_id))), timestamp
+        session, access, idea, change(current_dependency_ids(session, idea.id)), timestamp
     )
+    # A dependency edit is a content change: age the row so a concurrent writer's
+    # expectedUpdatedAt is refused rather than silently clobbering it.
+    idea.updated_at = timestamp
+    session.flush()
     decorated = decorate_idea(session, idea)
     add_activity(session, "idea.dependencies", f"Updated dependencies: {idea.title}", timestamp)
     return decorated
@@ -199,9 +209,16 @@ def add_dependency(
 def remove_dependency(
     session: Session, access: AccessContext, idea_id: str, depends_on_id: str
 ) -> Idea:
-    return _write_dependencies(
-        session, access, idea_id, lambda ids: [i for i in ids if i != depends_on_id]
-    )
+    def without(ids: list[str]) -> list[str]:
+        # A blocker named by key is removed too; one that no longer resolves by id is
+        # matched verbatim, so a stale edge can still be dropped.
+        try:
+            removed = resolve_idea_id(session, access, depends_on_id)
+        except BoardError:
+            removed = depends_on_id.strip()
+        return [i for i in ids if i != removed]
+
+    return _write_dependencies(session, access, idea_id, without)
 
 
 def set_dependencies(

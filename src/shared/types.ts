@@ -47,6 +47,11 @@ export type Idea = {
   githubSyncedAt?: string;
   repositoryLocalPath?: string;
   repositoryRemoteUrl?: string;
+  /**
+   * Free text naming whoever holds the task, by convention an agent naming
+   * itself, such as `Claude::Subagent101::Worktree12`. No format is enforced.
+   */
+  assignee?: string;
   readinessScore?: number;
   readinessReason?: string;
   readinessEvaluatedAt?: string;
@@ -71,6 +76,8 @@ export type BoardCard = {
   dependsOn: string[];
   /** Subset of dependsOn that is not done or denied yet; derived. */
   blockedBy: string[];
+  /** Mirrors the linked task's assignee; see `Idea.assignee`. */
+  assignee?: string;
   readinessScore?: number;
   readinessReason?: string;
   readinessEvaluatedAt?: string;
@@ -162,6 +169,7 @@ export type CreateIdeaInput = {
   dependsOn?: string[];
   repositoryLocalPath?: string;
   repositoryRemoteUrl?: string;
+  assignee?: string;
 };
 
 export type UpdateIdeaInput = Partial<
@@ -177,8 +185,19 @@ export type UpdateIdeaInput = Partial<
     | "repositoryLocalPath"
     | "repositoryRemoteUrl"
     | "githubIssueUrl"
+    | "assignee"
   >
->;
+> &
+  ConcurrencyGuard & {
+    /** True puts the task on the board, false removes its card. */
+    onBoard?: boolean;
+    /** Records a readiness score in the same write. */
+    readiness?: SetCardReadinessInput;
+  };
+
+export type MarkIdeaReadyOptions = {
+  readiness?: SetCardReadinessInput;
+};
 
 export type CreateBoardCardOptions = {
   githubMode: "local" | "github";
@@ -194,12 +213,66 @@ export type UpdateBoardCardInput = Partial<
     | "details"
     | "repositoryLocalPath"
     | "repositoryRemoteUrl"
+    | "assignee"
   >
->;
+> &
+  ConcurrencyGuard;
 
 export type SetCardReadinessInput = {
   score: number;
   reason: string;
+};
+
+export type BatchIdeaUpdate = { id: string } & UpdateIdeaInput;
+export type BatchBoardCardUpdate = { id: string } & UpdateBoardCardInput;
+
+/** A batch is applied in one transaction; more than this is refused outright. */
+export const batchLimit = 50;
+
+/**
+ * `assignee` and `unassigned` widen each other rather than narrowing: asked
+ * together they select tasks held by one of the named holders *or* held by
+ * nobody, because "mine or free" is the question an agent picking up work asks.
+ */
+export type AssigneeFilter = {
+  assignee?: string[];
+  unassigned?: boolean;
+};
+
+export type IdeaListFilter = AssigneeFilter & {
+  projectId?: string;
+  status?: IdeaStatus[];
+  updatedSince?: string;
+  limit?: number;
+  cursor?: string;
+};
+
+export type BoardListFilter = AssigneeFilter & {
+  projectId?: string;
+  column?: BoardColumn[];
+  updatedSince?: string;
+  limit?: number;
+  cursor?: string;
+};
+
+export type ReadinessListFilter = {
+  projectId?: string;
+  tasks?: string[];
+  latestOnly?: boolean;
+};
+
+export type DocumentListFilter = {
+  projectId?: string;
+  kind?: DocumentKind[];
+  updatedSince?: string;
+};
+
+/**
+ * Optional guard on a write: when set, the write is refused unless the record
+ * still carries this `updatedAt`.
+ */
+export type ConcurrencyGuard = {
+  expectedUpdatedAt?: string;
 };
 
 export type CreateDocumentInput = {

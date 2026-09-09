@@ -17,7 +17,7 @@ from vibepod_board.access import (
     default_project_id_for_create,
 )
 from vibepod_board.enums import IdeaStatus
-from vibepod_board.errors import BadRequest, Conflict, NotFound
+from vibepod_board.errors import BadRequest, Conflict
 from vibepod_board.github import (
     GitHubClient,
     IssueRef,
@@ -33,13 +33,13 @@ from vibepod_board.services.common import (
     add_activity,
     assert_title,
     new_id,
-    require_idea,
     transactional,
 )
 from vibepod_board.services.dependencies import decorate_idea
 from vibepod_board.services.github_link import apply_remote
 from vibepod_board.services.ideas import next_task_number
 from vibepod_board.services.projects import resolve_project_id_for_create
+from vibepod_board.services.references import require_idea_ref, resolve_idea_id, resolve_project_id
 from vibepod_board.tables import IdeaRow
 
 STALE_MESSAGE = "Issue changed on GitHub since the last sync — pull first"
@@ -89,9 +89,8 @@ def push(
 ) -> Idea:
     # Locked until commit: a second push of the same task waits here and then sees the link
     # the first one stored, instead of creating another issue.
-    idea = session.exec(select(IdeaRow).where(IdeaRow.id == idea_id).with_for_update()).first()
-    if idea is None:
-        raise NotFound(f"Idea not found: {idea_id}")
+    resolved_id = resolve_idea_id(session, access, idea_id)
+    idea = session.exec(select(IdeaRow).where(IdeaRow.id == resolved_id).with_for_update()).one()
     assert_can_access_project(access, idea.project_id)
     body = generated_body(idea)
     ref = _linked_ref(idea)
@@ -117,7 +116,7 @@ def push(
 
 @transactional
 def pull(session: Session, access: AccessContext, idea_id: str, client: GitHubClient) -> Idea:
-    idea = require_idea(session, idea_id)
+    idea = require_idea_ref(session, access, idea_id)
     assert_can_access_project(access, idea.project_id)
     ref = _linked_ref(idea)
     if ref is None:
@@ -155,8 +154,9 @@ def upsert_issue(
     ref = IssueRef(normalize_repository(repository), number)
     if parse_issue_url(url) != ref:
         raise BadRequest(f"Issue URL does not match {ref}: {url}")
+    requested = resolve_project_id(session, project_id) if project_id else None
     resolved_project_id = resolve_project_id_for_create(
-        session, default_project_id_for_create(access, project_id)
+        session, default_project_id_for_create(access, requested)
     )
     assert_can_access_project(access, resolved_project_id)
     issue = RemoteIssue(

@@ -70,6 +70,11 @@ class IdeaRow(SQLModel, table=True):
     __table_args__ = (
         UniqueConstraint("project_id", "task_number", name="ideas_project_id_task_number_key"),
         Index("ideas_project_updated_idx", "project_id", text("updated_at DESC")),
+        Index("ideas_project_status_updated_idx", "project_id", "status", text("updated_at DESC")),
+        Index(
+            "ideas_project_updated_id_idx", "project_id", text("updated_at DESC"), text("id DESC")
+        ),
+        Index("ideas_project_assignee_idx", "project_id", "assignee"),
         Index(
             "ideas_github_issue_key",
             "project_id",
@@ -99,6 +104,8 @@ class IdeaRow(SQLModel, table=True):
     github_synced_at: datetime | None = _timestamp(nullable=True)
     repository_local_path: str | None = _text()
     repository_remote_url: str | None = _text()
+    # Free text naming whoever holds the task; the task owns it and its card mirrors it.
+    assignee: str | None = _text()
     readiness_score: int | None = Field(default=None, sa_column=Column(Integer))
     readiness_reason: str | None = _text()
     readiness_evaluated_at: datetime | None = _timestamp(nullable=True)
@@ -110,6 +117,20 @@ class BoardCardRow(SQLModel, table=True):
     __tablename__ = "board_cards"
     __table_args__ = (
         Index("board_cards_project_updated_idx", "project_id", text("updated_at DESC")),
+        Index("board_cards_idea_idx", "idea_id"),
+        Index(
+            "board_cards_project_column_updated_idx",
+            "project_id",
+            "column_name",
+            text("updated_at DESC"),
+        ),
+        Index(
+            "board_cards_project_updated_id_idx",
+            "project_id",
+            text("updated_at DESC"),
+            text("id DESC"),
+        ),
+        Index("board_cards_project_assignee_idx", "project_id", "assignee"),
     )
 
     id: str = Field(sa_column=Column(Text, primary_key=True))
@@ -123,6 +144,7 @@ class BoardCardRow(SQLModel, table=True):
     github_issue_number: int | None = Field(default=None, sa_column=Column(Integer))
     repository_local_path: str | None = _text()
     repository_remote_url: str | None = _text()
+    assignee: str | None = _text()
     labels: list[str] = _json_list()
     readiness_score: int | None = Field(default=None, sa_column=Column(Integer))
     readiness_reason: str | None = _text()

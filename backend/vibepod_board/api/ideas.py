@@ -5,36 +5,99 @@ from fastapi import APIRouter, Body, Query, status
 from vibepod_board.api.models import (
     DependencyAdd,
     DependencySet,
+    IdeaBatch,
     IdeaCreate,
     IdeaUpdate,
     ReadinessRequest,
     ReadyRequest,
 )
-from vibepod_board.api.responses import Item, Items
+from vibepod_board.api.queries import (
+    Assignee,
+    Cursor,
+    Limit,
+    ProjectFilter,
+    Unassigned,
+    UpdatedSince,
+    ViewParam,
+    enum_list,
+    project_filter,
+    split_list,
+)
+from vibepod_board.api.responses import Item, Items, ItemsPage
 from vibepod_board.auth import AccessDep
 from vibepod_board.db import SessionDep
-from vibepod_board.schemas import DeletedIdea, Idea, ReadinessEvent, TaskWorkOrder
-from vibepod_board.services import dependencies, ideas, readiness
+from vibepod_board.enums import IdeaStatus
+from vibepod_board.schemas import (
+    CompactIdea,
+    DeletedIdea,
+    EntityRef,
+    Idea,
+    KeyedIdea,
+    ReadinessEvent,
+    TaskWorkOrder,
+)
+from vibepod_board.services import board, dependencies, ideas, readiness
+from vibepod_board.services.views import View, project_ideas
 
 router = APIRouter(prefix="/api", tags=["ideas"])
 
-ProjectFilter = Annotated[str | None, Query(alias="projectId")]
-
-
-def _project_filter(value: str | None) -> str | None:
-    return value.strip() or None if value else None
+ProjectedIdea = KeyedIdea | CompactIdea | EntityRef
 
 
 @router.get("/ideas")
 def list_ideas(
-    session: SessionDep, access: AccessDep, project_id: ProjectFilter = None
-) -> Items[Idea]:
-    return Items(items=ideas.list_ideas(session, access, _project_filter(project_id)))
+    session: SessionDep,
+    access: AccessDep,
+    project_id: ProjectFilter = None,
+    status: Annotated[list[str] | None, Query()] = None,
+    updated_since: UpdatedSince = None,
+    assignee: Assignee = None,
+    unassigned: Unassigned = False,
+    limit: Limit = None,
+    cursor: Cursor = None,
+    view: ViewParam = View.FULL,
+) -> ItemsPage[ProjectedIdea]:
+    filters = ideas.IdeaFilter(
+        project=project_filter(project_id),
+        status=enum_list(IdeaStatus, status, "status"),
+        updated_since=updated_since,
+        assignee=split_list(assignee),
+        unassigned=unassigned,
+        limit=limit,
+        cursor=cursor,
+    )
+    page = ideas.list_ideas_page(session, access, filters)
+    # A compact task reports its board column.
+    cards = (
+        board.list_cards(session, access, filters=board.CardFilter(project=filters.project))
+        if view == View.COMPACT
+        else None
+    )
+    return ItemsPage(
+        items=project_ideas(session, page.items, view, cards), next_cursor=page.next_cursor
+    )
 
 
 @router.post("/ideas", status_code=status.HTTP_201_CREATED)
 def create_idea(body: IdeaCreate, session: SessionDep, access: AccessDep) -> Item[Idea]:
     return Item(item=ideas.create_idea(session, access, **body.model_dump(by_alias=False)))
+
+
+@router.post("/ideas/batch")
+def update_ideas(
+    body: IdeaBatch, session: SessionDep, access: AccessDep, view: ViewParam = View.FULL
+) -> Items[ProjectedIdea]:
+    items = [item.model_dump(exclude_unset=True, by_alias=False) for item in body.items]
+    return Items(items=project_ideas(session, ideas.update_ideas(session, access, items), view))
+
+
+@router.get("/ideas/{idea_id}")
+def get_idea(
+    idea_id: str, session: SessionDep, access: AccessDep, view: ViewParam = View.FULL
+) -> Item[ProjectedIdea]:
+    """A task by id, key such as `VP-236`, or bare number when one project is in scope."""
+    idea = ideas.get_idea(session, access, idea_id)
+    return Item(item=project_ideas(session, [idea], view)[0])
 
 
 @router.patch("/ideas/{idea_id}")
@@ -57,8 +120,10 @@ def set_ready(
     access: AccessDep,
     body: Annotated[ReadyRequest | None, Body()] = None,
 ) -> Item[Idea]:
-    available = body.available if body else True
-    return Item(item=ideas.set_board_availability(session, access, idea_id, available))
+    body = body or ReadyRequest()
+    return Item(
+        item=ideas.set_board_availability(session, access, idea_id, body.available, body.readiness)
+    )
 
 
 @router.put("/ideas/{idea_id}/dependencies")
@@ -86,7 +151,7 @@ def remove_dependency(
 def work_order(
     session: SessionDep, access: AccessDep, project_id: ProjectFilter = None
 ) -> TaskWorkOrder:
-    return ideas.work_order(session, access, _project_filter(project_id))
+    return ideas.work_order(session, access, project_filter(project_id))
 
 
 @router.post("/ideas/{idea_id}/readiness")
@@ -103,3 +168,20 @@ def list_idea_readiness(
     idea_id: str, session: SessionDep, access: AccessDep
 ) -> Items[ReadinessEvent]:
     return Items(items=readiness.list_idea_readiness(session, access, idea_id))
+
+
+@router.get("/readiness")
+def list_readiness(
+    session: SessionDep,
+    access: AccessDep,
+    project_id: ProjectFilter = None,
+    tasks: Annotated[list[str] | None, Query(description="Task ids or keys.")] = None,
+    latest_only: Annotated[bool, Query(alias="latestOnly")] = True,
+) -> Items[ReadinessEvent]:
+    """The latest score per task for a project or for named tasks; `latestOnly=false`
+    returns the full history."""
+    return Items(
+        items=readiness.list_readiness(
+            session, access, project_filter(project_id), split_list(tasks), latest_only
+        )
+    )

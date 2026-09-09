@@ -8,7 +8,7 @@ from sqlmodel import Session
 
 from vibepod_board.access import admin_access, token_access
 from vibepod_board.enums import BoardColumn
-from vibepod_board.errors import Conflict, Forbidden
+from vibepod_board.errors import Conflict, Forbidden, NotFound
 from vibepod_board.github import GitHubClient
 from vibepod_board.services import board, github_sync, ideas, projects, readiness, transfer
 from vibepod_board.tables import BoardCardRow
@@ -205,7 +205,7 @@ def test_archive_stays_inside_the_token_scope(session: Session, project) -> None
     board.archive_card(session, ADMIN, mine.id)
     scoped = token_access("token-1", [project.id])
 
-    with pytest.raises(Forbidden, match="Token is not allowed to access project"):
+    with pytest.raises(NotFound, match=f"Board card not found: {theirs.id}"):
         board.unarchive_card(session, scoped, theirs.id)
     with pytest.raises(Forbidden, match="Token is not allowed to access project"):
         board.list_archived_cards(session, scoped, other.id)

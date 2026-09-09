@@ -1,13 +1,19 @@
+import json
 import os
 import shutil
 import socket
 import subprocess
 import tempfile
+import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
+import uvicorn
 from fastapi.testclient import TestClient
+from fastmcp import Client
 from sqlalchemy import Engine, text
 from sqlmodel import Session
 
@@ -129,3 +135,31 @@ def login(client: TestClient) -> TestClient:
     response = client.post("/api/auth/login", json={"username": "admin", "password": "secret"})
     assert response.status_code == 200, response.text
     return client
+
+
+@pytest.fixture
+def server_url(db: Engine, settings: Settings) -> Iterator[str]:
+    """The app served by uvicorn on a free port; yields the MCP endpoint URL."""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    config = uvicorn.Config(
+        create_app(settings, run_migrations=False), host="127.0.0.1", port=port, log_level="error"
+    )
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 10
+    while not server.started:
+        assert time.monotonic() < deadline, "server did not start"
+        time.sleep(0.02)
+    yield f"http://127.0.0.1:{port}/mcp"
+    server.should_exit = True
+    thread.join(timeout=10)
+
+
+async def call(url: str, token: str, tool: str, **arguments: Any) -> Any:
+    """Calls an MCP tool with a board token and decodes its JSON result."""
+    async with Client(url, auth=token) as client:
+        result = await client.call_tool(tool, arguments)
+        return json.loads(result.content[0].text)
