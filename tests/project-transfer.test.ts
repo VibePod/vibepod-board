@@ -129,6 +129,7 @@ describe("project transfer", () => {
       title: "Foundation",
       repositoryLocalPath: "/workspace/app",
       repositoryRemoteUrl: "git@github.com:example/app.git",
+      assignee: "Claude::Subagent101::Worktree12",
     });
     const feature = await store.createIdea(admin, {
       projectId: project.id,
@@ -171,6 +172,10 @@ describe("project transfer", () => {
       type: "project.imported",
       message: "Imported project: Application",
     });
+    expect(roundTrip.ideas[0].assignee).toBe("Claude::Subagent101::Worktree12");
+    expect(roundTrip.boardCards[0].assignee).toBe(
+      "Claude::Subagent101::Worktree12",
+    );
   });
 
   it("requires confirmation and replaces a project while retaining its identity", async () => {

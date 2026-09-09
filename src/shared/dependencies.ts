@@ -38,6 +38,9 @@ export type TaskWorkOrder = {
 export const formatTaskKey = (projectKey: string, taskNumber: number) =>
   `${projectKey}-${taskNumber}`;
 
+export type { TaskReference } from "./taskKeys.js";
+export { parseTaskReference } from "./taskKeys.js";
+
 export const normalizeDependencyIds = (ids: string[] | undefined): string[] => [
   ...new Set((ids ?? []).map((id) => id.trim()).filter(Boolean)),
 ];

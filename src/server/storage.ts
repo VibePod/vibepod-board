@@ -6,6 +6,7 @@ import type { Pool, PoolClient } from "pg";
 import {
   buildWorkOrder,
   findCyclicTaskIds,
+  formatTaskKey,
   isTaskComplete,
   normalizeDependencyIds,
   type TaskWorkOrder,
@@ -14,23 +15,32 @@ import { parseProjectBundle } from "../shared/projectBundle.js";
 import {
   type ActivityEvent,
   type ApiTokenSummary,
+  type AssigneeFilter,
+  type BatchBoardCardUpdate,
+  type BatchIdeaUpdate,
   type BoardCard,
   type BoardColumn,
   type BoardColumns,
   type BoardData,
+  type BoardListFilter,
+  batchLimit,
   boardColumns,
   type CreateApiTokenInput,
   type CreateBoardCardOptions,
   type CreateDocumentInput,
   type CreateIdeaInput,
   type CreateProjectInput,
+  type DocumentListFilter,
   type Idea,
+  type IdeaListFilter,
   type ImportProjectOptions,
   type ImportProjectResult,
+  type MarkIdeaReadyOptions,
   type PlanDocument,
   type Project,
   type ProjectBundle,
   type ReadinessEvent,
+  type ReadinessListFilter,
   type SetCardReadinessInput,
   type UpdateApiTokenInput,
   type UpdateBoardCardInput,
@@ -39,6 +49,11 @@ import {
   type UpdateProjectInput,
 } from "../shared/types.js";
 import { createRawApiToken, hashApiToken } from "./auth.js";
+import {
+  resolveBoardCardId,
+  resolveIdeaId,
+  resolveProjectId,
+} from "./references.js";
 import {
   type AccessContext,
   type AuthenticatedToken,
@@ -89,6 +104,37 @@ type LoadResult = {
 const defaultProjectSummary = "Default project for uncategorized work.";
 const projectKeyPattern = /^[A-Z]{1,3}$/;
 
+/** Opaque to callers: base64 of "<updatedAt>|<id>". */
+const encodeCursor = (updatedAt: string, id: string): string =>
+  Buffer.from(`${updatedAt}|${id}`, "utf8").toString("base64url");
+
+const decodeCursor = (
+  cursor: string | undefined,
+): { updatedAt: string; id: string } | undefined => {
+  if (!cursor) {
+    return undefined;
+  }
+  const decoded = Buffer.from(cursor, "base64url").toString("utf8");
+  const separator = decoded.indexOf("|");
+  if (separator < 0) {
+    throw new Error(`Invalid cursor: ${cursor}`);
+  }
+  return {
+    updatedAt: decoded.slice(0, separator),
+    id: decoded.slice(separator + 1),
+  };
+};
+
+const withCursor = <T extends { id: string; updatedAt: string }>(
+  items: T[],
+  limit?: number,
+): { items: T[]; nextCursor?: string } => {
+  const last = items[items.length - 1];
+  return limit && items.length === limit && last
+    ? { items, nextCursor: encodeCursor(last.updatedAt, last.id) }
+    : { items };
+};
+
 const nowIso = () => new Date().toISOString();
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -119,6 +165,27 @@ const normalizeReadinessInput = (
   }
   return { score: input.score, reason };
 };
+
+/**
+ * The assignee predicate, over a `text[]` of holders at `$holders` and a
+ * boolean at `$unheld`. The two widen each other: given together they select
+ * rows held by one of the named holders *or* by nobody, which is the "mine or
+ * free" question an agent picking up work asks. Neither given matches every
+ * row.
+ */
+const assigneeFilterSql = (holders: number, unheld: number) =>
+  `(
+     ($${holders}::text[] is null and not $${unheld}::boolean)
+     or ($${holders}::text[] is not null and assignee = any($${holders}::text[]))
+     or ($${unheld}::boolean and assignee is null)
+   )`;
+
+const assigneeFilterParams = (
+  filter: AssigneeFilter,
+): [string[] | null, boolean] => [
+  filter.assignee?.length ? filter.assignee : null,
+  filter.unassigned ?? false,
+];
 
 const assertTitle = (title: string | undefined, entity: string) => {
   if (!title?.trim()) {
@@ -160,6 +227,7 @@ type IdeaRow = {
   github_issue_number: number | null;
   repository_local_path: string | null;
   repository_remote_url: string | null;
+  assignee: string | null;
   readiness_score: number | null;
   readiness_reason: string | null;
   readiness_evaluated_at: Date | string | null;
@@ -187,6 +255,7 @@ type BoardCardRow = {
   github_issue_number: number | null;
   repository_local_path: string | null;
   repository_remote_url: string | null;
+  assignee: string | null;
   labels: unknown;
   readiness_score: number | null;
   readiness_reason: string | null;
@@ -451,30 +520,144 @@ export class PostgresBoardStore implements BoardDataStore {
     }
   }
 
-  async listIdeas(access: AccessContext, projectId?: string): Promise<Idea[]> {
-    if (projectId) {
-      const project = await this.requireProject(this.pool, projectId);
-      assertCanAccessProject(access, project.id);
-      const result = await this.pool.query<IdeaRow>(
-        "select * from ideas where project_id = $1 order by updated_at desc, title asc",
-        [project.id],
-      );
-      return this.decorateIdeas(this.pool, result.rows.map(ideaFromRow));
-    }
+  /**
+   * Read one task by any reference. Decoration is mandatory: a row straight
+   * from `requireIdea` reports empty dependency arrays.
+   */
+  async getIdea(access: AccessContext, reference: string): Promise<Idea> {
+    const idea = await this.requireIdeaByReference(
+      this.pool,
+      access,
+      reference,
+    );
+    assertCanAccessProject(access, idea.projectId);
+    return this.decorateIdea(this.pool, idea);
+  }
 
-    if (access.kind === "token" && access.projectIds.length === 0) {
+  async getBoardCard(
+    access: AccessContext,
+    reference: string,
+  ): Promise<BoardCard> {
+    const card = await this.requireBoardCardByReference(
+      this.pool,
+      access,
+      reference,
+    );
+    assertCanAccessProject(access, card.projectId);
+    return this.decorateCard(this.pool, card);
+  }
+
+  /**
+   * Keyset paging over (updated_at desc, id desc). The id tiebreaker is what
+   * makes the cursor safe: one write deliberately stamps several rows with the
+   * same timestamp, so `updated_at` alone is not unique.
+   */
+  async listIdeasPage(
+    access: AccessContext,
+    filter: IdeaListFilter = {},
+  ): Promise<{ items: Idea[]; nextCursor?: string }> {
+    const scope = await this.resolveListScope(access, filter.projectId);
+    if (scope !== null && scope.length === 0) {
+      return { items: [] };
+    }
+    const cursor = decodeCursor(filter.cursor);
+    const params: unknown[] = [
+      scope,
+      filter.status ?? null,
+      filter.updatedSince ?? null,
+      cursor?.updatedAt ?? null,
+      cursor?.id ?? null,
+      ...assigneeFilterParams(filter),
+    ];
+    if (filter.limit) {
+      params.push(filter.limit);
+    }
+    const result = await this.pool.query<IdeaRow>(
+      `select * from ideas
+        where ($1::text[] is null or project_id = any($1::text[]))
+          and ($2::text[] is null or status = any($2::text[]))
+          and ($3::timestamptz is null or updated_at > $3::timestamptz)
+          and (
+            $4::timestamptz is null
+            or (updated_at, id) < ($4::timestamptz, $5::text)
+          )
+          and ${assigneeFilterSql(6, 7)}
+        order by updated_at desc, id desc
+        ${filter.limit ? "limit $8" : ""}`,
+      params,
+    );
+    const items = await this.decorateIdeas(
+      this.pool,
+      result.rows.map(ideaFromRow),
+    );
+    return withCursor(items, filter.limit);
+  }
+
+  async listBoardCardsPage(
+    access: AccessContext,
+    filter: BoardListFilter = {},
+  ): Promise<{ items: BoardCard[]; nextCursor?: string }> {
+    const scope = await this.resolveListScope(access, filter.projectId);
+    if (scope !== null && scope.length === 0) {
+      return { items: [] };
+    }
+    const cursor = decodeCursor(filter.cursor);
+    const params: unknown[] = [
+      scope,
+      filter.column ?? null,
+      filter.updatedSince ?? null,
+      cursor?.updatedAt ?? null,
+      cursor?.id ?? null,
+      ...assigneeFilterParams(filter),
+    ];
+    if (filter.limit) {
+      params.push(filter.limit);
+    }
+    const result = await this.pool.query<BoardCardRow>(
+      `select * from board_cards
+        where ($1::text[] is null or project_id = any($1::text[]))
+          and ($2::text[] is null or column_name = any($2::text[]))
+          and ($3::timestamptz is null or updated_at > $3::timestamptz)
+          and (
+            $4::timestamptz is null
+            or (updated_at, id) < ($4::timestamptz, $5::text)
+          )
+          and ${assigneeFilterSql(6, 7)}
+        order by updated_at desc, id desc
+        ${filter.limit ? "limit $8" : ""}`,
+      params,
+    );
+    const items = await this.decorateCards(
+      this.pool,
+      result.rows.map(boardCardFromRow),
+    );
+    return withCursor(items, filter.limit);
+  }
+
+  async listIdeas(
+    access: AccessContext,
+    filter?: string | IdeaListFilter,
+  ): Promise<Idea[]> {
+    const options: IdeaListFilter =
+      typeof filter === "string" ? { projectId: filter } : (filter ?? {});
+    const scope = await this.resolveListScope(access, options.projectId);
+    if (scope !== null && scope.length === 0) {
       return [];
     }
-
-    const result =
-      access.kind === "admin"
-        ? await this.pool.query<IdeaRow>(
-            "select * from ideas order by updated_at desc, title asc",
-          )
-        : await this.pool.query<IdeaRow>(
-            "select * from ideas where project_id = any($1::text[]) order by updated_at desc, title asc",
-            [filterProjectIds(access, access.projectIds)],
-          );
+    const result = await this.pool.query<IdeaRow>(
+      `select * from ideas
+        where ($1::text[] is null or project_id = any($1::text[]))
+          and ($2::text[] is null or status = any($2::text[]))
+          and ($3::timestamptz is null or updated_at > $3::timestamptz)
+          and ${assigneeFilterSql(4, 5)}
+        order by updated_at desc, id desc`,
+      [
+        scope,
+        options.status ?? null,
+        options.updatedSince ?? null,
+        ...assigneeFilterParams(options),
+      ],
+    );
     return this.decorateIdeas(this.pool, result.rows.map(ideaFromRow));
   }
 
@@ -488,6 +671,7 @@ export class PostgresBoardStore implements BoardDataStore {
       await client.query("begin");
       const projectId = await this.resolveProjectIdForCreate(
         client,
+        access,
         defaultProjectIdForCreate(access, input.projectId),
       );
       assertCanAccessProject(access, projectId);
@@ -496,9 +680,9 @@ export class PostgresBoardStore implements BoardDataStore {
         `insert into ideas (
            id, project_id, task_number, title, summary, details, status, labels,
            acceptance_criteria, github_issue_url, github_issue_number, repository_local_path,
-           repository_remote_url, created_at, updated_at
+           repository_remote_url, assignee, created_at, updated_at
          )
-         values ($1, $2, $3, $4, $5, $6, 'idea', $7, $8, null, null, $9, $10, $11, $11)
+         values ($1, $2, $3, $4, $5, $6, 'idea', $7, $8, null, null, $9, $10, $11, $12, $12)
          returning *`,
         [
           randomUUID(),
@@ -511,6 +695,7 @@ export class PostgresBoardStore implements BoardDataStore {
           JSON.stringify(normalizeList(input.acceptanceCriteria)),
           normalizeOptionalText(input.repositoryLocalPath) ?? null,
           normalizeOptionalText(input.repositoryRemoteUrl) ?? null,
+          normalizeOptionalText(input.assignee) ?? null,
           timestamp,
         ],
       );
@@ -518,6 +703,7 @@ export class PostgresBoardStore implements BoardDataStore {
       if (input.dependsOn?.length) {
         await this.replaceIdeaDependencies(
           client,
+          access,
           idea,
           input.dependsOn,
           timestamp,
@@ -540,6 +726,250 @@ export class PostgresBoardStore implements BoardDataStore {
     }
   }
 
+  /**
+   * One task write on a caller-supplied client, without its own transaction or
+   * activity row, so a batch can apply many of them atomically.
+   */
+  private async applyIdeaUpdate(
+    client: PoolClient,
+    access: AccessContext,
+    id: string,
+    input: UpdateIdeaInput,
+    timestamp: string,
+  ): Promise<{ idea: Idea; joinsBoard: boolean }> {
+    const resolved = await this.requireIdeaByReference(client, access, id);
+    assertCanAccessProject(access, resolved.projectId);
+    const current = await this.lockIdea(client, resolved.id);
+    this.assertUnchanged(
+      await this.taskLabel(client, current),
+      input.expectedUpdatedAt,
+      current.updatedAt,
+    );
+    const title =
+      input.title !== undefined ? input.title.trim() : current.title;
+    if (input.title !== undefined) {
+      assertTitle(input.title, "Idea");
+    }
+    const summary =
+      input.summary !== undefined ? input.summary.trim() : current.summary;
+    const details =
+      input.details !== undefined ? input.details.trim() : current.details;
+    const labels =
+      input.labels !== undefined ? normalizeList(input.labels) : current.labels;
+    const acceptanceCriteria =
+      input.acceptanceCriteria !== undefined
+        ? normalizeList(input.acceptanceCriteria)
+        : current.acceptanceCriteria;
+    const repositoryLocalPath =
+      input.repositoryLocalPath !== undefined
+        ? normalizeOptionalText(input.repositoryLocalPath)
+        : current.repositoryLocalPath;
+    const repositoryRemoteUrl =
+      input.repositoryRemoteUrl !== undefined
+        ? normalizeOptionalText(input.repositoryRemoteUrl)
+        : current.repositoryRemoteUrl;
+    const assignee =
+      input.assignee !== undefined
+        ? normalizeOptionalText(input.assignee)
+        : current.assignee;
+    let status = input.status ?? current.status;
+    if (
+      status === "idea" &&
+      (input.details !== undefined || input.acceptanceCriteria !== undefined) &&
+      (details || acceptanceCriteria.length > 0)
+    ) {
+      status = "refining";
+    }
+    const result = await client.query<IdeaRow>(
+      `update ideas
+       set title = $2,
+           summary = $3,
+           details = $4,
+           labels = $5,
+           acceptance_criteria = $6,
+           status = $7,
+           repository_local_path = $8,
+           repository_remote_url = $9,
+           assignee = $10,
+           updated_at = $11
+       where id = $1
+       returning *`,
+      [
+        current.id,
+        title,
+        summary,
+        details,
+        JSON.stringify(labels),
+        JSON.stringify(acceptanceCriteria),
+        status,
+        repositoryLocalPath ?? null,
+        repositoryRemoteUrl ?? null,
+        assignee ?? null,
+        timestamp,
+      ],
+    );
+    const idea = ideaFromRow(result.rows[0]);
+    if (input.dependsOn !== undefined) {
+      await this.replaceIdeaDependencies(
+        client,
+        access,
+        idea,
+        input.dependsOn,
+        timestamp,
+      );
+    }
+    await this.syncBoardCardFromIdea(client, idea, timestamp);
+
+    // Status says what the task is; onBoard says whether it has a card.
+    // Reaching "ready" ensures one, but leaving "ready" never destroys one —
+    // that loses the card's id, column and branch, so it needs onBoard: false.
+    const becameReady = idea.status === "ready" && current.status !== "ready";
+    const joinsBoard = input.onBoard === true || becameReady;
+    if (joinsBoard) {
+      await this.ensureBoardCard(
+        client,
+        idea,
+        { githubMode: "local" },
+        timestamp,
+      );
+    } else if (input.onBoard === false) {
+      await client.query("delete from board_cards where idea_id = $1", [
+        idea.id,
+      ]);
+    }
+
+    let written = idea;
+    if (input.readiness) {
+      // One timestamp for content and score, so the score reads as
+      // "evaluated as of this edit" rather than instantly stale.
+      const row = await this.applyIdeaReadiness(
+        client,
+        idea.id,
+        input.readiness,
+        timestamp,
+      );
+      written = ideaFromRow(row);
+    }
+
+    return { idea: written, joinsBoard };
+  }
+
+  /**
+   * Apply many task writes in one transaction. All-or-nothing: agents run
+   * several sessions against one board, and a half-applied batch is worse than
+   * a refused one.
+   */
+  async updateIdeas(
+    access: AccessContext,
+    items: BatchIdeaUpdate[],
+  ): Promise<Idea[]> {
+    if (items.length > batchLimit) {
+      throw new Error(
+        `Batch is limited to ${batchLimit} items; received ${items.length}`,
+      );
+    }
+    if (items.length === 0) {
+      return [];
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const timestamp = nowIso();
+      const written: Idea[] = [];
+      for (const [index, item] of items.entries()) {
+        const { id, ...changes } = item;
+        try {
+          const { idea } = await this.applyIdeaUpdate(
+            client,
+            access,
+            id,
+            changes,
+            timestamp,
+          );
+          written.push(idea);
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : "Unknown error";
+          // Keep the original message inside: the REST status mapping reads it.
+          throw new Error(`Batch item ${index + 1} (${id}) failed: ${message}`);
+        }
+      }
+      // One activity row, because every insert also prunes the activity table.
+      await this.addActivity(
+        client,
+        "idea.updated",
+        `Updated ${written.length} tasks`,
+        timestamp,
+      );
+      // The plural decorator costs two queries for the whole batch, not per row.
+      const decorated = await this.decorateIdeas(client, written);
+      await client.query("commit");
+      return decorated;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async updateBoardCards(
+    access: AccessContext,
+    items: BatchBoardCardUpdate[],
+  ): Promise<BoardCard[]> {
+    if (items.length > batchLimit) {
+      throw new Error(
+        `Batch is limited to ${batchLimit} items; received ${items.length}`,
+      );
+    }
+    if (items.length === 0) {
+      return [];
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const timestamp = nowIso();
+      const written: BoardCard[] = [];
+      let moves = 0;
+      for (const [index, item] of items.entries()) {
+        const { id, ...changes } = item;
+        try {
+          const { card, moved } = await this.applyBoardCardUpdate(
+            client,
+            access,
+            id,
+            changes,
+            timestamp,
+          );
+          written.push(card);
+          if (moved) {
+            moves += 1;
+          }
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : "Unknown error";
+          throw new Error(`Batch item ${index + 1} (${id}) failed: ${message}`);
+        }
+      }
+      await this.addActivity(
+        client,
+        moves > 0 ? "board.moved" : "board.updated",
+        moves > 0
+          ? `Moved ${moves} of ${written.length} cards`
+          : `Updated ${written.length} board cards`,
+        timestamp,
+      );
+      const decorated = await this.decorateCards(client, written);
+      await client.query("commit");
+      return decorated;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async updateIdea(
     access: AccessContext,
     id: string,
@@ -548,83 +978,20 @@ export class PostgresBoardStore implements BoardDataStore {
     const client = await this.pool.connect();
     try {
       await client.query("begin");
-      const current = await this.requireIdea(client, id);
-      assertCanAccessProject(access, current.projectId);
-      const title =
-        input.title !== undefined ? input.title.trim() : current.title;
-      if (input.title !== undefined) {
-        assertTitle(input.title, "Idea");
-      }
-      const summary =
-        input.summary !== undefined ? input.summary.trim() : current.summary;
-      const details =
-        input.details !== undefined ? input.details.trim() : current.details;
-      const labels =
-        input.labels !== undefined
-          ? normalizeList(input.labels)
-          : current.labels;
-      const acceptanceCriteria =
-        input.acceptanceCriteria !== undefined
-          ? normalizeList(input.acceptanceCriteria)
-          : current.acceptanceCriteria;
-      const repositoryLocalPath =
-        input.repositoryLocalPath !== undefined
-          ? normalizeOptionalText(input.repositoryLocalPath)
-          : current.repositoryLocalPath;
-      const repositoryRemoteUrl =
-        input.repositoryRemoteUrl !== undefined
-          ? normalizeOptionalText(input.repositoryRemoteUrl)
-          : current.repositoryRemoteUrl;
-      let status = input.status ?? current.status;
-      if (
-        status === "idea" &&
-        (input.details !== undefined ||
-          input.acceptanceCriteria !== undefined) &&
-        (details || acceptanceCriteria.length > 0)
-      ) {
-        status = "refining";
-      }
       const timestamp = nowIso();
-      const result = await client.query<IdeaRow>(
-        `update ideas
-         set title = $2,
-             summary = $3,
-             details = $4,
-             labels = $5,
-             acceptance_criteria = $6,
-             status = $7,
-             repository_local_path = $8,
-             repository_remote_url = $9,
-             updated_at = $10
-         where id = $1
-         returning *`,
-        [
-          id,
-          title,
-          summary,
-          details,
-          JSON.stringify(labels),
-          JSON.stringify(acceptanceCriteria),
-          status,
-          repositoryLocalPath ?? null,
-          repositoryRemoteUrl ?? null,
-          timestamp,
-        ],
+      const { idea, joinsBoard } = await this.applyIdeaUpdate(
+        client,
+        access,
+        id,
+        input,
+        timestamp,
       );
-      const idea = ideaFromRow(result.rows[0]);
-      if (input.dependsOn !== undefined) {
-        await this.replaceIdeaDependencies(
-          client,
-          idea,
-          input.dependsOn,
-          timestamp,
-        );
-      }
-      await this.syncBoardCardFromIdea(client, idea, timestamp);
       await this.addActivity(
         client,
-        "idea.updated",
-        `Updated idea: ${idea.title}`,
+        joinsBoard ? "idea.ready" : "idea.updated",
+        joinsBoard
+          ? `Marked idea ready: ${idea.title}`
+          : `Updated idea: ${idea.title}`,
         timestamp,
       );
       const decorated = await this.decorateIdea(client, idea);
@@ -638,29 +1005,44 @@ export class PostgresBoardStore implements BoardDataStore {
     }
   }
 
-  async markIdeaReady(access: AccessContext, id: string): Promise<Idea> {
-    return this.setIdeaBoardAvailability(access, id, true);
+  async markIdeaReady(
+    access: AccessContext,
+    id: string,
+    options: MarkIdeaReadyOptions = {},
+  ): Promise<Idea> {
+    return this.setIdeaBoardAvailability(access, id, true, options);
   }
 
   async setIdeaBoardAvailability(
     access: AccessContext,
     id: string,
     available: boolean,
+    options: MarkIdeaReadyOptions = {},
   ): Promise<Idea> {
     const client = await this.pool.connect();
     try {
       await client.query("begin");
-      const idea = await this.requireIdea(client, id);
+      const idea = await this.requireIdeaByReference(client, access, id);
       assertCanAccessProject(access, idea.projectId);
       const timestamp = nowIso();
 
       if (available) {
-        const ready = await this.updateIdeaStatus(
+        let ready = await this.updateIdeaStatus(
           client,
           idea.id,
           "ready",
           timestamp,
         );
+        if (options.readiness) {
+          ready = ideaFromRow(
+            await this.applyIdeaReadiness(
+              client,
+              idea.id,
+              options.readiness,
+              timestamp,
+            ),
+          );
+        }
         await this.ensureBoardCard(
           client,
           ready,
@@ -761,18 +1143,27 @@ export class PostgresBoardStore implements BoardDataStore {
     const client = await this.pool.connect();
     try {
       await client.query("begin");
-      const idea = await this.requireIdea(client, id);
+      const idea = await this.requireIdeaByReference(client, access, id);
       assertCanAccessProject(access, idea.projectId);
       const current = await client.query<DependencyRow>(
         "select idea_id, depends_on_idea_id from task_dependencies where idea_id = $1 order by depends_on_idea_id asc",
-        [id],
+        [idea.id],
       );
       const timestamp = nowIso();
       const next = normalizeDependencyIds(
         change(current.rows.map((row) => row.depends_on_idea_id)),
       );
-      await this.replaceIdeaDependencies(client, idea, next, timestamp);
-      const decorated = await this.decorateIdea(client, idea);
+      await this.replaceIdeaDependencies(client, access, idea, next, timestamp);
+      // A dependency edit is a content change: age the row so a concurrent
+      // writer's expectedUpdatedAt is refused rather than silently clobbering.
+      const aged = await client.query<IdeaRow>(
+        "update ideas set updated_at = $2 where id = $1 returning *",
+        [idea.id, timestamp],
+      );
+      const decorated = await this.decorateIdea(
+        client,
+        ideaFromRow(aged.rows[0]),
+      );
       await this.addActivity(
         client,
         "idea.dependencies",
@@ -797,7 +1188,7 @@ export class PostgresBoardStore implements BoardDataStore {
     const client = await this.pool.connect();
     try {
       await client.query("begin");
-      const idea = await this.requireIdea(client, id);
+      const idea = await this.requireIdeaByReference(client, access, id);
       assertCanAccessProject(access, idea.projectId);
       if (idea.status !== "ready") {
         throw new Error("Only ready ideas can be moved to the board");
@@ -818,39 +1209,36 @@ export class PostgresBoardStore implements BoardDataStore {
 
   async listBoardCards(
     access: AccessContext,
-    projectId?: string,
+    filter?: string | BoardListFilter,
   ): Promise<BoardCard[]> {
-    if (projectId) {
-      const project = await this.requireProject(this.pool, projectId);
-      assertCanAccessProject(access, project.id);
-      const result = await this.pool.query<BoardCardRow>(
-        "select * from board_cards where project_id = $1 order by updated_at desc, title asc",
-        [project.id],
-      );
-      return this.decorateCards(this.pool, result.rows.map(boardCardFromRow));
-    }
-
-    if (access.kind === "token" && access.projectIds.length === 0) {
+    const options: BoardListFilter =
+      typeof filter === "string" ? { projectId: filter } : (filter ?? {});
+    const scope = await this.resolveListScope(access, options.projectId);
+    if (scope !== null && scope.length === 0) {
       return [];
     }
-
-    const result =
-      access.kind === "admin"
-        ? await this.pool.query<BoardCardRow>(
-            "select * from board_cards order by updated_at desc, title asc",
-          )
-        : await this.pool.query<BoardCardRow>(
-            "select * from board_cards where project_id = any($1::text[]) order by updated_at desc, title asc",
-            [access.projectIds],
-          );
+    const result = await this.pool.query<BoardCardRow>(
+      `select * from board_cards
+        where ($1::text[] is null or project_id = any($1::text[]))
+          and ($2::text[] is null or column_name = any($2::text[]))
+          and ($3::timestamptz is null or updated_at > $3::timestamptz)
+          and ${assigneeFilterSql(4, 5)}
+        order by updated_at desc, id desc`,
+      [
+        scope,
+        options.column ?? null,
+        options.updatedSince ?? null,
+        ...assigneeFilterParams(options),
+      ],
+    );
     return this.decorateCards(this.pool, result.rows.map(boardCardFromRow));
   }
 
   async getBoardColumns(
     access: AccessContext,
-    projectId?: string,
+    filter?: string | BoardListFilter,
   ): Promise<BoardColumns> {
-    const cards = await this.listBoardCards(access, projectId);
+    const cards = await this.listBoardCards(access, filter);
     const columns: BoardColumns = {
       ready: [],
       planned: [],
@@ -867,6 +1255,81 @@ export class PostgresBoardStore implements BoardDataStore {
     return columns;
   }
 
+  /**
+   * One card write on a caller-supplied client, without its own transaction or
+   * activity row. `moved` says whether the column actually changed.
+   */
+  private async applyBoardCardUpdate(
+    client: PoolClient,
+    access: AccessContext,
+    id: string,
+    input: UpdateBoardCardInput,
+    timestamp: string,
+  ): Promise<{ card: BoardCard; moved: boolean }> {
+    const resolved = await this.requireBoardCardByReference(client, access, id);
+    assertCanAccessProject(access, resolved.projectId);
+    const current = await this.lockBoardCard(client, resolved.id);
+    this.assertUnchanged(
+      "Board card",
+      input.expectedUpdatedAt,
+      current.updatedAt,
+    );
+    const column = input.column ?? current.column;
+    const branchName =
+      input.branchName !== undefined
+        ? normalizeOptionalText(input.branchName)
+        : current.branchName;
+    const details =
+      input.details !== undefined ? input.details.trim() : current.details;
+    const repositoryLocalPath =
+      input.repositoryLocalPath !== undefined
+        ? normalizeOptionalText(input.repositoryLocalPath)
+        : current.repositoryLocalPath;
+    const repositoryRemoteUrl =
+      input.repositoryRemoteUrl !== undefined
+        ? normalizeOptionalText(input.repositoryRemoteUrl)
+        : current.repositoryRemoteUrl;
+    const assignee =
+      input.assignee !== undefined
+        ? normalizeOptionalText(input.assignee)
+        : current.assignee;
+    const result = await client.query<BoardCardRow>(
+      `update board_cards
+       set column_name = $2,
+           branch_name = $3,
+           details = $4,
+           repository_local_path = $5,
+           repository_remote_url = $6,
+           assignee = $7,
+           updated_at = $8
+       where id = $1
+       returning *`,
+      [
+        current.id,
+        column,
+        branchName ?? null,
+        details,
+        repositoryLocalPath ?? null,
+        repositoryRemoteUrl ?? null,
+        assignee ?? null,
+        timestamp,
+      ],
+    );
+
+    // A claim made on the board writes through to the task. Without this the
+    // next task edit would sync the task's own assignee back over the card and
+    // silently drop the claim, which the repository fields can afford and a
+    // holder cannot.
+    if (input.assignee !== undefined && current.ideaId) {
+      await client.query(
+        "update ideas set assignee = $2, updated_at = $3 where id = $1",
+        [current.ideaId, assignee ?? null, timestamp],
+      );
+    }
+    const moved = input.column !== undefined && input.column !== current.column;
+    return { card: boardCardFromRow(result.rows[0]), moved };
+  }
+
   async updateBoardCard(
     access: AccessContext,
     id: string,
@@ -875,52 +1338,21 @@ export class PostgresBoardStore implements BoardDataStore {
     const client = await this.pool.connect();
     try {
       await client.query("begin");
-      const current = await this.requireBoardCard(client, id);
-      assertCanAccessProject(access, current.projectId);
-      const column = input.column ?? current.column;
-      const branchName =
-        input.branchName !== undefined
-          ? normalizeOptionalText(input.branchName)
-          : current.branchName;
-      const details =
-        input.details !== undefined ? input.details.trim() : current.details;
-      const repositoryLocalPath =
-        input.repositoryLocalPath !== undefined
-          ? normalizeOptionalText(input.repositoryLocalPath)
-          : current.repositoryLocalPath;
-      const repositoryRemoteUrl =
-        input.repositoryRemoteUrl !== undefined
-          ? normalizeOptionalText(input.repositoryRemoteUrl)
-          : current.repositoryRemoteUrl;
       const timestamp = nowIso();
-      const result = await client.query<BoardCardRow>(
-        `update board_cards
-         set column_name = $2,
-             branch_name = $3,
-             details = $4,
-             repository_local_path = $5,
-             repository_remote_url = $6,
-             updated_at = $7
-         where id = $1
-         returning *`,
-        [
-          id,
-          column,
-          branchName ?? null,
-          details,
-          repositoryLocalPath ?? null,
-          repositoryRemoteUrl ?? null,
-          timestamp,
-        ],
-      );
-      const card = await this.decorateCard(
+      const { card: written, moved } = await this.applyBoardCardUpdate(
         client,
-        boardCardFromRow(result.rows[0]),
+        access,
+        id,
+        input,
+        timestamp,
       );
+      const card = await this.decorateCard(client, written);
       await this.addActivity(
         client,
-        "board.updated",
-        `Updated board card: ${card.title}`,
+        moved ? "board.moved" : "board.updated",
+        moved
+          ? `Moved card to ${card.column}: ${card.title}`
+          : `Updated board card: ${card.title}`,
         timestamp,
       );
       await client.query("commit");
@@ -933,42 +1365,16 @@ export class PostgresBoardStore implements BoardDataStore {
     }
   }
 
+  /**
+   * Kept for existing clients. `updateBoardCard` already writes the column, and
+   * the activity type is derived there, so this is one call away from it.
+   */
   async moveBoardCard(
     access: AccessContext,
     id: string,
     column: BoardColumn,
   ): Promise<BoardCard> {
-    const client = await this.pool.connect();
-    try {
-      await client.query("begin");
-      const current = await this.requireBoardCard(client, id);
-      assertCanAccessProject(access, current.projectId);
-      const timestamp = nowIso();
-      const result = await client.query<BoardCardRow>(
-        `update board_cards
-         set column_name = $2, updated_at = $3
-         where id = $1
-         returning *`,
-        [id, column, timestamp],
-      );
-      const card = await this.decorateCard(
-        client,
-        boardCardFromRow(result.rows[0]),
-      );
-      await this.addActivity(
-        client,
-        "board.moved",
-        `Moved card to ${column}: ${card.title}`,
-        timestamp,
-      );
-      await client.query("commit");
-      return card;
-    } catch (error) {
-      await client.query("rollback");
-      throw error;
-    } finally {
-      client.release();
-    }
+    return this.updateBoardCard(access, id, { column });
   }
 
   async setCardReadiness(
@@ -976,9 +1382,10 @@ export class PostgresBoardStore implements BoardDataStore {
     id: string,
     input: SetCardReadinessInput,
   ): Promise<BoardCard> {
+    const cardId = await resolveBoardCardId(this.pool, access, id);
     const existing = await this.pool.query<BoardCardRow>(
       "select * from board_cards where id = $1",
-      [id],
+      [cardId],
     );
     const row = existing.rows[0];
     if (!row) {
@@ -990,7 +1397,7 @@ export class PostgresBoardStore implements BoardDataStore {
       await this.setIdeaReadiness(access, row.idea_id, input);
       const reread = await this.pool.query<BoardCardRow>(
         "select * from board_cards where id = $1",
-        [id],
+        [cardId],
       );
       return this.decorateCard(this.pool, boardCardFromRow(reread.rows[0]));
     }
@@ -1004,9 +1411,46 @@ export class PostgresBoardStore implements BoardDataStore {
            readiness_evaluated_at = $4
        where id = $1
        returning *`,
-      [id, score, reason, timestamp],
+      [cardId, score, reason, timestamp],
     );
     return this.decorateCard(this.pool, boardCardFromRow(result.rows[0]));
+  }
+
+  /**
+   * The readiness write, on the caller's client so it can ride along inside a
+   * larger transaction. Deliberately leaves `updated_at` alone on both tables:
+   * the UI marks a score stale by comparing content time against this one.
+   */
+  private async applyIdeaReadiness(
+    client: PoolClient,
+    ideaId: string,
+    input: SetCardReadinessInput,
+    timestamp: string,
+  ): Promise<IdeaRow> {
+    const { score, reason } = normalizeReadinessInput(input);
+    const result = await client.query<IdeaRow>(
+      `update ideas
+         set readiness_score = $2,
+             readiness_reason = $3,
+             readiness_evaluated_at = $4
+       where id = $1
+       returning *`,
+      [ideaId, score, reason, timestamp],
+    );
+    await client.query(
+      `update board_cards
+         set readiness_score = $2,
+             readiness_reason = $3,
+             readiness_evaluated_at = $4
+       where idea_id = $1`,
+      [ideaId, score, reason, timestamp],
+    );
+    await client.query(
+      `insert into idea_readiness_events (id, idea_id, score, reason, created_at)
+       values ($1, $2, $3, $4, $5)`,
+      [randomUUID(), ideaId, score, reason, timestamp],
+    );
+    return result.rows[0];
   }
 
   async setIdeaReadiness(
@@ -1018,32 +1462,16 @@ export class PostgresBoardStore implements BoardDataStore {
     const client = await this.pool.connect();
     try {
       await client.query("begin");
-      const current = await this.requireIdea(client, id);
+      const current = await this.requireIdeaByReference(client, access, id);
       assertCanAccessProject(access, current.projectId);
       const timestamp = nowIso();
-      const result = await client.query<IdeaRow>(
-        `update ideas
-         set readiness_score = $2,
-             readiness_reason = $3,
-             readiness_evaluated_at = $4
-         where id = $1
-         returning *`,
-        [id, score, reason, timestamp],
+      const row = await this.applyIdeaReadiness(
+        client,
+        current.id,
+        { score, reason },
+        timestamp,
       );
-      await client.query(
-        `update board_cards
-         set readiness_score = $2,
-             readiness_reason = $3,
-             readiness_evaluated_at = $4
-         where idea_id = $1`,
-        [id, score, reason, timestamp],
-      );
-      await client.query(
-        `insert into idea_readiness_events (id, idea_id, score, reason, created_at)
-         values ($1, $2, $3, $4, $5)`,
-        [randomUUID(), id, score, reason, timestamp],
-      );
-      const idea = await this.decorateIdea(client, ideaFromRow(result.rows[0]));
+      const idea = await this.decorateIdea(client, ideaFromRow(row));
       await this.addActivity(
         client,
         "idea.readiness",
@@ -1060,46 +1488,81 @@ export class PostgresBoardStore implements BoardDataStore {
     }
   }
 
+  /**
+   * Readiness for a whole project (or a named set of tasks) in one call.
+   * `distinct on` keeps the newest event per task; the id tiebreaker matters
+   * because the boot backfill can mint several events sharing a timestamp.
+   */
+  async listReadiness(
+    access: AccessContext,
+    filter: ReadinessListFilter = {},
+  ): Promise<ReadinessEvent[]> {
+    let ideaIds: string[];
+    if (filter.tasks && filter.tasks.length > 0) {
+      ideaIds = [];
+      for (const reference of filter.tasks) {
+        const idea = await this.requireIdeaByReference(
+          this.pool,
+          access,
+          reference,
+        );
+        assertCanAccessProject(access, idea.projectId);
+        ideaIds.push(idea.id);
+      }
+    } else {
+      const ideas = await this.listIdeas(access, filter.projectId);
+      ideaIds = ideas.map((idea) => idea.id);
+    }
+    if (ideaIds.length === 0) {
+      return [];
+    }
+
+    const latestOnly = filter.latestOnly ?? true;
+    const result = await this.pool.query<ReadinessEventRow>(
+      latestOnly
+        ? `select distinct on (idea_id) *
+             from idea_readiness_events
+            where idea_id = any($1::text[])
+            order by idea_id, created_at desc, id desc`
+        : `select * from idea_readiness_events
+            where idea_id = any($1::text[])
+            order by created_at desc, id desc`,
+      [ideaIds],
+    );
+    return result.rows.map(readinessEventFromRow);
+  }
+
   async listIdeaReadiness(
     access: AccessContext,
     id: string,
   ): Promise<ReadinessEvent[]> {
-    const idea = await this.requireIdea(this.pool, id);
+    const idea = await this.requireIdeaByReference(this.pool, access, id);
     assertCanAccessProject(access, idea.projectId);
     const result = await this.pool.query<ReadinessEventRow>(
       "select * from idea_readiness_events where idea_id = $1 order by created_at desc",
-      [id],
+      [idea.id],
     );
     return result.rows.map(readinessEventFromRow);
   }
 
   async listDocuments(
     access: AccessContext,
-    projectId?: string,
+    filter?: string | DocumentListFilter,
   ): Promise<PlanDocument[]> {
-    if (projectId) {
-      const project = await this.requireProject(this.pool, projectId);
-      assertCanAccessProject(access, project.id);
-      const result = await this.pool.query<DocumentRow>(
-        "select * from documents where project_id = $1 order by updated_at desc, title asc",
-        [project.id],
-      );
-      return result.rows.map(documentFromRow);
-    }
-
-    if (access.kind === "token" && access.projectIds.length === 0) {
+    const options: DocumentListFilter =
+      typeof filter === "string" ? { projectId: filter } : (filter ?? {});
+    const scope = await this.resolveListScope(access, options.projectId);
+    if (scope !== null && scope.length === 0) {
       return [];
     }
-
-    const result =
-      access.kind === "admin"
-        ? await this.pool.query<DocumentRow>(
-            "select * from documents order by updated_at desc, title asc",
-          )
-        : await this.pool.query<DocumentRow>(
-            "select * from documents where project_id = any($1::text[]) order by updated_at desc, title asc",
-            [access.projectIds],
-          );
+    const result = await this.pool.query<DocumentRow>(
+      `select * from documents
+        where ($1::text[] is null or project_id = any($1::text[]))
+          and ($2::text[] is null or kind = any($2::text[]))
+          and ($3::timestamptz is null or updated_at > $3::timestamptz)
+        order by updated_at desc, id desc`,
+      [scope, options.kind ?? null, options.updatedSince ?? null],
+    );
     return result.rows.map(documentFromRow);
   }
 
@@ -1113,6 +1576,7 @@ export class PostgresBoardStore implements BoardDataStore {
       await client.query("begin");
       const projectId = await this.resolveProjectIdForCreate(
         client,
+        access,
         defaultProjectIdForCreate(access, input.projectId),
       );
       assertCanAccessProject(access, projectId);
@@ -1478,11 +1942,17 @@ export class PostgresBoardStore implements BoardDataStore {
    */
   private async replaceIdeaDependencies(
     client: PoolClient,
+    access: AccessContext,
     idea: Idea,
     dependsOnIds: string[],
     timestamp: string,
   ) {
-    const requested = normalizeDependencyIds(dependsOnIds);
+    const references = normalizeDependencyIds(dependsOnIds);
+    const requested: string[] = [];
+    for (const reference of references) {
+      // Blockers may be named by key too; the same-project check below still applies.
+      requested.push(await resolveIdeaId(client, access, reference));
+    }
     if (requested.includes(idea.id)) {
       throw new Error("A task cannot depend on itself");
     }
@@ -1567,6 +2037,153 @@ export class PostgresBoardStore implements BoardDataStore {
     return projectFromRow(row);
   }
 
+  /**
+   * Resolve a caller-supplied reference (id, `VP-236`, or a bare task number)
+   * and load the row. Runs on the caller's queryable so it stays inside the
+   * caller's transaction.
+   */
+  /**
+   * Project ids a list should be restricted to: null means no predicate (an
+   * admin listing everything), an empty array means the caller can see nothing.
+   */
+  /**
+   * Map task ids to their human keys. Callers pass the ids they already hold,
+   * including dependency ids outside the result set, so one indexed query
+   * covers a whole response.
+   */
+  async getTaskKeys(
+    _access: AccessContext,
+    ideaIds: string[],
+  ): Promise<Map<string, string>> {
+    if (ideaIds.length === 0) {
+      return new Map();
+    }
+    const result = await this.pool.query<{
+      id: string;
+      key: string;
+      task_number: number;
+    }>(
+      `select ideas.id, projects.key, ideas.task_number
+         from ideas join projects on projects.id = ideas.project_id
+        where ideas.id = any($1::text[])`,
+      [ideaIds],
+    );
+    return new Map(
+      result.rows.map((row) => [
+        row.id,
+        formatTaskKey(row.key, row.task_number),
+      ]),
+    );
+  }
+
+  private async resolveListScope(
+    access: AccessContext,
+    projectReference?: string,
+  ): Promise<string[] | null> {
+    if (projectReference) {
+      const project = await this.requireProjectByReference(
+        this.pool,
+        access,
+        projectReference,
+      );
+      assertCanAccessProject(access, project.id);
+      return [project.id];
+    }
+    if (access.kind === "admin") {
+      return null;
+    }
+    return filterProjectIds(access, access.projectIds);
+  }
+
+  /**
+   * Load a row and hold it for the rest of the transaction. Locking before the
+   * guard closes the window between reading `updated_at` and writing.
+   */
+  private async lockIdea(client: PoolClient, id: string): Promise<Idea> {
+    const result = await client.query<IdeaRow>(
+      "select * from ideas where id = $1 for update",
+      [id],
+    );
+    if (!result.rows[0]) {
+      throw new Error(`Task not found: ${id}`);
+    }
+    return ideaFromRow(result.rows[0]);
+  }
+
+  private async lockBoardCard(
+    client: PoolClient,
+    id: string,
+  ): Promise<BoardCard> {
+    const result = await client.query<BoardCardRow>(
+      "select * from board_cards where id = $1 for update",
+      [id],
+    );
+    if (!result.rows[0]) {
+      throw new Error(`Board card not found: ${id}`);
+    }
+    return boardCardFromRow(result.rows[0]);
+  }
+
+  /**
+   * Refuse the write when the record moved since the caller read it. The
+   * message carries the current value because an MCP tool error is prose and
+   * nothing else, so the agent has to be able to retry from the sentence.
+   */
+  private assertUnchanged(
+    label: string,
+    expected: string | undefined,
+    current: string,
+  ): void {
+    if (expected === undefined) {
+      return;
+    }
+    const normalize = (value: string) => new Date(value).toISOString();
+    if (normalize(expected) !== normalize(current)) {
+      throw new Error(
+        `${label} changed since ${expected} (current updatedAt ${current})`,
+      );
+    }
+  }
+
+  private async taskLabel(
+    queryable: Pick<Pool | PoolClient, "query">,
+    idea: Idea,
+  ): Promise<string> {
+    const result = await queryable.query<{ key: string }>(
+      "select key from projects where id = $1",
+      [idea.projectId],
+    );
+    const key = result.rows[0]?.key;
+    return key ? `Task ${formatTaskKey(key, idea.taskNumber)}` : "Task";
+  }
+
+  private async requireIdeaByReference(
+    queryable: Pick<Pool | PoolClient, "query">,
+    access: AccessContext,
+    reference: string,
+  ): Promise<Idea> {
+    const id = await resolveIdeaId(queryable, access, reference);
+    return this.requireIdea(queryable, id);
+  }
+
+  private async requireBoardCardByReference(
+    queryable: Pick<Pool | PoolClient, "query">,
+    access: AccessContext,
+    reference: string,
+  ): Promise<BoardCard> {
+    const id = await resolveBoardCardId(queryable, access, reference);
+    return this.requireBoardCard(queryable, id);
+  }
+
+  private async requireProjectByReference(
+    queryable: Pick<Pool | PoolClient, "query">,
+    access: AccessContext,
+    reference: string,
+  ): Promise<Project> {
+    const id = await resolveProjectId(queryable, access, reference);
+    return this.requireProject(queryable, id);
+  }
+
   private async requireIdea(
     queryable: Pick<Pool | PoolClient, "query">,
     id: string,
@@ -1577,7 +2194,7 @@ export class PostgresBoardStore implements BoardDataStore {
     );
     const row = result.rows[0];
     if (!row) {
-      throw new Error(`Idea not found: ${id}`);
+      throw new Error(`Task not found: ${id}`);
     }
     return ideaFromRow(row);
   }
@@ -1645,10 +2262,11 @@ export class PostgresBoardStore implements BoardDataStore {
 
   private async resolveProjectIdForCreate(
     client: PoolClient,
+    access: AccessContext,
     requestedProjectId: string | undefined,
   ): Promise<string> {
     if (requestedProjectId !== undefined) {
-      return (await this.requireProject(client, requestedProjectId)).id;
+      return resolveProjectId(client, access, requestedProjectId);
     }
 
     const existing = await client.query<ProjectRow>(
@@ -1740,9 +2358,10 @@ export class PostgresBoardStore implements BoardDataStore {
              labels = $4,
              repository_local_path = $5,
              repository_remote_url = $6,
-             github_issue_url = $7,
-             github_issue_number = $8,
-             updated_at = $9
+             assignee = $7,
+             github_issue_url = $8,
+             github_issue_number = $9,
+             updated_at = $10
          where id = $1
          returning *`,
         [
@@ -1752,6 +2371,7 @@ export class PostgresBoardStore implements BoardDataStore {
           JSON.stringify(idea.labels),
           idea.repositoryLocalPath ?? null,
           idea.repositoryRemoteUrl ?? null,
+          idea.assignee ?? null,
           githubIssueUrl,
           githubIssueNumber,
           timestamp,
@@ -1766,10 +2386,10 @@ export class PostgresBoardStore implements BoardDataStore {
     const created = await queryable.query<BoardCardRow>(
       `insert into board_cards (
          id, project_id, idea_id, title, details, column_name, branch_name, github_issue_url,
-         github_issue_number, repository_local_path, repository_remote_url, labels,
+         github_issue_number, repository_local_path, repository_remote_url, assignee, labels,
          readiness_score, readiness_reason, readiness_evaluated_at, created_at, updated_at
        )
-       values ($1, $2, $3, $4, $5, 'ready', null, $6, $7, $8, $9, $10, $12, $13, $14, $11, $11)
+       values ($1, $2, $3, $4, $5, 'ready', null, $6, $7, $8, $9, $15, $10, $12, $13, $14, $11, $11)
        returning *`,
       [
         randomUUID(),
@@ -1786,6 +2406,7 @@ export class PostgresBoardStore implements BoardDataStore {
         idea.readinessScore ?? null,
         idea.readinessReason ?? null,
         idea.readinessEvaluatedAt ?? null,
+        idea.assignee ?? null,
       ],
     );
     if (options.githubMode === "github") {
@@ -1813,7 +2434,8 @@ export class PostgresBoardStore implements BoardDataStore {
            labels = $4,
            repository_local_path = $5,
            repository_remote_url = $6,
-           updated_at = $7
+           assignee = $7,
+           updated_at = $8
        where idea_id = $1`,
       [
         idea.id,
@@ -1822,6 +2444,7 @@ export class PostgresBoardStore implements BoardDataStore {
         JSON.stringify(idea.labels),
         idea.repositoryLocalPath ?? null,
         idea.repositoryRemoteUrl ?? null,
+        idea.assignee ?? null,
         timestamp,
       ],
     );
@@ -1936,10 +2559,10 @@ export class PostgresBoardStore implements BoardDataStore {
         `insert into ideas (
            id, project_id, task_number, title, summary, details, status, labels,
            acceptance_criteria, github_issue_url, github_issue_number, repository_local_path,
-           repository_remote_url, readiness_score, readiness_reason, readiness_evaluated_at,
-           created_at, updated_at
+           repository_remote_url, assignee, readiness_score, readiness_reason,
+           readiness_evaluated_at, created_at, updated_at
          )
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
         [
           idea.id,
           destinationProjectId,
@@ -1954,6 +2577,7 @@ export class PostgresBoardStore implements BoardDataStore {
           idea.githubIssueNumber ?? null,
           idea.repositoryLocalPath ?? null,
           idea.repositoryRemoteUrl ?? null,
+          idea.assignee ?? null,
           idea.readinessScore ?? null,
           idea.readinessReason ?? null,
           idea.readinessEvaluatedAt ?? null,
@@ -1977,10 +2601,10 @@ export class PostgresBoardStore implements BoardDataStore {
       await client.query(
         `insert into board_cards (
            id, project_id, idea_id, title, details, column_name, branch_name, github_issue_url,
-           github_issue_number, repository_local_path, repository_remote_url, labels,
+           github_issue_number, repository_local_path, repository_remote_url, assignee, labels,
            readiness_score, readiness_reason, readiness_evaluated_at, created_at, updated_at
          )
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
         [
           card.id,
           destinationProjectId,
@@ -1993,6 +2617,7 @@ export class PostgresBoardStore implements BoardDataStore {
           card.githubIssueNumber ?? null,
           card.repositoryLocalPath ?? null,
           card.repositoryRemoteUrl ?? null,
+          card.assignee ?? null,
           JSON.stringify(card.labels),
           card.readinessScore ?? null,
           card.readinessReason ?? null,
@@ -2126,6 +2751,7 @@ const ideaFromRow = (row: IdeaRow): Idea => ({
   githubIssueNumber: row.github_issue_number ?? undefined,
   repositoryLocalPath: row.repository_local_path ?? undefined,
   repositoryRemoteUrl: row.repository_remote_url ?? undefined,
+  assignee: row.assignee ?? undefined,
   readinessScore: row.readiness_score ?? undefined,
   readinessReason: row.readiness_reason ?? undefined,
   readinessEvaluatedAt: row.readiness_evaluated_at
@@ -2155,6 +2781,7 @@ const boardCardFromRow = (row: BoardCardRow): BoardCard => ({
   githubIssueNumber: row.github_issue_number ?? undefined,
   repositoryLocalPath: row.repository_local_path ?? undefined,
   repositoryRemoteUrl: row.repository_remote_url ?? undefined,
+  assignee: row.assignee ?? undefined,
   labels: jsonStringArray(row.labels),
   dependsOn: [],
   blockedBy: [],
@@ -2278,6 +2905,7 @@ export class BoardStore {
       blockedBy: [],
       repositoryLocalPath: normalizeOptionalText(input.repositoryLocalPath),
       repositoryRemoteUrl: normalizeOptionalText(input.repositoryRemoteUrl),
+      assignee: normalizeOptionalText(input.assignee),
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -2324,6 +2952,9 @@ export class BoardStore {
       idea.repositoryRemoteUrl = normalizeOptionalText(
         input.repositoryRemoteUrl,
       );
+    }
+    if (input.assignee !== undefined) {
+      idea.assignee = normalizeOptionalText(input.assignee);
     }
     if (input.status !== undefined) {
       idea.status = input.status;
@@ -2412,6 +3043,7 @@ export class BoardStore {
       ideaId: idea.id,
       repositoryLocalPath: idea.repositoryLocalPath,
       repositoryRemoteUrl: idea.repositoryRemoteUrl,
+      assignee: idea.assignee,
       labels: [...idea.labels],
       dependsOn: [...idea.dependsOn],
       blockedBy: [...idea.blockedBy],
@@ -2494,6 +3126,18 @@ export class BoardStore {
       card.repositoryRemoteUrl = normalizeOptionalText(
         input.repositoryRemoteUrl,
       );
+    }
+    if (input.assignee !== undefined) {
+      card.assignee = normalizeOptionalText(input.assignee);
+      // A claim made on the board belongs to the task too; see the Postgres
+      // store for why it writes through rather than only sitting on the card.
+      const idea = card.ideaId
+        ? this.data.ideas.find((item) => item.id === card.ideaId)
+        : undefined;
+      if (idea) {
+        idea.assignee = card.assignee;
+        idea.updatedAt = nowIso();
+      }
     }
     card.updatedAt = nowIso();
     this.addActivity("board.updated", `Updated board card: ${card.title}`);
@@ -2694,7 +3338,7 @@ export class BoardStore {
   private requireIdea(id: string): Idea {
     const idea = this.data.ideas.find((item) => item.id === id);
     if (!idea) {
-      throw new Error(`Idea not found: ${id}`);
+      throw new Error(`Task not found: ${id}`);
     }
     return idea;
   }
@@ -2782,6 +3426,7 @@ export class BoardStore {
     card.labels = [...idea.labels];
     card.repositoryLocalPath = idea.repositoryLocalPath;
     card.repositoryRemoteUrl = idea.repositoryRemoteUrl;
+    card.assignee = idea.assignee;
     card.updatedAt = timestamp;
   }
 

@@ -99,6 +99,24 @@ describe("PostgreSQL schema", () => {
     );
   });
 
+  it("stores an assignee on ideas and board cards", async () => {
+    await initializeDatabase(pool);
+
+    const columns = await pool.query<{ table_name: string }>(
+      `select table_name
+       from information_schema.columns
+       where table_schema = 'public'
+         and table_name in ('ideas', 'board_cards')
+         and column_name = 'assignee'
+       order by table_name`,
+    );
+
+    expect(columns.rows.map((row) => row.table_name)).toEqual([
+      "board_cards",
+      "ideas",
+    ]);
+  });
+
   it("stores readiness fields on board cards", async () => {
     await initializeDatabase(pool);
 
@@ -135,6 +153,23 @@ describe("PostgreSQL schema", () => {
         "created_at",
       ]),
     );
+  });
+
+  it("indexes the lookups the board actually runs", async () => {
+    await initializeDatabase(pool);
+
+    const indexes = await pool.query<{ indexname: string }>(
+      "select indexname from pg_indexes where schemaname = 'public'",
+    );
+
+    const names = indexes.rows.map((row) => row.indexname);
+    // board_cards.idea_id is the predicate behind card lookup, the readiness
+    // fan-out and the dependency join, and carried no index before.
+    expect(names).toContain("board_cards_idea_idx");
+    expect(names).toContain("ideas_project_status_updated_idx");
+    expect(names).toContain("board_cards_project_column_updated_idx");
+    expect(names).toContain("ideas_project_updated_id_idx");
+    expect(names).toContain("board_cards_project_updated_id_idx");
   });
 
   it("stores readiness fields on ideas", async () => {

@@ -5,6 +5,7 @@ import { createApp } from "../src/server/app.js";
 import { createAdminSessionManager } from "../src/server/auth.js";
 import { initializeDatabase } from "../src/server/db.js";
 import type { PostgresBoardStore } from "../src/server/storage.js";
+import { adminAccess } from "../src/server/store.js";
 import { resetDatabase } from "./helpers/postgres.js";
 import { closeTestPool, createTestStore } from "./helpers/store.js";
 
@@ -807,5 +808,284 @@ describe("API", () => {
     });
 
     await request(app).get("/api/work-order").expect(401);
+  });
+
+  it("reads one task and one card by key over REST", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+    const project = await store.createProject({ key: "VP", title: "VibePod" });
+    const task = await store.createIdea(adminAccess("admin"), {
+      projectId: project.id,
+      title: "Readable",
+    });
+    await store.markIdeaReady(adminAccess("admin"), task.id);
+
+    const one = await agent.get(`/api/ideas/VP-${task.taskNumber}`).expect(200);
+    expect(one.body.item).toMatchObject({ id: task.id, title: "Readable" });
+
+    const card = await agent
+      .get(`/api/board/VP-${task.taskNumber}`)
+      .expect(200);
+    expect(card.body.item).toMatchObject({ ideaId: task.id, column: "ready" });
+
+    // The longer readiness path must still win over the new single-record route.
+    const readiness = await agent
+      .get(`/api/ideas/${task.id}/readiness`)
+      .expect(200);
+    expect(readiness.body.items).toEqual([]);
+
+    await agent.get("/api/ideas/VP-999").expect(404);
+  });
+
+  it("filters task and board lists over REST", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+    const project = await store.createProject({ key: "VP", title: "VibePod" });
+    const ready = await store.createIdea(adminAccess("admin"), {
+      projectId: project.id,
+      title: "Ready to go",
+    });
+    await store.createIdea(adminAccess("admin"), {
+      projectId: project.id,
+      title: "Still an idea",
+    });
+    await store.markIdeaReady(adminAccess("admin"), ready.id);
+
+    const readyOnly = await agent
+      .get("/api/ideas?projectId=VP&status=ready")
+      .expect(200);
+    expect(readyOnly.body.items.map((idea: { id: string }) => idea.id)).toEqual(
+      [ready.id],
+    );
+
+    const board = await agent.get("/api/board?column=ready").expect(200);
+    expect(board.body.columns.ready).toHaveLength(1);
+    expect(board.body.columns.planned).toHaveLength(0);
+
+    const future = new Date(Date.now() + 60_000).toISOString();
+    const none = await agent
+      .get(`/api/ideas?updatedSince=${encodeURIComponent(future)}`)
+      .expect(200);
+    expect(none.body.items).toEqual([]);
+  });
+
+  it("assigns a task and filters by holder over REST", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+    const holder = "Claude::Subagent101::Worktree12";
+    const created = await agent
+      .post("/api/ideas")
+      .send({ title: "Claimed over REST", assignee: holder })
+      .expect(201);
+    await agent.post(`/api/ideas/${created.body.item.id}/ready`).expect(200);
+    await agent
+      .post("/api/ideas")
+      .send({ title: "Nobody holds me" })
+      .expect(201);
+
+    const mine = await agent
+      .get(`/api/ideas?assignee=${encodeURIComponent(holder)}`)
+      .expect(200);
+    expect(
+      mine.body.items.map((idea: { title: string }) => idea.title),
+    ).toEqual(["Claimed over REST"]);
+
+    const free = await agent.get("/api/ideas?unassigned=true").expect(200);
+    expect(
+      free.body.items.map((idea: { title: string }) => idea.title),
+    ).toEqual(["Nobody holds me"]);
+
+    const board = await agent
+      .get(`/api/board?assignee=${encodeURIComponent(holder)}`)
+      .expect(200);
+    expect(board.body.columns.ready[0]).toMatchObject({ assignee: holder });
+
+    const released = await agent
+      .patch(`/api/ideas/${created.body.item.id}`)
+      .send({ assignee: "" })
+      .expect(200);
+    expect(released.body.item.assignee).toBeUndefined();
+  });
+
+  it("claims a task from its board card and writes it through", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+    const holder = "Codex::Session3";
+    const created = await agent
+      .post("/api/ideas")
+      .send({ title: "Claimed from the board" })
+      .expect(201);
+    await agent.post(`/api/ideas/${created.body.item.id}/ready`).expect(200);
+    const board = await agent.get("/api/board").expect(200);
+
+    await agent
+      .patch(`/api/board/${board.body.columns.ready[0].id}`)
+      .send({ assignee: holder })
+      .expect(200);
+
+    const task = await agent
+      .get(`/api/ideas/${created.body.item.id}`)
+      .expect(200);
+    expect(task.body.item.assignee).toBe(holder);
+  });
+
+  it("keeps returning full tasks from REST by default", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+    const project = await store.createProject({ key: "VP", title: "VibePod" });
+    await store.createIdea(adminAccess("admin"), {
+      projectId: project.id,
+      title: "Full by default",
+      details: "The browser builds its edit form from this",
+    });
+
+    const full = await agent.get("/api/ideas").expect(200);
+    expect(full.body.items[0].details).toBe(
+      "The browser builds its edit form from this",
+    );
+
+    const compact = await agent.get("/api/ideas?view=compact").expect(200);
+    expect(compact.body.items[0].details).toBeUndefined();
+    expect(compact.body.items[0].key).toBe("VP-1");
+  });
+
+  it("answers 409 when a guarded write is stale", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+    const project = await store.createProject({ key: "VP", title: "VibePod" });
+    const task = await store.createIdea(adminAccess("admin"), {
+      projectId: project.id,
+      title: "Contended",
+    });
+    await store.updateIdea(adminAccess("admin"), task.id, {
+      summary: "Moved on",
+    });
+
+    const conflict = await agent
+      .patch(`/api/ideas/${task.id}`)
+      .send({ summary: "Stale", expectedUpdatedAt: task.updatedAt })
+      .expect(409);
+    expect(conflict.body.error).toContain("changed since");
+
+    const fresh = await agent.get(`/api/ideas/${task.id}`).expect(200);
+    await agent
+      .patch(`/api/ideas/${task.id}`)
+      .send({
+        summary: "Fresh",
+        expectedUpdatedAt: fresh.body.item.updatedAt,
+      })
+      .expect(200);
+  });
+
+  it("applies a batch of task updates atomically over REST", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+    const project = await store.createProject({ key: "VP", title: "VibePod" });
+    for (const title of ["One", "Two"]) {
+      await store.createIdea(adminAccess("admin"), {
+        projectId: project.id,
+        title,
+      });
+    }
+
+    const applied = await agent
+      .post("/api/ideas/batch")
+      .send({
+        items: [
+          { id: "VP-1", labels: ["api"] },
+          { id: "VP-2", labels: ["ui"] },
+        ],
+      })
+      .expect(200);
+    expect(applied.body.items).toHaveLength(2);
+    expect(applied.body.items[0].key).toBe("VP-1");
+
+    const rejected = await agent
+      .post("/api/ideas/batch")
+      .send({
+        items: [
+          { id: "VP-1", labels: ["rolled-back"] },
+          { id: "VP-999", labels: ["missing"] },
+        ],
+      })
+      .expect(404);
+    expect(rejected.body.error).toContain("Batch item 2 (VP-999)");
+
+    const unchanged = await agent.get("/api/ideas/VP-1").expect(200);
+    expect(unchanged.body.item.labels).toEqual(["api"]);
+  });
+
+  it("pages the task list when a limit is given", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+    const project = await store.createProject({ key: "VP", title: "VibePod" });
+    for (const title of ["A", "B", "C"]) {
+      await store.createIdea(adminAccess("admin"), {
+        projectId: project.id,
+        title,
+      });
+    }
+
+    const unlimited = await agent.get("/api/ideas").expect(200);
+    expect(unlimited.body.items).toHaveLength(3);
+    expect(unlimited.body.nextCursor).toBeUndefined();
+
+    const first = await agent.get("/api/ideas?limit=2").expect(200);
+    expect(first.body.items).toHaveLength(2);
+    expect(first.body.nextCursor).toBeTruthy();
+
+    const second = await agent
+      .get(
+        `/api/ideas?limit=2&cursor=${encodeURIComponent(first.body.nextCursor)}`,
+      )
+      .expect(200);
+    expect(second.body.items).toHaveLength(1);
+  });
+
+  it("lists readiness for a whole project in one call", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+    const project = await store.createProject({ key: "VP", title: "VibePod" });
+    const rated = await store.createIdea(adminAccess("admin"), {
+      projectId: project.id,
+      title: "Rated",
+    });
+    await store.createIdea(adminAccess("admin"), {
+      projectId: project.id,
+      title: "Never rated",
+    });
+    await store.setIdeaReadiness(adminAccess("admin"), rated.id, {
+      score: 4,
+      reason: "Needs criteria",
+    });
+
+    const response = await agent.get("/api/readiness?projectId=VP").expect(200);
+
+    expect(response.body.items).toHaveLength(1);
+    expect(response.body.items[0]).toMatchObject({
+      ideaId: rated.id,
+      score: 4,
+    });
+  });
+
+  it("accepts a project key and rejects an ambiguous reference", async () => {
+    const { app } = createAuthedApp();
+    const agent = await login(app);
+    const vibepod = await store.createProject({ key: "VP", title: "VibePod" });
+    await store.createIdea(adminAccess("admin"), {
+      projectId: vibepod.id,
+      title: "Filed under a key",
+    });
+
+    const byKey = await agent.get("/api/ideas?projectId=VP").expect(200);
+    expect(byKey.body.items).toHaveLength(1);
+
+    await store.createProject({ key: "BRD", title: "Board" });
+    await store.createProject({ key: "BDX", title: "Board" });
+
+    const ambiguous = await agent.get("/api/ideas?projectId=Board").expect(400);
+    expect(ambiguous.body.error).toContain("Ambiguous project reference");
+
+    await agent.get("/api/ideas?projectId=Nope").expect(404);
   });
 });

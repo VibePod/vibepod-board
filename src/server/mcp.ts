@@ -3,6 +3,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { Router } from "express";
 import * as z from "zod/v4";
 
+import { viewLevels } from "../shared/projections.js";
 import { boardColumns, documentKinds, ideaStatuses } from "../shared/types.js";
 import { parseBearerToken } from "./auth.js";
 import { createMcpToolHandlers } from "./mcpTools.js";
@@ -12,14 +13,45 @@ import {
   tokenAccess,
 } from "./store.js";
 
+/**
+ * Compact on purpose: indentation costs ~38% on a list of small records,
+ * because every dependency id lands on its own indented line.
+ */
 const jsonContent = (value: unknown) => ({
   content: [
     {
       type: "text" as const,
-      text: JSON.stringify(value, null, 2),
+      text: JSON.stringify(value),
     },
   ],
 });
+
+export const mcpToolNames = [
+  "add_idea_dependency",
+  "create_document",
+  "create_idea",
+  "create_project",
+  "get_board_card",
+  "get_idea",
+  "list_board",
+  "list_documents",
+  "list_idea_readiness",
+  "list_ideas",
+  "list_projects",
+  "list_readiness",
+  "list_work_order",
+  "mark_idea_ready",
+  "move_board_card",
+  "remove_idea_dependency",
+  "set_card_readiness",
+  "set_idea_dependencies",
+  "set_idea_readiness",
+  "update_board_card",
+  "update_board_cards",
+  "update_document",
+  "update_idea",
+  "update_ideas",
+] as const;
 
 export const createMcpServer = (
   store: BoardDataStore,
@@ -55,6 +87,7 @@ export const createMcpServer = (
     {
       title: "List Projects",
       description: "List projects that contain tasks, board cards, and notes.",
+      annotations: { readOnlyHint: true },
     },
     async () => jsonContent(await handlers.list_projects()),
   );
@@ -78,20 +111,82 @@ export const createMcpServer = (
     "list_ideas",
     {
       title: "List Ideas",
-      description: "List ideas with refinement and readiness state.",
+      description:
+        "List tasks with refinement and readiness state. Accepts a project id, key or title, and filters by status, assignee or modification time.",
       inputSchema: {
         projectId: z.string().optional(),
+        status: z.array(z.enum(ideaStatuses)).optional(),
+        updatedSince: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("ISO timestamp; returns only tasks changed after it."),
+        assignee: z
+          .array(z.string().min(1))
+          .optional()
+          .describe("Holders to match exactly, such as Claude::Subagent101."),
+        unassigned: z
+          .boolean()
+          .optional()
+          .describe(
+            "True also returns tasks nobody holds; with assignee the two widen each other.",
+          ),
+        view: z
+          .enum(viewLevels)
+          .optional()
+          .describe(
+            "compact (default) omits free text and names dependencies by key; full returns the whole record.",
+          ),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(500)
+          .optional()
+          .describe("Defaults to 200; pass nextCursor to continue."),
+        cursor: z.string().min(1).optional(),
       },
+      annotations: { readOnlyHint: true },
     },
-    async ({ projectId }) =>
-      jsonContent(await handlers.list_ideas({ projectId })),
+    async (input) => jsonContent(await handlers.list_ideas(input)),
+  );
+
+  server.registerTool(
+    "get_idea",
+    {
+      title: "Get Task",
+      description:
+        "Read one task by reference: its id, its key such as VP-236, or a bare task number when the token covers one project.",
+      inputSchema: {
+        idea: z.string().min(1),
+        view: z.enum(viewLevels).optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (input) => jsonContent(await handlers.get_idea(input)),
+  );
+
+  server.registerTool(
+    "get_board_card",
+    {
+      title: "Get Board Card",
+      description:
+        "Read one board card by reference: its id, or the key of the task it belongs to such as VP-236.",
+      inputSchema: {
+        card: z.string().min(1),
+        view: z.enum(viewLevels).optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (input) => jsonContent(await handlers.get_board_card(input)),
   );
 
   server.registerTool(
     "create_idea",
     {
       title: "Create Idea",
-      description: "Create a new idea for refinement.",
+      description:
+        "Create a task for refinement. The project accepts an id, key or title; omitting it uses the token's project.",
       inputSchema: {
         projectId: z.string().optional(),
         title: z.string().min(1),
@@ -107,6 +202,13 @@ export const createMcpServer = (
           ),
         repositoryLocalPath: z.string().optional(),
         repositoryRemoteUrl: z.string().optional(),
+        assignee: z
+          .string()
+          .optional()
+          .describe(
+            "Free text naming who holds the task, such as Claude::Subagent101::Worktree12. Empty string releases it.",
+          ),
+        view: z.enum(viewLevels).optional(),
       },
     },
     async (input) => jsonContent(await handlers.create_idea(input)),
@@ -117,7 +219,7 @@ export const createMcpServer = (
     {
       title: "Update Idea",
       description:
-        "Edit an existing idea's fields. Only provided fields change; omitted fields are left as-is.",
+        "Edit one task. Accepts an id, a key such as VP-236, or a bare task number when the token covers one project. Only provided fields change. Setting status to ready puts the task on the board; onBoard false removes its card. Pass readiness to record a score in the same write, and expectedUpdatedAt to refuse the write if the task changed since you read it. To claim a task safely, write assignee with the expectedUpdatedAt you read, so a competing claim is refused rather than overwritten. Echoes a compact record unless view says otherwise.",
       inputSchema: {
         id: z.string().min(1),
         title: z.string().min(1).optional(),
@@ -131,10 +233,76 @@ export const createMcpServer = (
           .describe("Replaces the full set of blocking task ids when given."),
         repositoryLocalPath: z.string().optional(),
         repositoryRemoteUrl: z.string().optional(),
+        assignee: z
+          .string()
+          .optional()
+          .describe(
+            "Free text naming who holds the task, such as Claude::Subagent101::Worktree12. Empty string releases it.",
+          ),
         status: z.enum(ideaStatuses).optional(),
+        onBoard: z
+          .boolean()
+          .optional()
+          .describe(
+            "True puts the task on the Kanban board, false removes its card.",
+          ),
+        readiness: z
+          .object({
+            score: z.number().int().min(1).max(10),
+            reason: z.string().min(1),
+          })
+          .optional()
+          .describe("Records a readiness score in the same write."),
+        view: z.enum(viewLevels).optional(),
+        expectedUpdatedAt: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Refuse the write if the record changed since this updatedAt.",
+          ),
       },
+      annotations: { idempotentHint: true },
     },
     async (input) => jsonContent(await handlers.update_idea(input)),
+  );
+
+  server.registerTool(
+    "update_ideas",
+    {
+      title: "Update Tasks",
+      description:
+        "Apply up to 50 task writes in one transaction. Each item is an update_idea input including its own optional expectedUpdatedAt. All-or-nothing: one failing item rolls the whole batch back and names its position. Returns bare references unless view says otherwise.",
+      inputSchema: {
+        items: z.array(z.record(z.string(), z.unknown())),
+        view: z.enum(viewLevels).optional(),
+      },
+    },
+    async (input) =>
+      jsonContent(
+        await handlers.update_ideas(
+          input as unknown as { items: never[]; view?: never },
+        ),
+      ),
+  );
+
+  server.registerTool(
+    "update_board_cards",
+    {
+      title: "Update Board Cards",
+      description:
+        "Apply up to 50 card writes in one transaction, moving and editing in the same call. All-or-nothing, same as update_ideas.",
+      inputSchema: {
+        items: z.array(z.record(z.string(), z.unknown())),
+        view: z.enum(viewLevels).optional(),
+      },
+    },
+    async (input) =>
+      jsonContent(
+        await handlers.update_board_cards(
+          input as unknown as { items: never[]; view?: never },
+        ),
+      ),
   );
 
   server.registerTool(
@@ -146,6 +314,7 @@ export const createMcpServer = (
       inputSchema: {
         id: z.string().min(1).describe("Task that is blocked."),
         dependsOnId: z.string().min(1).describe("Task that must finish first."),
+        view: z.enum(viewLevels).optional(),
       },
     },
     async (input) => jsonContent(await handlers.add_idea_dependency(input)),
@@ -159,6 +328,7 @@ export const createMcpServer = (
       inputSchema: {
         id: z.string().min(1),
         dependsOnId: z.string().min(1),
+        view: z.enum(viewLevels).optional(),
       },
     },
     async (input) => jsonContent(await handlers.remove_idea_dependency(input)),
@@ -173,6 +343,7 @@ export const createMcpServer = (
       inputSchema: {
         id: z.string().min(1),
         dependsOnIds: z.array(z.string()),
+        view: z.enum(viewLevels).optional(),
       },
     },
     async (input) => jsonContent(await handlers.set_idea_dependencies(input)),
@@ -187,48 +358,73 @@ export const createMcpServer = (
       inputSchema: {
         projectId: z.string().optional(),
       },
+      annotations: { readOnlyHint: true },
     },
-    async ({ projectId }) =>
-      jsonContent(await handlers.list_work_order({ projectId })),
+    async (input) => jsonContent(await handlers.list_work_order(input)),
   );
 
   server.registerTool(
     "mark_idea_ready",
     {
       title: "Mark Idea Ready",
-      description: "Mark an idea as ready and available on the Kanban board.",
+      description:
+        "Mark a task ready and put it on the Kanban board. Accepts an id or a key such as VP-236, and an optional readiness score recorded in the same write.",
       inputSchema: {
         id: z.string().min(1),
+        readiness: z
+          .object({
+            score: z.number().int().min(1).max(10),
+            reason: z.string().min(1),
+          })
+          .optional(),
+        view: z.enum(viewLevels).optional(),
       },
+      annotations: { destructiveHint: true },
     },
-    async ({ id }) => jsonContent(await handlers.mark_idea_ready({ id })),
+    async (input) => jsonContent(await handlers.mark_idea_ready(input)),
   );
 
   server.registerTool(
     "list_board",
     {
       title: "List Board",
-      description: "Read the Kanban board columns.",
+      description:
+        "Read the Kanban board columns. Accepts a project id, key or title, and filters by column, assignee or modification time.",
       inputSchema: {
         projectId: z.string().optional(),
+        column: z.array(z.enum(boardColumns)).optional(),
+        updatedSince: z.string().min(1).optional(),
+        assignee: z
+          .array(z.string().min(1))
+          .optional()
+          .describe("Holders to match exactly, such as Claude::Subagent101."),
+        unassigned: z
+          .boolean()
+          .optional()
+          .describe(
+            "True also returns tasks nobody holds; with assignee the two widen each other.",
+          ),
+        view: z.enum(viewLevels).optional(),
       },
+      annotations: { readOnlyHint: true },
     },
-    async ({ projectId }) =>
-      jsonContent(await handlers.list_board({ projectId })),
+    async (input) => jsonContent(await handlers.list_board(input)),
   );
 
   server.registerTool(
     "move_board_card",
     {
       title: "Move Board Card",
-      description: "Move a board card to another Kanban column.",
+      description:
+        "Deprecated: use update_board_card, which moves and edits in one call. Move a board card to another Kanban column.",
       inputSchema: {
         id: z.string().min(1),
         column: z.enum(boardColumns),
+        view: z.enum(viewLevels).optional(),
       },
+      annotations: { idempotentHint: true },
     },
-    async ({ id, column }) =>
-      jsonContent(await handlers.move_board_card({ id, column })),
+    async (input) => jsonContent(await handlers.move_board_card(input)),
   );
 
   server.registerTool(
@@ -236,7 +432,7 @@ export const createMcpServer = (
     {
       title: "Update Board Card",
       description:
-        "Edit board-card metadata such as implementation branch and repository. Only provided fields change.",
+        "Edit one board card, moving and editing in the same call. Accepts a card id or the key of its task such as VP-236. Only provided fields change. Pass expectedUpdatedAt to refuse a stale write. Echoes a compact record unless view says otherwise.",
       inputSchema: {
         id: z.string().min(1),
         column: z.enum(boardColumns).optional(),
@@ -244,7 +440,22 @@ export const createMcpServer = (
         details: z.string().optional(),
         repositoryLocalPath: z.string().optional(),
         repositoryRemoteUrl: z.string().optional(),
+        assignee: z
+          .string()
+          .optional()
+          .describe(
+            "Free text naming who holds the task, such as Claude::Subagent101::Worktree12. Empty string releases it.",
+          ),
+        view: z.enum(viewLevels).optional(),
+        expectedUpdatedAt: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Refuse the write if the record changed since this updatedAt.",
+          ),
       },
+      annotations: { idempotentHint: true },
     },
     async (input) => jsonContent(await handlers.update_board_card(input)),
   );
@@ -259,7 +470,9 @@ export const createMcpServer = (
         id: z.string().min(1),
         score: z.number().int().min(1).max(10),
         reason: z.string().min(1),
+        view: z.enum(viewLevels).optional(),
       },
+      annotations: { idempotentHint: true },
     },
     async (input) => jsonContent(await handlers.set_card_readiness(input)),
   );
@@ -274,7 +487,9 @@ export const createMcpServer = (
         id: z.string().min(1),
         score: z.number().int().min(1).max(10),
         reason: z.string().min(1),
+        view: z.enum(viewLevels).optional(),
       },
+      annotations: { idempotentHint: true },
     },
     async (input) => jsonContent(await handlers.set_idea_readiness(input)),
   );
@@ -288,8 +503,25 @@ export const createMcpServer = (
       inputSchema: {
         id: z.string().min(1),
       },
+      annotations: { readOnlyHint: true },
     },
-    async ({ id }) => jsonContent(await handlers.list_idea_readiness({ id })),
+    async (input) => jsonContent(await handlers.list_idea_readiness(input)),
+  );
+
+  server.registerTool(
+    "list_readiness",
+    {
+      title: "List Readiness",
+      description:
+        "Latest readiness score per task for a whole project, or for named tasks. Accepts project keys and task keys such as VP-236. Set latestOnly to false for the full history.",
+      inputSchema: {
+        project: z.string().min(1).optional(),
+        tasks: z.array(z.string().min(1)).optional(),
+        latestOnly: z.boolean().optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (input) => jsonContent(await handlers.list_readiness(input)),
   );
 
   server.registerTool(
@@ -331,13 +563,17 @@ export const createMcpServer = (
     "list_documents",
     {
       title: "List Documents",
-      description: "List execution plans and other planning documents.",
+      description:
+        "List execution plans and other planning documents. Accepts a project id, key or title, and filters by kind or by modification time.",
       inputSchema: {
         projectId: z.string().optional(),
+        kind: z.array(z.enum(documentKinds)).optional(),
+        updatedSince: z.string().min(1).optional(),
+        view: z.enum(viewLevels).optional(),
       },
+      annotations: { readOnlyHint: true },
     },
-    async ({ projectId }) =>
-      jsonContent(await handlers.list_documents({ projectId })),
+    async (input) => jsonContent(await handlers.list_documents(input)),
   );
 
   return server;

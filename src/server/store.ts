@@ -1,22 +1,29 @@
 import type { TaskWorkOrder } from "../shared/dependencies.js";
 import type {
   ApiTokenSummary,
+  BatchBoardCardUpdate,
+  BatchIdeaUpdate,
   BoardCard,
   BoardColumn,
   BoardColumns,
   BoardData,
+  BoardListFilter,
   CreateApiTokenInput,
   CreateBoardCardOptions,
   CreateDocumentInput,
   CreateIdeaInput,
   CreateProjectInput,
+  DocumentListFilter,
   Idea,
+  IdeaListFilter,
   ImportProjectOptions,
   ImportProjectResult,
+  MarkIdeaReadyOptions,
   PlanDocument,
   Project,
   ProjectBundle,
   ReadinessEvent,
+  ReadinessListFilter,
   SetCardReadinessInput,
   UpdateApiTokenInput,
   UpdateBoardCardInput,
@@ -58,7 +65,29 @@ export interface BoardDataStore {
   listProjects(access: AccessContext): Promise<Project[]>;
   createProject(input: CreateProjectInput): Promise<Project>;
   updateProject(id: string, input: UpdateProjectInput): Promise<Project>;
-  listIdeas(access: AccessContext, projectId?: string): Promise<Idea[]>;
+  listIdeas(
+    access: AccessContext,
+    filter?: string | IdeaListFilter,
+  ): Promise<Idea[]>;
+  getIdea(access: AccessContext, reference: string): Promise<Idea>;
+  listIdeasPage(
+    access: AccessContext,
+    filter?: IdeaListFilter,
+  ): Promise<{ items: Idea[]; nextCursor?: string }>;
+  listBoardCardsPage(
+    access: AccessContext,
+    filter?: BoardListFilter,
+  ): Promise<{ items: BoardCard[]; nextCursor?: string }>;
+  updateIdeas(access: AccessContext, items: BatchIdeaUpdate[]): Promise<Idea[]>;
+  updateBoardCards(
+    access: AccessContext,
+    items: BatchBoardCardUpdate[],
+  ): Promise<BoardCard[]>;
+  getTaskKeys(
+    access: AccessContext,
+    ideaIds: string[],
+  ): Promise<Map<string, string>>;
+  getBoardCard(access: AccessContext, reference: string): Promise<BoardCard>;
   createIdea(access: AccessContext, input: CreateIdeaInput): Promise<Idea>;
   updateIdea(
     access: AccessContext,
@@ -84,11 +113,16 @@ export interface BoardDataStore {
     access: AccessContext,
     projectId?: string,
   ): Promise<TaskWorkOrder>;
-  markIdeaReady(access: AccessContext, id: string): Promise<Idea>;
+  markIdeaReady(
+    access: AccessContext,
+    id: string,
+    options?: MarkIdeaReadyOptions,
+  ): Promise<Idea>;
   setIdeaBoardAvailability(
     access: AccessContext,
     id: string,
     available: boolean,
+    options?: MarkIdeaReadyOptions,
   ): Promise<Idea>;
   createBoardCardFromIdea(
     access: AccessContext,
@@ -97,11 +131,11 @@ export interface BoardDataStore {
   ): Promise<BoardCard>;
   listBoardCards(
     access: AccessContext,
-    projectId?: string,
+    filter?: string | BoardListFilter,
   ): Promise<BoardCard[]>;
   getBoardColumns(
     access: AccessContext,
-    projectId?: string,
+    filter?: string | BoardListFilter,
   ): Promise<BoardColumns>;
   updateBoardCard(
     access: AccessContext,
@@ -127,9 +161,13 @@ export interface BoardDataStore {
     access: AccessContext,
     id: string,
   ): Promise<ReadinessEvent[]>;
+  listReadiness(
+    access: AccessContext,
+    filter?: ReadinessListFilter,
+  ): Promise<ReadinessEvent[]>;
   listDocuments(
     access: AccessContext,
-    projectId?: string,
+    filter?: string | DocumentListFilter,
   ): Promise<PlanDocument[]>;
   createDocument(
     access: AccessContext,

@@ -162,7 +162,7 @@ describe("task dependencies", () => {
 
     await expect(
       store.addIdeaDependency(scoped, outside.tasks[0].id, tasks[0].id),
-    ).rejects.toThrow("Token is not allowed to access project");
+    ).rejects.toThrow(`Task not found: ${outside.tasks[0].id}`);
 
     const linked = await store.addIdeaDependency(
       scoped,
@@ -233,7 +233,10 @@ describe("task dependencies", () => {
       id: api.id,
       dependsOnId: schema.id,
     });
-    expect(linked.item.dependsOn).toEqual([schema.id]);
+    // A compact echo names dependencies by key, not by uuid.
+    expect((linked.item as { dependsOn: string[] }).dependsOn).toEqual([
+      `${project.key}-${schema.taskNumber}`,
+    ]);
 
     const workOrder = await handlers.list_work_order({
       projectId: project.id,
@@ -244,13 +247,13 @@ describe("task dependencies", () => {
       id: api.id,
       dependsOnIds: [],
     });
-    expect(replaced.item.dependsOn).toEqual([]);
+    expect((replaced.item as { dependsOn: string[] }).dependsOn).toEqual([]);
 
     await handlers.add_idea_dependency({ id: api.id, dependsOnId: schema.id });
     const removed = await handlers.remove_idea_dependency({
       id: api.id,
       dependsOnId: schema.id,
     });
-    expect(removed.item.dependsOn).toEqual([]);
+    expect((removed.item as { dependsOn: string[] }).dependsOn).toEqual([]);
   });
 });

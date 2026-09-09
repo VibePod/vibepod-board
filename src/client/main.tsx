@@ -55,6 +55,7 @@ import {
   Save,
   Sun,
   Upload,
+  UserRound,
 } from "lucide-react";
 import {
   type FormEvent,
@@ -1006,7 +1007,8 @@ const App = () => {
       JSON.stringify(draft.labels) !== JSON.stringify(baseline.labels) ||
       JSON.stringify(draft.dependsOn) !== JSON.stringify(baseline.dependsOn) ||
       draft.repositoryLocalPath !== baseline.repositoryLocalPath ||
-      draft.repositoryRemoteUrl !== baseline.repositoryRemoteUrl
+      draft.repositoryRemoteUrl !== baseline.repositoryRemoteUrl ||
+      draft.assignee !== baseline.assignee
     );
   };
 
@@ -1743,6 +1745,18 @@ const App = () => {
                             )}
                           </Group>
                           {labelBadges(taskCard.labels)}
+                          {idea.assignee && (
+                            <Badge
+                              className="task-card-assignee"
+                              leftSection={<UserRound size={12} aria-hidden />}
+                              variant="light"
+                              color="grape"
+                              size="sm"
+                              mt="xs"
+                            >
+                              {idea.assignee}
+                            </Badge>
+                          )}
                           {idea.readinessScore !== undefined && (
                             <Badge
                               variant="light"
@@ -1975,6 +1989,23 @@ const App = () => {
                                   {isCardReadinessStale(card, ideaById)
                                     ? " · stale"
                                     : ""}
+                                </Badge>
+                              </Group>
+                            )}
+                            {card.assignee && (
+                              <Group
+                                className="board-card-assignee"
+                                justify="flex-start"
+                              >
+                                <Badge
+                                  leftSection={
+                                    <UserRound size={12} aria-hidden />
+                                  }
+                                  variant="light"
+                                  color="grape"
+                                  size="sm"
+                                >
+                                  {card.assignee}
                                 </Badge>
                               </Group>
                             )}
@@ -2599,6 +2630,15 @@ const App = () => {
                     updateTaskDraft({ repositoryRemoteUrl: event.target.value })
                   }
                   placeholder="git@github.com:owner/repo.git"
+                />
+                <TextInput
+                  label="Assignee"
+                  description="Who holds this task; agents name themselves here."
+                  value={taskModal.draft.assignee}
+                  onChange={(event) =>
+                    updateTaskDraft({ assignee: event.target.value })
+                  }
+                  placeholder="Claude::Subagent101::Worktree12"
                 />
               </SimpleGrid>
               <MultiSelect

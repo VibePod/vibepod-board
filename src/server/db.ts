@@ -90,6 +90,11 @@ create index if not exists ideas_project_updated_idx on ideas(project_id, update
 create index if not exists board_cards_project_updated_idx on board_cards(project_id, updated_at desc);
 create index if not exists documents_project_updated_idx on documents(project_id, updated_at desc);
 create index if not exists activity_events_created_idx on activity_events(created_at desc);
+create index if not exists board_cards_idea_idx on board_cards(idea_id);
+create index if not exists ideas_project_status_updated_idx on ideas(project_id, status, updated_at desc);
+create index if not exists board_cards_project_column_updated_idx on board_cards(project_id, column_name, updated_at desc);
+create index if not exists ideas_project_updated_id_idx on ideas(project_id, updated_at desc, id desc);
+create index if not exists board_cards_project_updated_id_idx on board_cards(project_id, updated_at desc, id desc);
 
 alter table board_cards add column if not exists branch_name text;
 alter table ideas add column if not exists repository_local_path text;
@@ -102,6 +107,11 @@ alter table board_cards add column if not exists readiness_evaluated_at timestam
 alter table ideas add column if not exists readiness_score integer;
 alter table ideas add column if not exists readiness_reason text;
 alter table ideas add column if not exists readiness_evaluated_at timestamptz;
+alter table ideas add column if not exists assignee text;
+alter table board_cards add column if not exists assignee text;
+
+create index if not exists ideas_project_assignee_idx on ideas(project_id, assignee);
+create index if not exists board_cards_project_assignee_idx on board_cards(project_id, assignee);
 
 create table if not exists task_dependencies (
   idea_id text not null references ideas(id) on delete cascade,

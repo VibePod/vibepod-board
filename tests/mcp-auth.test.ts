@@ -97,9 +97,11 @@ describe("MCP auth", () => {
       labels: ["enhancement"],
     });
 
+    // A record outside the token's projects is reported as missing, not as
+    // forbidden, so scope cannot be probed by comparing the two answers.
     await expect(
       handlers.update_idea({ id: theirs.id, title: "Nope" }),
-    ).rejects.toThrow("Token is not allowed to access project");
+    ).rejects.toThrow(`Task not found: ${theirs.id}`);
   });
 
   it("updates board card branch names in mapped projects", async () => {
@@ -127,12 +129,14 @@ describe("MCP auth", () => {
       tokenAccess("token-1", [appProject.id]),
     );
 
+    // Write echoes are compact now; ask for the whole record to assert on it.
     const updated = await handlers.update_board_card({
       id: mineCard.id,
       branchName: "vp-task-create",
       details: "Implemented in vibepod-cli",
       repositoryLocalPath: "/workspace/vibepod-cli",
       repositoryRemoteUrl: "git@github.com:vibepod/vibepod-cli.git",
+      view: "full",
     });
     expect(updated.item).toMatchObject({
       id: mineCard.id,
@@ -147,7 +151,7 @@ describe("MCP auth", () => {
         id: theirCard.id,
         branchName: "vp-task-cancel",
       }),
-    ).rejects.toThrow("Token is not allowed to access project");
+    ).rejects.toThrow(`Board card not found: ${theirCard.id}`);
   });
 
   it("sets card readiness in mapped projects only", async () => {
@@ -179,6 +183,7 @@ describe("MCP auth", () => {
       id: mineCard.id,
       score: 3,
       reason: "No acceptance criteria, repository unset",
+      view: "full",
     });
     expect(scored.item).toMatchObject({
       id: mineCard.id,
@@ -188,6 +193,139 @@ describe("MCP auth", () => {
 
     await expect(
       handlers.set_card_readiness({ id: theirCard.id, score: 5, reason: "r" }),
-    ).rejects.toThrow("Token is not allowed to access project");
+    ).rejects.toThrow(`Board card not found: ${theirCard.id}`);
+  });
+
+  it("returns compact tasks from list_ideas by default and full on request", async () => {
+    const project = await store.createProject({ key: "VP", title: "VibePod" });
+    const task = await store.createIdea(adminAccess("admin"), {
+      projectId: project.id,
+      title: "Compact by default",
+      details: "x".repeat(2048),
+      acceptanceCriteria: ["One", "Two"],
+    });
+    const handlers = createMcpToolHandlers(
+      store,
+      tokenAccess("token-1", [project.id]),
+    );
+
+    const compact = await handlers.list_ideas({});
+    expect(compact.items[0]).toEqual({
+      id: task.id,
+      key: `VP-${task.taskNumber}`,
+      projectId: project.id,
+      taskNumber: task.taskNumber,
+      title: "Compact by default",
+      status: "idea",
+      labels: [],
+      dependsOn: [],
+      blockedBy: [],
+      detailsLength: 2048,
+      acceptanceCriteriaCount: 2,
+      updatedAt: expect.any(String),
+    });
+
+    const full = await handlers.list_ideas({ view: "full" });
+    expect((full.items[0] as { details: string }).details).toHaveLength(2048);
+
+    const one = await handlers.get_idea({ idea: `VP-${task.taskNumber}` });
+    expect((one.item as { details: string }).details).toHaveLength(2048);
+    expect((one.item as { key: string }).key).toBe(`VP-${task.taskNumber}`);
+  });
+
+  it("names a compact task's dependencies and column by key", async () => {
+    const project = await store.createProject({ key: "VP", title: "VibePod" });
+    const blocker = await store.createIdea(adminAccess("admin"), {
+      projectId: project.id,
+      title: "Blocker",
+    });
+    const waiting = await store.createIdea(adminAccess("admin"), {
+      projectId: project.id,
+      title: "Waiting",
+      dependsOn: [blocker.id],
+    });
+    await store.markIdeaReady(adminAccess("admin"), waiting.id);
+    const handlers = createMcpToolHandlers(
+      store,
+      tokenAccess("token-1", [project.id]),
+    );
+
+    const compact = await handlers.list_ideas({});
+    const item = compact.items.find(
+      (entry) => (entry as { id: string }).id === waiting.id,
+    ) as { dependsOn: string[]; blockedBy: string[]; column?: string };
+
+    expect(item.dependsOn).toEqual([`VP-${blocker.taskNumber}`]);
+    expect(item.blockedBy).toEqual([`VP-${blocker.taskNumber}`]);
+    expect(item.column).toBe("ready");
+  });
+
+  it("claims a task and finds held and free work through MCP", async () => {
+    const project = await store.createProject({ key: "VP", title: "VibePod" });
+    const holder = "Claude::Subagent101::Worktree12";
+    const handlers = createMcpToolHandlers(
+      store,
+      tokenAccess("token-1", [project.id]),
+    );
+    const mine = await handlers.create_idea({
+      title: "Mine",
+      assignee: holder,
+    });
+    await handlers.create_idea({ title: "Free" });
+
+    const held = await handlers.list_ideas({ assignee: [holder] });
+    expect(held.items).toEqual([
+      expect.objectContaining({ title: "Mine", assignee: holder }),
+    ]);
+
+    const free = await handlers.list_ideas({ unassigned: true });
+    expect(free.items).toEqual([expect.objectContaining({ title: "Free" })]);
+    expect("assignee" in (free.items[0] as object)).toBe(false);
+
+    const released = await handlers.update_idea({
+      id: (mine.item as { id: string }).id,
+      assignee: "",
+      view: "full",
+    });
+    expect((released.item as { assignee?: string }).assignee).toBeUndefined();
+  });
+
+  it("echoes a compact task from a write and a bare ref on request", async () => {
+    const project = await store.createProject({ key: "VP", title: "VibePod" });
+    const task = await store.createIdea(adminAccess("admin"), {
+      projectId: project.id,
+      title: "Echo",
+      details: "x".repeat(4096),
+    });
+    const handlers = createMcpToolHandlers(
+      store,
+      tokenAccess("token-1", [project.id]),
+    );
+
+    const compact = await handlers.update_idea({
+      id: `VP-${task.taskNumber}`,
+      summary: "Edited",
+    });
+    expect((compact.item as { details?: string }).details).toBeUndefined();
+    expect((compact.item as { key: string }).key).toBe(`VP-${task.taskNumber}`);
+    expect(JSON.stringify(compact).length).toBeLessThan(500);
+
+    const asRef = await handlers.update_idea({
+      id: `VP-${task.taskNumber}`,
+      summary: "Edited again",
+      view: "ref",
+    });
+    expect(asRef.item).toEqual({
+      id: task.id,
+      key: `VP-${task.taskNumber}`,
+      updatedAt: expect.any(String),
+    });
+
+    const full = await handlers.update_idea({
+      id: task.id,
+      summary: "Edited once more",
+      view: "full",
+    });
+    expect((full.item as { details: string }).details).toHaveLength(4096);
   });
 });

@@ -167,6 +167,43 @@ describe("task modal saving", () => {
     expect(postCalls(fetchMock)).toHaveLength(1);
   });
 
+  it("sends the assignee typed into the modal", async () => {
+    const ideas: unknown[] = [];
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input);
+        if (path === "/api/ideas" && init?.method === "POST") {
+          const created = { ...existingIdea, id: "idea-new", taskNumber: 2 };
+          ideas.push(created);
+          return jsonResponse({ item: created }, 201);
+        }
+        return (
+          stateResponse(path, ideas) ??
+          jsonResponse({ error: "Not found" }, 404)
+        );
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const AppShell = await loadAppShell();
+    render(<AppShell />);
+
+    const dialog = await openAddTask();
+    await userEvent.type(await screen.findByLabelText(/^Title/), "Claimed");
+    await userEvent.type(
+      await screen.findByLabelText(/^Assignee/),
+      "Claude::Subagent101::Worktree12",
+    );
+    await userEvent.click(
+      await within(dialog).findByRole("button", { name: "Save" }),
+    );
+
+    await waitFor(() => expect(postCalls(fetchMock)).toHaveLength(1));
+    const [, init] = postCalls(fetchMock)[0];
+    expect(JSON.parse(String((init as RequestInit).body))).toMatchObject({
+      assignee: "Claude::Subagent101::Worktree12",
+    });
+  });
+
   it("reports a failed save instead of rejecting silently", async () => {
     const ideas: unknown[] = [existingIdea];
     const fetchMock = vi.fn(

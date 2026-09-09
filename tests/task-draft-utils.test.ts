@@ -35,6 +35,7 @@ describe("task draft utilities", () => {
       dependsOn: [],
       repositoryLocalPath: "",
       repositoryRemoteUrl: "",
+      assignee: "",
       status: "idea",
     });
   });
@@ -75,6 +76,7 @@ describe("task draft utilities", () => {
         dependsOn: [],
         repositoryLocalPath: "/workspace/vibepod-board",
         repositoryRemoteUrl: "git@github.com:vibepod/vibepod-board.git",
+        assignee: "Claude::Subagent101::Worktree12",
         status: "ready",
       }),
     ).toEqual({
@@ -89,6 +91,15 @@ describe("task draft utilities", () => {
       dependsOn: [],
       repositoryLocalPath: "/workspace/vibepod-board",
       repositoryRemoteUrl: "git@github.com:vibepod/vibepod-board.git",
+      assignee: "Claude::Subagent101::Worktree12",
     });
+  });
+
+  it("reads the holder back into the draft and treats none as empty", () => {
+    expect(
+      taskToDraft(task({ assignee: "Claude::Subagent101::Worktree12" }))
+        .assignee,
+    ).toBe("Claude::Subagent101::Worktree12");
+    expect(taskToDraft(task()).assignee).toBe("");
   });
 });

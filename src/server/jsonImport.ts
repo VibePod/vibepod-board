@@ -117,10 +117,10 @@ export const importBoardJsonFile = async (
         `insert into ideas (
            id, project_id, task_number, title, summary, details, status, labels,
            acceptance_criteria, github_issue_url, github_issue_number, repository_local_path,
-           repository_remote_url, readiness_score, readiness_reason, readiness_evaluated_at,
-           created_at, updated_at
+           repository_remote_url, assignee, readiness_score, readiness_reason,
+           readiness_evaluated_at, created_at, updated_at
          )
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
         [
           idea.id,
           idea.projectId,
@@ -135,6 +135,7 @@ export const importBoardJsonFile = async (
           idea.githubIssueNumber ?? null,
           idea.repositoryLocalPath ?? null,
           idea.repositoryRemoteUrl ?? null,
+          idea.assignee ?? null,
           idea.readinessScore ?? null,
           idea.readinessReason ?? null,
           idea.readinessEvaluatedAt ?? null,
@@ -148,10 +149,10 @@ export const importBoardJsonFile = async (
       await client.query(
         `insert into board_cards (
            id, project_id, idea_id, title, details, column_name, branch_name, github_issue_url,
-           github_issue_number, repository_local_path, repository_remote_url, labels,
+           github_issue_number, repository_local_path, repository_remote_url, assignee, labels,
            readiness_score, readiness_reason, readiness_evaluated_at, created_at, updated_at
          )
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
         [
           card.id,
           card.projectId,
@@ -164,6 +165,7 @@ export const importBoardJsonFile = async (
           card.githubIssueNumber ?? null,
           card.repositoryLocalPath ?? null,
           card.repositoryRemoteUrl ?? null,
+          card.assignee ?? null,
           JSON.stringify(card.labels),
           card.readinessScore ?? null,
           card.readinessReason ?? null,

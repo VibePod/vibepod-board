@@ -12,6 +12,7 @@ export type TaskDraft = {
   dependsOn: string[];
   repositoryLocalPath: string;
   repositoryRemoteUrl: string;
+  assignee: string;
   status: IdeaStatus;
 };
 
@@ -23,6 +24,7 @@ export const emptyTaskDraft = (): TaskDraft => ({
   dependsOn: [],
   repositoryLocalPath: "",
   repositoryRemoteUrl: "",
+  assignee: "",
   status: "idea",
 });
 
@@ -38,6 +40,7 @@ export const taskToDraft = (idea: Idea, projectKey?: string): TaskDraft => ({
   dependsOn: [...idea.dependsOn],
   repositoryLocalPath: idea.repositoryLocalPath ?? "",
   repositoryRemoteUrl: idea.repositoryRemoteUrl ?? "",
+  assignee: idea.assignee ?? "",
   status: idea.status,
 });
 
@@ -50,4 +53,5 @@ export const taskDraftToIdeaPayload = (draft: TaskDraft) => ({
   dependsOn: [...draft.dependsOn],
   repositoryLocalPath: draft.repositoryLocalPath,
   repositoryRemoteUrl: draft.repositoryRemoteUrl,
+  assignee: draft.assignee,
 });

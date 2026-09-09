@@ -104,8 +104,11 @@ Tools:
 - `list_projects`
 - `create_project`
 - `list_ideas`
+- `get_idea`
+- `get_board_card`
 - `create_idea`
 - `update_idea`
+- `update_ideas`
 - `mark_idea_ready`
 - `add_idea_dependency`
 - `remove_idea_dependency`
@@ -113,6 +116,12 @@ Tools:
 - `list_work_order`
 - `list_board`
 - `move_board_card`
+- `update_board_card`
+- `update_board_cards`
+- `set_card_readiness`
+- `set_idea_readiness`
+- `list_idea_readiness`
+- `list_readiness`
 - `create_document`
 - `update_document`
 - `list_documents`
@@ -121,11 +130,82 @@ Resource:
 
 - `vibepod-board://state`
 
+### References
+
+Every identifier argument accepts, in this order:
+
+1. the record's id;
+2. a task key such as `VP-236`, or a project key such as `VP` (case-insensitive);
+3. a bare task number such as `236`, when exactly one project is in scope.
+
+A project also resolves by its exact title. `dependsOn` arguments resolve the
+same way. A reference that matches nothing returns `404`; one that matches more
+than one project returns `400` and names the candidates. A record outside the
+caller's projects is reported as not found rather than forbidden, so scope
+cannot be probed by comparing the two answers.
+
+### Views
+
+Reads and writes accept `view`, one of:
+
+- `ref` — `id`, `key` and `updatedAt`;
+- `compact` — identity, state and relationships, with dependencies named by key
+  and `detailsLength` / `acceptanceCriteriaCount` in place of the free text;
+- `full` — the whole record.
+
+MCP lists default to `compact` and MCP writes echo `compact`; single reads
+default to `full`. REST defaults to `full` everywhere, so the browser is
+unaffected, and accepts `?view=compact`.
+
+### Filters and paging
+
+`list_ideas`, `list_board` and `list_documents` filter by project, by
+`status` / `column` / `kind`, by `assignee` / `unassigned`, and by
+`updatedSince` (exclusive ISO timestamp).
+Lists accept `limit` and `cursor` and return `nextCursor` when more rows remain;
+paging is keyset over `(updatedAt, id)`. MCP lists cap at 200 records by
+default, REST is unlimited unless a limit is given.
+
+### Assignees
+
+Tasks and board cards carry an `assignee`: free text naming whoever holds the
+work, by convention an agent naming itself, such as
+`Claude::Subagent101::Worktree12`. No format is enforced, and an empty string
+releases the task.
+
+- Write it with `POST /api/ideas`, `PATCH /api/ideas/:id`, `PATCH /api/board/:id`
+  or the `create_idea`, `update_idea` and `update_board_card` MCP tools.
+- The task owns the holder and its card mirrors it. A claim made on the card
+  writes through to the task, so a later task edit cannot sync it away.
+- Filter with `assignee` (exact match, repeat or comma-separate for several) and
+  `unassigned`. Given together they widen rather than narrow: the result is work
+  held by one of those holders *or* held by nobody, which is the question an
+  agent looking for something to pick up asks.
+- To claim without racing another agent, read the task and write `assignee`
+  with the `expectedUpdatedAt` you read; a competing claim is then refused
+  rather than overwritten.
+
+### Batch writes
+
+`update_ideas` and `update_board_cards` (REST: `POST /api/ideas/batch`,
+`POST /api/board/batch`) apply up to 50 writes in one transaction. A batch is
+all-or-nothing: the first failing item rolls the whole batch back and names its
+position and reference. One activity row is written per batch.
+
+### Concurrency
+
+Task and card writes accept `expectedUpdatedAt`. When set, the write is refused
+if the record changed since that timestamp, and the error names the current one
+so a caller can retry in one step (REST: `409`). Readiness writes deliberately
+do not move `updatedAt`, because the staleness badge compares content time
+against evaluation time; dependency writes do.
+
+
 ## Task Dependencies
 
 A task can depend on other tasks in the same project. Dependencies drive the execution order that agents and the UI consume.
 
-- Set them with `POST /api/ideas`/`PATCH /api/ideas/:id` (`dependsOn` replaces the full set), with the dedicated `dependencies` endpoints, or with the `*_idea_dependency` MCP tools.
+- Set them with `POST /api/ideas`/`PATCH /api/ideas/:id` (`dependsOn` replaces the full set), with the dedicated `dependencies` endpoints, or with the `*_idea_dependency` MCP tools. Blockers may be named by key, such as `VP-236`.
 - Every task carries `dependsOn` (its blockers), `blocks` (tasks waiting on it), and `blockedBy` (blockers that are not finished yet). Board cards mirror `dependsOn` and `blockedBy` from their task.
 - A blocker counts as finished when its board card reached the `done` column, or when the task was denied — denied work never arrives and must not wedge the graph.
 - Dependencies must stay inside one project, and cycles are rejected (`409`).

@@ -7,22 +7,31 @@ import express, {
   type RequestHandler,
 } from "express";
 import { z } from "zod";
-
 import { projectBundleSchema } from "../shared/projectBundle.js";
-import { boardColumns, documentKinds, ideaStatuses } from "../shared/types.js";
+import { type ViewLevel, viewLevels } from "../shared/projections.js";
+import {
+  type BoardColumn,
+  batchLimit,
+  boardColumns,
+  type DocumentKind,
+  documentKinds,
+  type IdeaStatus,
+  ideaStatuses,
+} from "../shared/types.js";
 import {
   type AdminSessionManager,
   parseBearerToken,
   sessionFromRequest,
   setSessionCookie,
 } from "./auth.js";
-import { createMcpRouter } from "./mcp.js";
+import { createMcpRouter, mcpToolNames } from "./mcp.js";
 import {
   type AccessContext,
   adminAccess,
   type BoardDataStore,
   tokenAccess,
 } from "./store.js";
+import { projectBoardCards, projectIdeas } from "./views.js";
 
 type CreateAppOptions = {
   store: BoardDataStore;
@@ -50,12 +59,18 @@ const ideaSchema = z.object({
   dependsOn: z.array(z.string()).optional().default([]),
   repositoryLocalPath: z.string().optional(),
   repositoryRemoteUrl: z.string().optional(),
+  assignee: z.string().optional(),
 });
 
 const ideaStatusSchema = z.preprocess(
   (value) => (value === "dennied" ? "denied" : value),
   z.enum(ideaStatuses),
 );
+
+const readinessSchema = z.object({
+  score: z.number().int().min(1).max(10),
+  reason: z.string().trim().min(1),
+});
 
 const updateIdeaSchema = z.object({
   title: z.string().trim().min(1).optional(),
@@ -66,7 +81,11 @@ const updateIdeaSchema = z.object({
   dependsOn: z.array(z.string()).optional(),
   repositoryLocalPath: z.string().optional(),
   repositoryRemoteUrl: z.string().optional(),
+  assignee: z.string().optional(),
   status: ideaStatusSchema.optional(),
+  onBoard: z.boolean().optional(),
+  readiness: readinessSchema.optional(),
+  expectedUpdatedAt: z.string().min(1).optional(),
 });
 
 const dependencySchema = z.object({
@@ -79,6 +98,7 @@ const dependencyListSchema = z.object({
 
 const readySchema = z.object({
   available: z.boolean().optional().default(true),
+  readiness: readinessSchema.optional(),
 });
 
 const updateBoardCardSchema = z.object({
@@ -87,11 +107,20 @@ const updateBoardCardSchema = z.object({
   details: z.string().optional(),
   repositoryLocalPath: z.string().optional(),
   repositoryRemoteUrl: z.string().optional(),
+  assignee: z.string().optional(),
+  expectedUpdatedAt: z.string().min(1).optional(),
 });
 
-const readinessSchema = z.object({
-  score: z.number().int().min(1).max(10),
-  reason: z.string().trim().min(1),
+const batchIdeaSchema = z.object({
+  items: z
+    .array(updateIdeaSchema.extend({ id: z.string().trim().min(1) }))
+    .max(batchLimit),
+});
+
+const batchBoardCardSchema = z.object({
+  items: z
+    .array(updateBoardCardSchema.extend({ id: z.string().trim().min(1) }))
+    .max(batchLimit),
 });
 
 const projectKeySchema = z
@@ -194,22 +223,7 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
       endpoint: "/mcp",
       transport: "streamable-http",
       auth: "bearer",
-      tools: [
-        "list_projects",
-        "create_project",
-        "list_ideas",
-        "create_idea",
-        "mark_idea_ready",
-        "add_idea_dependency",
-        "remove_idea_dependency",
-        "set_idea_dependencies",
-        "list_work_order",
-        "list_board",
-        "move_board_card",
-        "update_board_card",
-        "create_document",
-        "list_documents",
-      ],
+      tools: [...mcpToolNames],
       resources: ["vibepod-board://state"],
     });
   });
@@ -271,11 +285,24 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
     "/api/ideas",
     requireAccess(store, sessions),
     asyncHandler(async (req, res) => {
+      const access = accessFromResponse(req);
+      const page = await store.listIdeasPage(access, {
+        projectId: queryParam(req.query.projectId),
+        status: listParam(req.query.status) as IdeaStatus[] | undefined,
+        updatedSince: queryParam(req.query.updatedSince),
+        assignee: listParam(req.query.assignee),
+        unassigned: booleanParam(req.query.unassigned),
+        limit: numberParam(req.query.limit),
+        cursor: queryParam(req.query.cursor),
+      });
       res.json({
-        items: await store.listIdeas(
-          accessFromResponse(req),
-          queryParam(req.query.projectId),
+        items: await projectIdeas(
+          store,
+          access,
+          page.items,
+          viewParam(req.query.view),
         ),
+        ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
       });
     }),
   );
@@ -289,6 +316,47 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
         ideaSchema.parse(req.body),
       );
       res.status(201).json({ item });
+    }),
+  );
+
+  app.get(
+    "/api/ideas/:id",
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      const item = await store.getIdea(
+        accessFromResponse(req),
+        routeParam(req.params.id),
+      );
+      res.json({ item });
+    }),
+  );
+
+  app.get(
+    "/api/board/:id",
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      const item = await store.getBoardCard(
+        accessFromResponse(req),
+        routeParam(req.params.id),
+      );
+      res.json({ item });
+    }),
+  );
+
+  app.post(
+    "/api/ideas/batch",
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      const { items } = batchIdeaSchema.parse(req.body);
+      const written = await store.updateIdeas(accessFromResponse(req), items);
+      res.json({
+        items: await projectIdeas(
+          store,
+          accessFromResponse(req),
+          written,
+          viewParam(req.query.view),
+        ),
+      });
     }),
   );
 
@@ -309,11 +377,12 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
     "/api/ideas/:id/ready",
     requireAccess(store, sessions),
     asyncHandler(async (req, res) => {
-      const { available } = readySchema.parse(req.body ?? {});
+      const { available, readiness } = readySchema.parse(req.body ?? {});
       const item = await store.setIdeaBoardAvailability(
         accessFromResponse(req),
         routeParam(req.params.id),
         available,
+        { readiness },
       );
       res.json({ item });
     }),
@@ -389,9 +458,32 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
     requireAccess(store, sessions),
     asyncHandler(async (req, res) => {
       res.json({
-        columns: await store.getBoardColumns(
+        columns: await store.getBoardColumns(accessFromResponse(req), {
+          projectId: queryParam(req.query.projectId),
+          column: listParam(req.query.column) as BoardColumn[] | undefined,
+          updatedSince: queryParam(req.query.updatedSince),
+          assignee: listParam(req.query.assignee),
+          unassigned: booleanParam(req.query.unassigned),
+        }),
+      });
+    }),
+  );
+
+  app.post(
+    "/api/board/batch",
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      const { items } = batchBoardCardSchema.parse(req.body);
+      const written = await store.updateBoardCards(
+        accessFromResponse(req),
+        items,
+      );
+      res.json({
+        items: await projectBoardCards(
+          store,
           accessFromResponse(req),
-          queryParam(req.query.projectId),
+          written,
+          viewParam(req.query.view),
         ),
       });
     }),
@@ -452,14 +544,31 @@ export const createApp = ({ store, sessions, publicDir }: CreateAppOptions) => {
   );
 
   app.get(
+    "/api/readiness",
+    requireAccess(store, sessions),
+    asyncHandler(async (req, res) => {
+      const tasks = queryParam(req.query.tasks);
+      const items = await store.listReadiness(accessFromResponse(req), {
+        projectId: queryParam(req.query.projectId),
+        tasks: tasks
+          ? tasks.split(",").map((entry) => entry.trim())
+          : undefined,
+        latestOnly: queryParam(req.query.latestOnly) !== "false",
+      });
+      res.json({ items });
+    }),
+  );
+
+  app.get(
     "/api/documents",
     requireAccess(store, sessions),
     asyncHandler(async (req, res) => {
       res.json({
-        items: await store.listDocuments(
-          accessFromResponse(req),
-          queryParam(req.query.projectId),
-        ),
+        items: await store.listDocuments(accessFromResponse(req), {
+          projectId: queryParam(req.query.projectId),
+          kind: listParam(req.query.kind) as DocumentKind[] | undefined,
+          updatedSince: queryParam(req.query.updatedSince),
+        }),
       });
     }),
   );
@@ -631,6 +740,14 @@ const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
       .json({ error: "Validation failed", details: error.flatten() });
     return;
   }
+  if (message.includes("changed since")) {
+    res.status(409).json({ error: message });
+    return;
+  }
+  if (message.startsWith("Ambiguous")) {
+    res.status(400).json({ error: message });
+    return;
+  }
   if (message.includes("not found")) {
     res.status(404).json({ error: message });
     return;
@@ -671,6 +788,35 @@ const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
 
 const routeParam = (value: string | string[]): string =>
   Array.isArray(value) ? value[0] : value;
+
+const numberParam = (value: unknown): number | undefined => {
+  const raw = queryParam(value);
+  const parsed = raw ? Number(raw) : Number.NaN;
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+};
+
+const booleanParam = (value: unknown): boolean | undefined =>
+  queryParam(value) === "true" ? true : undefined;
+
+const listParam = (value: unknown): string[] | undefined => {
+  const raw = queryParam(value);
+  if (!raw) {
+    return undefined;
+  }
+  const entries = raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return entries.length > 0 ? entries : undefined;
+};
+
+/** REST keeps returning full records unless a caller opts into a smaller view. */
+const viewParam = (value: unknown): ViewLevel => {
+  const raw = queryParam(value);
+  return raw && (viewLevels as readonly string[]).includes(raw)
+    ? (raw as ViewLevel)
+    : "full";
+};
 
 const queryParam = (value: unknown): string | undefined => {
   if (Array.isArray(value)) {
