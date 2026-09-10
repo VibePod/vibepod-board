@@ -184,6 +184,10 @@ releases the task.
 - To claim without racing another agent, read the task and write `assignee`
   with the `expectedUpdatedAt` you read; a competing claim is then refused
   rather than overwritten.
+- The web UI carries the holder as a badge on both the task list card and the
+  board card, and an **Assignee** filter above the task list and on the board
+  narrows either view to one holder or to unclaimed work. The filter offers only
+  the holders present in the project, and one choice serves both views.
 
 ### Batch writes
 

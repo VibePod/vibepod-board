@@ -121,6 +121,13 @@ const loadAppShell = async () => {
   return module.AppShell;
 };
 
+// The holder also appears in the assignee filter's option list, so read the
+// badge itself rather than any text matching the name.
+const badgeText = (selector: string) =>
+  Array.from(document.querySelectorAll(selector)).map(
+    (badge) => badge.textContent,
+  );
+
 describe("assignee badge", () => {
   it("names the holder on the task list card", async () => {
     window.history.replaceState(null, "", "/projects/project-1/tasks");
@@ -128,8 +135,9 @@ describe("assignee badge", () => {
     const AppShell = await loadAppShell();
 
     render(<AppShell />);
+    await screen.findByText("Held task");
 
-    expect(await screen.findByText(holder)).toBeDefined();
+    expect(badgeText(".task-card-assignee")).toEqual([holder]);
   });
 
   it("names the holder on the board card without opening it", async () => {
@@ -138,8 +146,9 @@ describe("assignee badge", () => {
     const AppShell = await loadAppShell();
 
     render(<AppShell />);
+    await screen.findByText("Held task");
 
-    expect(await screen.findByText(holder)).toBeDefined();
+    expect(badgeText(".board-card-assignee")).toEqual([holder]);
   });
 
   it("shows no holder badge on unclaimed work", async () => {
@@ -150,6 +159,6 @@ describe("assignee badge", () => {
     render(<AppShell />);
 
     expect(await screen.findByText("Held task")).toBeDefined();
-    expect(screen.queryByText(holder)).toBeNull();
+    expect(badgeText(".board-card-assignee")).toEqual([]);
   });
 });

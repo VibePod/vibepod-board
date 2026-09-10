@@ -1,4 +1,5 @@
 import type { Idea, IdeaStatus } from "../shared/types.js";
+import { matchesAssigneeFilter } from "./assigneeFilterUtils.js";
 
 export const taskSortOptions = [
   "created_desc",
@@ -15,6 +16,8 @@ export type TaskListFilters = {
   sort?: TaskSortOption;
   status?: IdeaStatus | "";
   label?: string;
+  /** A holder's name, `unassignedFilterValue` for free work, or "" for all. */
+  assignee?: string;
   search?: string;
   /** Task id to work-order position, used by the dependency_asc sort. */
   workOrder?: Map<string, number>;
@@ -27,6 +30,7 @@ export const filterAndSortTasks = (
   const search = filters.search?.trim().toLocaleLowerCase() ?? "";
   const label = filters.label?.trim() ?? "";
   const status = filters.status ?? "";
+  const assignee = filters.assignee ?? "";
   const sort = filters.sort ?? "created_desc";
 
   return tasks
@@ -35,6 +39,9 @@ export const filterAndSortTasks = (
         return false;
       }
       if (label && !task.labels.includes(label)) {
+        return false;
+      }
+      if (!matchesAssigneeFilter(task.assignee, assignee)) {
         return false;
       }
       if (!search) {

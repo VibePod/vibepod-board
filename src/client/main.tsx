@@ -93,6 +93,11 @@ import {
 } from "../shared/types.js";
 import vibepodIconUrl from "./assets/icon.png";
 import {
+  assigneeFilterOptions,
+  filterColumnsByAssignee,
+  resolveAssigneeFilter,
+} from "./assigneeFilterUtils.js";
+import {
   navigationForProjectSelection,
   projectSelectorOptions,
   shouldShowProjectSidebar,
@@ -359,6 +364,9 @@ const App = () => {
   const [taskSort, setTaskSort] = useState<TaskSortOption>("created_desc");
   const [taskStatusFilter, setTaskStatusFilter] = useState<IdeaStatus | "">("");
   const [taskLabelFilter, setTaskLabelFilter] = useState("");
+  // One holder lens for both views: picking a holder on the board and switching
+  // to the task list keeps answering the same question, "what is theirs?".
+  const [assigneeFilter, setAssigneeFilter] = useState("");
   const [taskSearch, setTaskSearch] = useState("");
   const [draggingCardId, setDraggingCardId] = useState("");
   const [dragOverColumn, setDragOverColumn] = useState<BoardColumn | null>(
@@ -662,6 +670,15 @@ const App = () => {
       )
       .map((card) => [card.ideaId, card.column]),
   );
+  const assigneeOptions = assigneeFilterOptions(projectIdeas, projectCards);
+  const activeAssigneeFilter = resolveAssigneeFilter(
+    assigneeFilter,
+    assigneeOptions,
+  );
+  const visibleProjectColumns = filterColumnsByAssignee(
+    projectColumns,
+    activeAssigneeFilter,
+  );
   const projectWorkOrder = selectedProject
     ? buildWorkOrder(
         projectIdeas,
@@ -692,6 +709,7 @@ const App = () => {
     sort: taskSort,
     status: taskStatusFilter,
     label: taskLabelFilter,
+    assignee: activeAssigneeFilter,
     search: taskSearch,
     workOrder: workOrderPositions,
   });
@@ -1612,7 +1630,7 @@ const App = () => {
                   aria-label="Task view mode"
                 />
               </Group>
-              <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm">
+              <SimpleGrid cols={{ base: 1, sm: 2, lg: 5 }} spacing="sm">
                 <TextInput
                   label="Search"
                   placeholder="Search title, details, labels"
@@ -1659,6 +1677,13 @@ const App = () => {
                       label,
                     })),
                   ]}
+                />
+                <Select
+                  className="task-assignee-filter"
+                  label="Assignee"
+                  value={activeAssigneeFilter}
+                  onChange={(value) => setAssigneeFilter(value ?? "")}
+                  data={assigneeOptions}
                 />
               </SimpleGrid>
             </Paper>
@@ -1833,9 +1858,21 @@ const App = () => {
                     Kanban board
                   </Text>
                 </Box>
-                <Badge variant="light" color="blue">
-                  {countCards(projectColumns)} cards
-                </Badge>
+                <Group align="flex-end" gap="sm" wrap="nowrap">
+                  <Select
+                    className="board-assignee-filter"
+                    label="Assignee"
+                    size="sm"
+                    value={activeAssigneeFilter}
+                    onChange={(value) => setAssigneeFilter(value ?? "")}
+                    data={assigneeOptions}
+                  />
+                  <Badge variant="light" color="blue">
+                    {activeAssigneeFilter
+                      ? `${countCards(visibleProjectColumns)} of ${countCards(projectColumns)} cards`
+                      : `${countCards(projectColumns)} cards`}
+                  </Badge>
+                </Group>
               </Group>
             </Paper>
             <div className="board">
@@ -1871,11 +1908,11 @@ const App = () => {
                       {columnLabels[column]}
                     </Title>
                     <Badge variant="light" color="gray">
-                      {projectColumns[column]?.length ?? 0}
+                      {visibleProjectColumns[column]?.length ?? 0}
                     </Badge>
                   </Group>
                   <Stack className="column-card-list" gap="xs" p="sm">
-                    {(projectColumns[column] ?? []).map((card) => {
+                    {(visibleProjectColumns[column] ?? []).map((card) => {
                       const linkedIdea = state.ideas.find(
                         (idea) => idea.id === card.ideaId,
                       );

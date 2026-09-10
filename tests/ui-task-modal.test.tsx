@@ -190,7 +190,7 @@ describe("task modal saving", () => {
     const dialog = await openAddTask();
     await userEvent.type(await screen.findByLabelText(/^Title/), "Claimed");
     await userEvent.type(
-      await screen.findByLabelText(/^Assignee/),
+      await within(dialog).findByLabelText(/^Assignee/),
       "Claude::Subagent101::Worktree12",
     );
     await userEvent.click(

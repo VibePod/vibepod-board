@@ -640,6 +640,11 @@ body {
   margin: 3px 0 0;
 }
 
+/* Wide enough for a namespaced holder such as Claude::Subagent101::Worktree12. */
+.board-assignee-filter {
+  min-width: 220px;
+}
+
 .board {
   display: grid;
   gap: 14px;
