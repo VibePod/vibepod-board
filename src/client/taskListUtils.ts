@@ -74,22 +74,25 @@ export const matchesTaskSearch = (
   target: TaskSearchTarget,
   search: string | undefined,
 ): boolean => {
-  const query = search?.trim().toLocaleLowerCase() ?? "";
-  if (!query) {
+  const trimmed = search?.trim() ?? "";
+  if (!trimmed) {
     return true;
   }
-  const numberMatch = taskNumberQuery.exec(query);
+  // IDs are ASCII, so parse them with locale-independent casing: under a Turkish locale
+  // toLocaleLowerCase() would turn "I" into a dotless "ı" and break the pattern.
+  const idQuery = trimmed.toLowerCase();
+  const numberMatch = taskNumberQuery.exec(idQuery);
   if (numberMatch) {
     return target.taskNumber === Number(numberMatch[1]);
   }
-  const idMatch = taskIdQuery.exec(query);
-  if (idMatch && idMatch[1] === target.projectKey?.toLocaleLowerCase()) {
+  const idMatch = taskIdQuery.exec(idQuery);
+  if (idMatch && idMatch[1] === target.projectKey?.toLowerCase()) {
     return target.taskNumber === Number(idMatch[2]);
   }
   return [target.title, target.summary, target.details, ...target.labels]
     .join(" ")
     .toLocaleLowerCase()
-    .includes(query);
+    .includes(trimmed.toLocaleLowerCase());
 };
 
 /**

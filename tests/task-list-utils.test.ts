@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   filterAndSortTasks,
@@ -193,6 +193,28 @@ describe("task search matcher", () => {
     const covid = { ...target, details: "Tracks COVID-19 guidance" };
     expect(matchesTaskSearch(covid, "covid-19")).toBe(true);
     expect(matchesTaskSearch(target, "AB-85")).toBe(false);
+  });
+
+  describe("under a Turkish default locale", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("parses task IDs containing I independently of the locale", () => {
+      const toLocaleLowerCase = String.prototype.toLocaleLowerCase;
+      // Simulate a tr-TR default locale, where "I" lowercases to dotless "ı".
+      vi.spyOn(String.prototype, "toLocaleLowerCase").mockImplementation(
+        function (this: string) {
+          return toLocaleLowerCase.call(this, "tr");
+        },
+      );
+      const vip = { ...target, projectKey: "VIP", taskNumber: 3 };
+
+      expect(matchesTaskSearch(vip, "VIP-3")).toBe(true);
+      expect(matchesTaskSearch(vip, "vip-3")).toBe(true);
+      expect(matchesTaskSearch(vip, "Vip-3")).toBe(true);
+      expect(matchesTaskSearch(vip, "VIP-4")).toBe(false);
+    });
   });
 
   it("finds tasks by ID in the task list", () => {
