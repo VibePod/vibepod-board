@@ -16,6 +16,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8.4",
+    "pytest-asyncio>=1.4.0",
     "ruff>=0.15",
 ]
 
@@ -29,6 +30,7 @@ packages = ["vibepod_board"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 100
