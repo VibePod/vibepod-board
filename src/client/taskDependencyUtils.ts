@@ -19,8 +19,9 @@ export const dependencyLabel = (idea: Idea, projectKey: string) =>
   `${formatTaskId(projectKey, idea.taskNumber)} · ${idea.title}`;
 
 /**
- * Tasks that may be picked as blockers: same project, not the task itself, and
- * not already depending on it — those would close a cycle and be rejected.
+ * Tasks that may be picked as blockers. Callers must pass tasks of a single
+ * project. Excludes the task itself and any task that already depends on it,
+ * because those would close a cycle and be rejected.
  */
 export const dependencyOptions = (
   tasks: Idea[],

@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { MantineProvider, Textarea } from "@mantine/core";
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { type ReactNode, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +15,7 @@ import {
   MarkdownPreview,
 } from "../src/client/MarkdownField.js";
 import type { MarkdownFieldMode } from "../src/client/markdownField.js";
+import type { BoardCard, Idea } from "../src/shared/types.js";
 
 beforeEach(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -39,9 +40,96 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cleanup();
   vi.unstubAllGlobals();
-  document.body.innerHTML = "";
+  vi.resetModules();
 });
+
+const timestamp = "2026-08-14T12:00:00.000Z";
+const markdownProject = {
+  id: "project-1",
+  key: "APP",
+  title: "Markdown Project",
+  summary: "",
+  createdAt: timestamp,
+  updatedAt: timestamp,
+};
+const markdownIdea: Idea = {
+  id: "idea-1",
+  projectId: markdownProject.id,
+  taskNumber: 1,
+  title: "Markdown task",
+  summary: "",
+  details: "## Goal\n\nRender **markdown**.",
+  status: "ready",
+  labels: [],
+  acceptanceCriteria: ["Renders `code`"],
+  dependsOn: [],
+  blocks: [],
+  blockedBy: [],
+  createdAt: timestamp,
+  updatedAt: timestamp,
+};
+const markdownCard: BoardCard = {
+  id: "card-1",
+  projectId: markdownProject.id,
+  ideaId: markdownIdea.id,
+  title: "Markdown card",
+  details: "",
+  column: "ready",
+  labels: [],
+  dependsOn: [],
+  blockedBy: [],
+  createdAt: timestamp,
+  updatedAt: timestamp,
+};
+
+const jsonResponse = (body: unknown) =>
+  new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+
+/** Renders the real app on a project section, so the wiring is exercised end to end. */
+const renderTasksView = async (section: "tasks" | "board" = "tasks") => {
+  window.history.replaceState(
+    null,
+    "",
+    `/projects/${markdownProject.id}/${section}`,
+  );
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/auth/me") {
+        return jsonResponse({ authenticated: true, username: "admin" });
+      }
+      if (path === "/api/projects") {
+        return jsonResponse({ items: [markdownProject] });
+      }
+      if (path === "/api/ideas") {
+        return jsonResponse({ items: [markdownIdea] });
+      }
+      if (path === "/api/documents") {
+        return jsonResponse({ items: [] });
+      }
+      return jsonResponse({
+        columns: {
+          ready: [markdownCard],
+          planned: [],
+          in_progress: [],
+          review: [],
+          done: [],
+        },
+      });
+    }),
+  );
+  const { AppShell } = await import("../src/client/main.js");
+  render(<AppShell />);
+  await screen.findByText(
+    section === "tasks" ? "Markdown task" : "Markdown card",
+  );
+};
 
 const renderWithMantine = (ui: ReactNode) =>
   render(<MantineProvider>{ui}</MantineProvider>);
@@ -173,27 +261,39 @@ describe("markdown task fields", () => {
 });
 
 describe("task modal markdown wiring", () => {
-  const clientEntry = readFileSync(
-    join(process.cwd(), "src/client/main.tsx"),
-    "utf8",
-  );
+  it("previews both task fields of the task modal as markdown", async () => {
+    await renderTasksView();
 
-  it("wraps both task fields in a markdown edit/preview switch", () => {
-    expect(clientEntry).toContain(
-      '<MarkdownField\n                label="Description"',
+    await userEvent.click(screen.getByText("Markdown task"));
+    const dialog = await screen.findByRole("dialog");
+
+    await userEvent.click(
+      within(
+        within(dialog).getByRole("radiogroup", { name: "Description view" }),
+      ).getByRole("radio", { name: "Preview" }),
     );
-    expect(clientEntry).toContain(
-      '<MarkdownField\n                label="Acceptance Criteria"',
+    expect(within(dialog).getByRole("heading", { name: "Goal" })).toBeTruthy();
+    expect(within(dialog).getByText("markdown").tagName).toBe("STRONG");
+
+    await userEvent.click(
+      within(
+        within(dialog).getByRole("radiogroup", {
+          name: "Acceptance Criteria view",
+        }),
+      ).getByRole("radio", { name: "Preview" }),
     );
-    expect(clientEntry).toContain("mode={descriptionMode}");
-    expect(clientEntry).toContain("mode={criteriaMode}");
+    expect(within(dialog).getByText("code").tagName).toBe("CODE");
   });
 
-  it("renders the task overview sections as markdown", () => {
-    expect(clientEntry).toContain("<MarkdownText>");
-    expect(clientEntry).toContain(
-      "<InlineMarkdown>{criterion}</InlineMarkdown>",
-    );
+  it("renders the task overview sections as markdown", async () => {
+    await renderTasksView("board");
+
+    await userEvent.click(screen.getByText("Markdown card"));
+    const dialog = await screen.findByRole("dialog");
+
+    expect(within(dialog).getByRole("heading", { name: "Goal" })).toBeTruthy();
+    expect(within(dialog).getByText("markdown").tagName).toBe("STRONG");
+    expect(within(dialog).getByText("code").tagName).toBe("CODE");
   });
 
   it("declares the markdown rendering packages", () => {

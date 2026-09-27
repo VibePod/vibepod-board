@@ -1,6 +1,6 @@
 import { Alert, Badge, Box, Group, Paper, Stack, Text } from "@mantine/core";
 import { Lock } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { BoardColumn, Idea } from "../shared/types.js";
 import {
   buildTaskGraphLayout,
@@ -29,16 +29,26 @@ export const TaskGraph = ({
   cardColumns,
   onOpenTask,
 }: TaskGraphProps) => {
-  const layout = buildTaskGraphLayout(tasks, { projectKey, cardColumns });
-  const taskById = new Map(tasks.map((task) => [task.id, task]));
-  const nodeById = new Map(layout.nodes.map((node) => [node.id, node]));
+  const layout = useMemo(
+    () => buildTaskGraphLayout(tasks, { projectKey, cardColumns }),
+    [tasks, projectKey, cardColumns],
+  );
+  const taskById = useMemo(
+    () => new Map(tasks.map((task) => [task.id, task])),
+    [tasks],
+  );
+  const nodeById = useMemo(
+    () => new Map(layout.nodes.map((node) => [node.id, node])),
+    [layout],
+  );
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const selectedEdge =
     layout.edges.find((edge) => edge.id === selectedEdgeId) ?? null;
 
-  // Any click that misses an edge, and Escape, drop the focus again.
+  // Any click that misses an edge, and Escape, drop the focus again. Keyed on
+  // the id, so the listeners are not re-registered on every render.
   useEffect(() => {
-    if (!selectedEdge) {
+    if (!selectedEdgeId) {
       return;
     }
     const clearOnOutsideClick = (event: MouseEvent) => {
@@ -58,7 +68,7 @@ export const TaskGraph = ({
       window.removeEventListener("click", clearOnOutsideClick);
       window.removeEventListener("keydown", clearOnEscape);
     };
-  }, [selectedEdge]);
+  }, [selectedEdgeId]);
 
   const isFaded = (id: string) =>
     Boolean(selectedEdge) &&

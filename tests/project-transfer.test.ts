@@ -216,6 +216,33 @@ describe("project transfer", () => {
     ).toContain(destination.id);
   });
 
+  it("rejects a new key when the bundle project ID belongs to another project", async () => {
+    const bundle = await createTransferBundle();
+    await resetDatabase(pool);
+    await initializeDatabase(pool);
+    const other = await store.createProject({ key: "OTH", title: "Other" });
+    const collisionBundle: ProjectBundle = {
+      ...bundle,
+      project: { ...bundle.project, id: other.id },
+      ideas: bundle.ideas.map((idea) => ({ ...idea, projectId: other.id })),
+      boardCards: bundle.boardCards.map((card) => ({
+        ...card,
+        projectId: other.id,
+      })),
+      documents: bundle.documents.map((document) => ({
+        ...document,
+        projectId: other.id,
+      })),
+    };
+
+    await expect(
+      store.importProject(collisionBundle, { replaceExisting: false }),
+    ).rejects.toThrow(`Project ID is already used: ${other.id}`);
+    expect((await store.listProjects(admin)).map((item) => item.key)).toEqual([
+      "OTH",
+    ]);
+  });
+
   it("rejects child ID collisions with another project before replacement", async () => {
     const bundle = await createTransferBundle();
     await resetDatabase(pool);

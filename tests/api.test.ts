@@ -174,6 +174,15 @@ describe("API", () => {
     expect(response.body).toEqual({
       error: "Project import file must be 10 MiB or smaller",
     });
+
+    const documentResponse = await agent
+      .post("/api/documents")
+      .set("Content-Type", "application/json")
+      .send(JSON.stringify({ content: "x".repeat(3 * 1024 * 1024) }))
+      .expect(413);
+    expect(documentResponse.body).toEqual({
+      error: "Request body must be 2 MiB or smaller",
+    });
   });
 
   it("allows project tokens to access only mapped project data", async () => {
