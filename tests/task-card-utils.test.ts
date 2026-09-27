@@ -59,26 +59,11 @@ describe("task card utilities", () => {
       status: "ready",
       labels: ["ui", "board"],
       isReady: true,
-      isArchived: false,
       isBlocked: false,
       blockedByCount: 0,
     });
     expect(Object.keys(view)).not.toContain("summary");
     expect(Object.keys(view)).not.toContain("details");
-  });
-
-  it("reports archived tasks as on the board and archived", () => {
-    const view = taskListCardView(
-      task(),
-      { ...columns, ready: [] },
-      "APP",
-      new Set(["idea-1"]),
-    );
-
-    expect(view).toMatchObject({ isReady: true, isArchived: true });
-    expect(
-      taskListCardView(task(), { ...columns, ready: [] }, "APP"),
-    ).toMatchObject({ isReady: false, isArchived: false });
   });
 
   it("maps readiness scores to badge colors", () => {

@@ -795,9 +795,15 @@ const App = () => {
     taskViewIdea && taskViewProject
       ? dependencyLinks(taskViewIdea.blocks, ideaById, taskViewProject.key)
       : [];
+  // Archived tasks leave the task list; they are only reachable from the Archive
+  // view. Work order and dependency lookups above still use every task.
+  const listedProjectIdeas = useMemo(
+    () => projectIdeas.filter((idea) => !archivedIdeaIds.has(idea.id)),
+    [projectIdeas, archivedIdeaIds],
+  );
   const visibleProjectIdeas = useMemo(
     () =>
-      filterAndSortTasks(projectIdeas, {
+      filterAndSortTasks(listedProjectIdeas, {
         sort: taskSort,
         status: taskStatusFilter,
         label: taskLabelFilter,
@@ -805,7 +811,7 @@ const App = () => {
         workOrder: workOrderPositions,
       }),
     [
-      projectIdeas,
+      listedProjectIdeas,
       taskSort,
       taskStatusFilter,
       taskLabelFilter,
@@ -1592,7 +1598,7 @@ const App = () => {
             <Text c="dimmed">
               {activeView === "projects"
                 ? `${state.projects.length} projects`
-                : `${projectIdeas.length} tasks, ${countCards(projectColumns)} cards, ${projectDocuments.length} notes`}
+                : `${listedProjectIdeas.length} tasks, ${countCards(projectColumns)} cards, ${projectDocuments.length} notes`}
             </Text>
           </div>
           <Group className="topbar-actions" gap="xs">
@@ -1816,7 +1822,8 @@ const App = () => {
             <Paper className="task-filters" withBorder radius="md" p="md">
               <Group justify="space-between" align="center" gap="sm" mb="sm">
                 <Text size="sm" fw={600} c="dimmed">
-                  {visibleProjectIdeas.length} of {projectIdeas.length} tasks
+                  {visibleProjectIdeas.length} of {listedProjectIdeas.length}{" "}
+                  tasks
                 </Text>
                 <SegmentedControl
                   className="task-view-switch"
@@ -1896,7 +1903,7 @@ const App = () => {
                 />
               </SimpleGrid>
             </Paper>
-            {projectIdeas.length === 0 && (
+            {listedProjectIdeas.length === 0 && (
               <Paper
                 className="empty-state inline"
                 withBorder
@@ -1906,16 +1913,17 @@ const App = () => {
                 <Text c="dimmed">No tasks in this project yet.</Text>
               </Paper>
             )}
-            {projectIdeas.length > 0 && visibleProjectIdeas.length === 0 && (
-              <Paper
-                className="empty-state inline"
-                withBorder
-                radius="md"
-                p="md"
-              >
-                <Text c="dimmed">No tasks match the current filters.</Text>
-              </Paper>
-            )}
+            {listedProjectIdeas.length > 0 &&
+              visibleProjectIdeas.length === 0 && (
+                <Paper
+                  className="empty-state inline"
+                  withBorder
+                  radius="md"
+                  p="md"
+                >
+                  <Text c="dimmed">No tasks match the current filters.</Text>
+                </Paper>
+              )}
             {taskViewMode === "tree" && visibleProjectIdeas.length > 0 && (
               <TaskGraph
                 tasks={visibleProjectIdeas}
@@ -1930,7 +1938,6 @@ const App = () => {
                   idea,
                   state.columns,
                   selectedProject.key,
-                  archivedIdeaIds,
                 );
                 return (
                   <Card
@@ -2023,9 +2030,8 @@ const App = () => {
                       onPointerDown={(event) => event.stopPropagation()}
                     >
                       <Checkbox
-                        label={taskCard.isArchived ? "Archived" : "Ready"}
+                        label="Ready"
                         checked={taskCard.isReady}
-                        disabled={taskCard.isArchived}
                         onChange={(event) =>
                           void setBoardAvailability(
                             idea,

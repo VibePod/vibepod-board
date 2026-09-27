@@ -6,23 +6,17 @@ export const isIdeaOnBoard = (idea: Idea, columns: BoardColumns): boolean =>
     (columns[column] ?? []).some((card) => card.ideaId === idea.id),
   );
 
-/**
- * `archivedIdeaIds` lists tasks whose card was archived: such a task is still on
- * the board as far as readiness goes, it only left the columns.
- */
 export const taskListCardView = (
   idea: Idea,
   columns: BoardColumns,
   projectKey: string,
-  archivedIdeaIds: ReadonlySet<string> = new Set(),
 ) => ({
   id: idea.id,
   taskId: formatTaskId(projectKey, idea.taskNumber),
   title: idea.title,
   status: idea.status,
   labels: [...idea.labels],
-  isReady: archivedIdeaIds.has(idea.id) || isIdeaOnBoard(idea, columns),
-  isArchived: archivedIdeaIds.has(idea.id),
+  isReady: isIdeaOnBoard(idea, columns),
   isBlocked: idea.blockedBy.length > 0,
   blockedByCount: idea.blockedBy.length,
 });

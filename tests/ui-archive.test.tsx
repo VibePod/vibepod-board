@@ -298,17 +298,12 @@ describe("the archive view", () => {
     expect(posts(fetchMock)).toEqual(["/api/board/card-2/unarchive"]);
   });
 
-  it("marks archived tasks in the task list and locks their Ready toggle", async () => {
+  it("hides archived tasks from the task list", async () => {
     await renderApp(`/projects/${project.id}/tasks`);
 
-    const archivedToggle = await screen.findByRole("checkbox", {
-      name: "Archived",
-    });
-    expect((archivedToggle as HTMLInputElement).checked).toBe(true);
-    expect((archivedToggle as HTMLInputElement).disabled).toBe(true);
-    expect(
-      (screen.getByRole("checkbox", { name: "Ready" }) as HTMLInputElement)
-        .checked,
-    ).toBe(true);
+    expect(await screen.findByText("Finished login")).toBeTruthy();
+    expect(screen.queryByText("Shipped export")).toBeNull();
+    expect(screen.getByText("1 of 1 tasks")).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: "Archived" })).toBeNull();
   });
 });
