@@ -105,6 +105,7 @@ class BoardCard(ApiModel):
     readiness_score: int | None = None
     readiness_reason: str | None = None
     readiness_evaluated_at: Timestamp | None = None
+    archived_at: Timestamp | None = None
     created_at: Timestamp
     updated_at: Timestamp
 

@@ -46,7 +46,7 @@ def export_project(session: Session, project_id: str) -> ProjectBundle:
     ideas = list_ideas(session, access, project.id)
     return parse_project_bundle(
         {
-            "bundleVersion": 2,
+            "bundleVersion": 3,
             "exportedAt": format_timestamp(now()),
             "project": project.model_dump(mode="json"),
             "ideas": [idea.model_dump(mode="json") for idea in ideas],
@@ -147,6 +147,7 @@ def _insert_children(session: Session, bundle: ProjectBundle, destination: str) 
                 readiness_score=card.readiness_score,
                 readiness_reason=card.readiness_reason,
                 readiness_evaluated_at=card.readiness_evaluated_at,
+                archived_at=card.archived_at,
                 created_at=card.created_at,
                 updated_at=card.updated_at,
             )

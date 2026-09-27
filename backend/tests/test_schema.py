@@ -8,7 +8,7 @@ from sqlmodel import SQLModel
 
 from vibepod_board.db import migrate
 
-HEAD = "0003"
+HEAD = "0004"
 LEGACY_SCHEMA = (Path(__file__).parent / "legacy_schema.sql").read_text()
 # The first TS schema, before repository, readiness and dependency support.
 ORIGINAL_SCHEMA = LEGACY_SCHEMA.split("alter table board_cards add column", 1)[0]
@@ -56,7 +56,7 @@ def test_stores_branch_repository_and_readiness_columns(db: Engine) -> None:
             "readiness_reason",
             "readiness_evaluated_at",
         } <= set(column_names(db, table))
-    assert "branch_name" in column_names(db, "board_cards")
+    assert {"branch_name", "archived_at"} <= set(column_names(db, "board_cards"))
     assert {"id", "idea_id", "score", "reason", "created_at"} <= set(
         column_names(db, "idea_readiness_events")
     )
@@ -149,3 +149,35 @@ def test_0003_adopts_links_from_the_old_sync_endpoint_and_retires_task_numbers(
         last = connection.execute(text("select last_task_number from projects")).scalar_one()
     assert repositories == {"a": "vibepod/board", "b": None, "c": None}
     assert last == 5
+
+
+def test_0004_adds_an_empty_archive_state_and_keeps_existing_cards(empty_db: Engine) -> None:
+    from alembic import command
+
+    from vibepod_board.db import alembic_config
+
+    config = alembic_config()
+    with empty_db.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "0003")
+        connection.execute(
+            text(
+                "insert into projects (id, key, title, created_at, updated_at) "
+                "values ('p1', 'APP', 'App', now(), now())"
+            )
+        )
+        connection.execute(
+            text(
+                "insert into board_cards (id, project_id, title, column_name, created_at, "
+                "updated_at) values ('c1', 'p1', 'Shipped', 'done', now(), now())"
+            )
+        )
+
+    migrate(empty_db)
+
+    with empty_db.connect() as connection:
+        rows = connection.execute(
+            text("select id, column_name, archived_at from board_cards")
+        ).all()
+    assert [tuple(row) for row in rows] == [("c1", "done", None)]
+    assert revision(empty_db) == HEAD

@@ -127,6 +127,8 @@ class BoardCardRow(SQLModel, table=True):
     readiness_score: int | None = Field(default=None, sa_column=Column(Integer))
     readiness_reason: str | None = _text()
     readiness_evaluated_at: datetime | None = _timestamp(nullable=True)
+    # Set when a done card leaves the board; the card and its task are kept.
+    archived_at: datetime | None = _timestamp(nullable=True)
     created_at: datetime = _timestamp()
     updated_at: datetime = _timestamp()
 

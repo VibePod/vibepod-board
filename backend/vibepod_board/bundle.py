@@ -1,4 +1,4 @@
-"""Project export/import bundle (version 1).
+"""Project export/import bundle (versions 1 to 3).
 
 Port of `src/shared/projectBundle.ts`: strict shapes (unknown fields are rejected) plus the
 relationship rules that keep a bundle self-contained. The client validates with the TS copy
@@ -108,6 +108,7 @@ class BundleBoardCard(BundleModel):
     readiness_score: Score | None = None
     readiness_reason: StrictStr | None = None
     readiness_evaluated_at: BundleTimestamp | None = None
+    archived_at: BundleTimestamp | None = None
     created_at: BundleTimestamp
     updated_at: BundleTimestamp
 
@@ -145,8 +146,9 @@ def _duplicates[T](values: Iterable[T]) -> list[T]:
 
 
 class ProjectBundle(BundleModel):
-    # 2 adds GitHub sync state on tasks; version 1 bundles are still accepted.
-    bundle_version: Literal[1, 2]
+    # 2 adds GitHub sync state on tasks, 3 archived board cards; older bundles are still
+    # accepted.
+    bundle_version: Literal[1, 2, 3]
     exported_at: BundleTimestamp
     project: BundleProject
     ideas: list[BundleIdea]
@@ -179,6 +181,17 @@ def relationship_issues(bundle: ProjectBundle) -> list[str]:
         if idea.github_repository and idea.github_issue_number
     ]
     issues += [f"Duplicate GitHub issue link: {issue}" for issue in _duplicates(linked)]
+    if bundle.bundle_version < 3:
+        issues += [
+            "Archived board cards require bundleVersion 3"
+            for card in bundle.board_cards
+            if card.archived_at is not None
+        ][:1]
+    issues += [
+        f"Archived board card must be in done: {card.id}"
+        for card in bundle.board_cards
+        if card.archived_at is not None and card.column != BoardColumn.DONE
+    ]
     if bundle.bundle_version == 1:
         issues += [
             "GitHub sync fields require bundleVersion 2"
