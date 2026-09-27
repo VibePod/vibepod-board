@@ -619,7 +619,7 @@ const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
   ) {
     // The import route carries its own larger limit, so name the right one.
     res.status(413).json({
-      error: req.path.startsWith("/api/projects/import")
+      error: req.originalUrl.startsWith("/api/projects/import")
         ? "Project import file must be 10 MiB or smaller"
         : "Request body must be 2 MiB or smaller",
     });

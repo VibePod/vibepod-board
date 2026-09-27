@@ -60,6 +60,7 @@ import {
   type FormEvent,
   type ReactNode,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -232,6 +233,9 @@ const emptyProjectDraft = (): ProjectDraft => ({
   title: "",
   summary: "",
 });
+
+/** Matches the import body limit of the server, so oversized files fail early. */
+const maxProjectBundleBytes = 10 * 1024 * 1024;
 
 const emptyProjectImportState = (): ProjectImportState => ({
   bundle: null,
@@ -620,12 +624,20 @@ const App = () => {
   const importPreview = projectImport?.bundle
     ? projectBundlePreview(projectImport.bundle, state.projects)
     : null;
-  const projectIdeas = selectedProject
-    ? state.ideas.filter((idea) => idea.projectId === selectedProject.id)
-    : [];
-  const projectColumns = selectedProject
-    ? filterColumnsByProject(state.columns, selectedProject.id)
-    : emptyColumns;
+  const projectIdeas = useMemo(
+    () =>
+      selectedProject
+        ? state.ideas.filter((idea) => idea.projectId === selectedProject.id)
+        : [],
+    [state.ideas, selectedProject],
+  );
+  const projectColumns = useMemo(
+    () =>
+      selectedProject
+        ? filterColumnsByProject(state.columns, selectedProject.id)
+        : emptyColumns,
+    [state.columns, selectedProject],
+  );
   const projectDocuments = selectedProject
     ? state.documents.filter(
         (document) => document.projectId === selectedProject.id,
@@ -651,29 +663,50 @@ const App = () => {
   const taskModalLabelOptions = Array.from(
     new Set([...taskLabelOptions, ...(taskModal?.draft.labels ?? [])]),
   ).sort((a, b) => a.localeCompare(b));
-  const projectCards = boardColumns.flatMap(
-    (column) => projectColumns[column] ?? [],
+  // The graph derivations below traverse the dependency graph, so they are
+  // memoized: the task modal re-renders on every keystroke.
+  const projectCards = useMemo(
+    () => boardColumns.flatMap((column) => projectColumns[column] ?? []),
+    [projectColumns],
   );
-  const projectCardColumns = new Map(
-    projectCards
-      .filter((card): card is BoardCard & { ideaId: string } =>
-        Boolean(card.ideaId),
-      )
-      .map((card) => [card.ideaId, card.column]),
+  const projectCardColumns = useMemo(
+    () =>
+      new Map(
+        projectCards
+          .filter((card): card is BoardCard & { ideaId: string } =>
+            Boolean(card.ideaId),
+          )
+          .map((card) => [card.ideaId, card.column]),
+      ),
+    [projectCards],
   );
-  const projectWorkOrder = selectedProject
-    ? buildWorkOrder(
-        projectIdeas,
-        projectCards,
-        new Map([[selectedProject.id, selectedProject.key]]),
-      )
-    : { items: [], cyclicTaskIds: [] };
-  const workOrderPositions = new Map(
-    projectWorkOrder.items.map((item) => [item.id, item.position]),
+  const projectWorkOrder = useMemo(
+    () =>
+      selectedProject
+        ? buildWorkOrder(
+            projectIdeas,
+            projectCards,
+            new Map([[selectedProject.id, selectedProject.key]]),
+          )
+        : { items: [], cyclicTaskIds: [] },
+    [projectIdeas, projectCards, selectedProject],
   );
-  const taskDependencyOptions = selectedProject
-    ? dependencyOptions(projectIdeas, selectedProject.key, taskModal?.draft.id)
-    : [];
+  const workOrderPositions = useMemo(
+    () =>
+      new Map(projectWorkOrder.items.map((item) => [item.id, item.position])),
+    [projectWorkOrder],
+  );
+  const taskDependencyOptions = useMemo(
+    () =>
+      selectedProject
+        ? dependencyOptions(
+            projectIdeas,
+            selectedProject.key,
+            taskModal?.draft.id,
+          )
+        : [],
+    [projectIdeas, selectedProject, taskModal?.draft.id],
+  );
   const taskViewBlockedBy =
     taskViewIdea && taskViewProject
       ? dependencyLinks(
@@ -687,13 +720,24 @@ const App = () => {
     taskViewIdea && taskViewProject
       ? dependencyLinks(taskViewIdea.blocks, ideaById, taskViewProject.key)
       : [];
-  const visibleProjectIdeas = filterAndSortTasks(projectIdeas, {
-    sort: taskSort,
-    status: taskStatusFilter,
-    label: taskLabelFilter,
-    search: taskSearch,
-    workOrder: workOrderPositions,
-  });
+  const visibleProjectIdeas = useMemo(
+    () =>
+      filterAndSortTasks(projectIdeas, {
+        sort: taskSort,
+        status: taskStatusFilter,
+        label: taskLabelFilter,
+        search: taskSearch,
+        workOrder: workOrderPositions,
+      }),
+    [
+      projectIdeas,
+      taskSort,
+      taskStatusFilter,
+      taskLabelFilter,
+      taskSearch,
+      workOrderPositions,
+    ],
+  );
   // Navigation follows the list the user actually sees, so the counter matches
   // the filtered total and the arrows never jump to a hidden task.
   const taskModalNavigation = taskNavigationFor(
@@ -878,6 +922,20 @@ const App = () => {
     if (!file) {
       return;
     }
+    if (file.size > maxProjectBundleBytes) {
+      // Reading an oversized file would spike memory here and still be rejected
+      // by the server, so report the limit before touching the contents.
+      setProjectImport((current) =>
+        current
+          ? {
+              ...current,
+              bundle: null,
+              error: "Project file must be 10 MiB or smaller",
+            }
+          : current,
+      );
+      return;
+    }
     try {
       const bundle = parseProjectBundleText(await file.text());
       setProjectImport((current) =>
@@ -1010,6 +1068,7 @@ const App = () => {
     );
   };
 
+  /** Every close path routes through here, so unsaved edits are never dropped silently. */
   const closeTaskModal = () => {
     if (
       hasTaskModalChanges() &&
@@ -1731,16 +1790,8 @@ const App = () => {
                               {taskCard.taskId}
                             </Badge>
                             <Title order={3}>{taskCard.title}</Title>
-                            {taskCard.isBlocked && (
-                              <Badge
-                                variant="light"
-                                color="orange"
-                                size="sm"
-                                leftSection={<Lock size={12} aria-hidden />}
-                              >
-                                Blocked by {taskCard.blockedByCount}
-                              </Badge>
-                            )}
+                            {taskCard.isBlocked &&
+                              blockedBadge(taskCard.blockedByCount)}
                           </Group>
                           {labelBadges(taskCard.labels)}
                           {idea.readinessScore !== undefined && (
@@ -1913,14 +1964,7 @@ const App = () => {
                                 className="board-card-blocked"
                                 justify="flex-start"
                               >
-                                <Badge
-                                  variant="light"
-                                  color="orange"
-                                  size="sm"
-                                  leftSection={<Lock size={12} aria-hidden />}
-                                >
-                                  Blocked by {card.blockedBy.length}
-                                </Badge>
+                                {blockedBadge(card.blockedBy.length)}
                               </Group>
                             )}
                             {labelBadges(card.labels, "xs")}
@@ -3054,6 +3098,17 @@ const labelBadges = (labels: string[], size: "xs" | "sm" = "sm"): ReactNode =>
       ))}
     </Group>
   ) : null;
+
+const blockedBadge = (blockedByCount: number): ReactNode => (
+  <Badge
+    variant="light"
+    color="orange"
+    size="sm"
+    leftSection={<Lock size={12} aria-hidden />}
+  >
+    Blocked by {blockedByCount}
+  </Badge>
+);
 
 const viewTitle = (activeView: ActiveView, project: Project | undefined) => {
   if (activeView === "projects") {

@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -89,10 +95,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Unmount, so the keyboard listeners of a previous app do not react here.
+  cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.resetModules();
-  document.body.innerHTML = "";
 });
 
 const loadAppShell = async () => {
@@ -248,5 +255,40 @@ describe("task modal closing", () => {
 
     expect(confirmMock).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+});
+
+describe("task modal navigation", () => {
+  it("counts the filtered tasks the list shows", async () => {
+    const ideas: unknown[] = [
+      { ...existingIdea, title: "Alpha task" },
+      { ...existingIdea, id: "idea-2", taskNumber: 2, title: "Beta task" },
+    ];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      return (
+        stateResponse(path, ideas) ?? jsonResponse({ error: "Not found" }, 404)
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const AppShell = await loadAppShell();
+    render(<AppShell />);
+
+    await userEvent.click(await screen.findByText("Alpha task"));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("1 / 2")).toBeTruthy();
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Search" }),
+      "Alpha",
+    );
+    await waitFor(() => expect(screen.queryByText("Beta task")).toBeNull());
+    await userEvent.click(screen.getByText("Alpha task"));
+
+    // A single visible task has nothing to navigate to, so no counter shows.
+    const filteredDialog = await screen.findByRole("dialog");
+    expect(within(filteredDialog).queryByText(/\d+ \/ \d+/)).toBeNull();
   });
 });

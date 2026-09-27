@@ -153,6 +153,25 @@ describe("project bundle validation", () => {
     expect(() => parseProjectBundle(mutate(validBundle()))).toThrow();
   });
 
+  it("accepts a bundle without the derived dependency fields", () => {
+    const bundle = validBundle();
+    const stripped = {
+      ...bundle,
+      ideas: bundle.ideas.map(({ blocks, blockedBy, ...idea }) => idea),
+      boardCards: bundle.boardCards.map(
+        ({ dependsOn, blockedBy, ...card }) => card,
+      ),
+    };
+
+    expect(parseProjectBundle(stripped)).toMatchObject({
+      ideas: [
+        { id: "idea-1", blocks: [], blockedBy: [] },
+        { id: "idea-2", blocks: [], blockedBy: [], dependsOn: ["idea-1"] },
+      ],
+      boardCards: [{ id: "card-1", dependsOn: [], blockedBy: [] }],
+    });
+  });
+
   it("rejects unknown fields", () => {
     expect(() =>
       parseProjectBundle({ ...validBundle(), mystery: true }),

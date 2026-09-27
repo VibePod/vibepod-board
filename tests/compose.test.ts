@@ -9,6 +9,7 @@ describe("compose networking and database", () => {
     expect(compose).toContain("vibepod:");
     expect(compose).toContain("aliases:");
     expect(compose).toContain("- vibepod-board");
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: the compose file contains this literal shell placeholder
     expect(compose).toContain("name: ${VIBEPOD_NETWORK:-vibepod-network}");
     expect(compose).toContain("external: true");
   });

@@ -331,4 +331,36 @@ describe("project transfer UI", () => {
     ).toBeTruthy();
     expect(screen.getByRole("dialog")).toBeTruthy();
   });
+
+  it("rejects an oversized file before reading it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async (input: RequestInfo | URL) =>
+          stateResponse(String(input)) ?? jsonResponse({}, 404),
+      ),
+    );
+    const AppShell = await loadAppShell();
+    render(<AppShell />);
+    await screen.findByText("Current Application");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Import Project" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    const oversized = new File([JSON.stringify(bundle)], "APP-project.json", {
+      type: "application/json",
+    });
+    Object.defineProperty(oversized, "size", { value: 11 * 1024 * 1024 });
+    const readFile = vi.spyOn(oversized, "text");
+
+    await userEvent.upload(
+      dialog.querySelector("input[type='file']") as HTMLInputElement,
+      oversized,
+    );
+
+    expect(
+      await within(dialog).findByText("Project file must be 10 MiB or smaller"),
+    ).toBeTruthy();
+    expect(readFile).not.toHaveBeenCalled();
+  });
 });

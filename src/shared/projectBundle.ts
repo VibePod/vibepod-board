@@ -13,6 +13,16 @@ const optionalTextSchema = z.string().optional();
 const optionalIntegerSchema = z.number().int().optional();
 const optionalReadinessScoreSchema = z.number().int().min(1).max(10).optional();
 
+/**
+ * `blocks` and `blockedBy` follow from the `dependsOn` graph, and the import
+ * recomputes them. They are part of an export for readability only, so a bundle
+ * may omit them and their values are never authoritative.
+ */
+const derivedDependencyFields = {
+  blocks: z.array(z.string().min(1)).default([]),
+  blockedBy: z.array(z.string().min(1)).default([]),
+};
+
 const projectSchema = z
   .object({
     id: z.string().min(1),
@@ -36,8 +46,7 @@ const ideaSchema = z
     labels: z.array(z.string()),
     acceptanceCriteria: z.array(z.string()),
     dependsOn: z.array(z.string().min(1)),
-    blocks: z.array(z.string().min(1)),
-    blockedBy: z.array(z.string().min(1)),
+    ...derivedDependencyFields,
     githubIssueUrl: optionalTextSchema,
     githubIssueNumber: optionalIntegerSchema,
     repositoryLocalPath: optionalTextSchema,
@@ -64,8 +73,9 @@ const boardCardSchema = z
     repositoryLocalPath: optionalTextSchema,
     repositoryRemoteUrl: optionalTextSchema,
     labels: z.array(z.string()),
-    dependsOn: z.array(z.string().min(1)),
-    blockedBy: z.array(z.string().min(1)),
+    // A card mirrors the dependency state of its task, so both fields are derived.
+    dependsOn: z.array(z.string().min(1)).default([]),
+    blockedBy: z.array(z.string().min(1)).default([]),
     readinessScore: optionalReadinessScoreSchema,
     readinessReason: optionalTextSchema,
     readinessEvaluatedAt: timestampSchema.optional(),
