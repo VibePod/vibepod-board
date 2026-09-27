@@ -7,6 +7,7 @@ from sqlmodel import Session, col, select
 from vibepod_board.access import token_access
 from vibepod_board.bundle import ProjectBundle, parse_project_bundle
 from vibepod_board.errors import Conflict
+from vibepod_board.github import normalize_repository
 from vibepod_board.schemas import ImportProjectResult, Project, format_timestamp, now
 from vibepod_board.services.board import list_cards
 from vibepod_board.services.common import (
@@ -45,7 +46,7 @@ def export_project(session: Session, project_id: str) -> ProjectBundle:
     ideas = list_ideas(session, access, project.id)
     return parse_project_bundle(
         {
-            "bundleVersion": 1,
+            "bundleVersion": 2,
             "exportedAt": format_timestamp(now()),
             "project": project.model_dump(mode="json"),
             "ideas": [idea.model_dump(mode="json") for idea in ideas],
@@ -105,7 +106,9 @@ def _insert_children(session: Session, bundle: ProjectBundle, destination: str) 
                 acceptance_criteria=list(idea.acceptance_criteria),
                 github_issue_url=idea.github_issue_url,
                 github_issue_number=idea.github_issue_number,
-                github_repository=idea.github_repository,
+                github_repository=(
+                    normalize_repository(idea.github_repository) if idea.github_repository else None
+                ),
                 github_issue_state=idea.github_issue_state,
                 github_issue_updated_at=idea.github_issue_updated_at,
                 github_synced_at=idea.github_synced_at,
@@ -215,6 +218,10 @@ def import_project(
         )
         session.flush()
     _insert_children(session, bundle, destination)
+    imported = session.get(ProjectRow, destination)
+    if imported is not None:
+        highest = max((idea.task_number for idea in bundle.ideas), default=0)
+        imported.last_task_number = max(imported.last_task_number, highest)
     add_activity(session, "project.imported", f"Imported project: {bundle.project.title}")
 
     project = Project.model_validate(bundle.project.model_dump())

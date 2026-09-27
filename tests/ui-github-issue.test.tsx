@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 
 import { MantineProvider } from "@mantine/core";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -175,5 +181,92 @@ describe("GitHub sync panel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Pull now" }));
     await waitFor(() => expect(onSync).toHaveBeenLastCalledWith("pull"));
     await waitFor(() => expect(screen.queryByText(/pull first/)).toBeNull());
+  });
+});
+
+describe("task view after a GitHub pull", () => {
+  it("shows the refreshed board card, not the one it was opened with", async () => {
+    window.history.replaceState(null, "", "/projects/project-1/board");
+    class ResizeObserverStub {
+      observe = vi.fn();
+      unobserve = vi.fn();
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverStub);
+    const project = {
+      id: "project-1",
+      key: "APP",
+      title: "App",
+      summary: "",
+      createdAt: stamp,
+      updatedAt: stamp,
+    };
+    let details = "Old card details";
+    const card = () => ({
+      id: "card-1",
+      projectId: "project-1",
+      ideaId: "idea-1",
+      title: "Sync me",
+      details,
+      column: "ready",
+      labels: [],
+      dependsOn: [],
+      blockedBy: [],
+      githubIssueUrl: linked.githubIssueUrl,
+      githubIssueNumber: 12,
+      createdAt: stamp,
+      updatedAt: stamp,
+    });
+    const json = (body: unknown) =>
+      new Response(JSON.stringify(body), {
+        headers: { "Content-Type": "application/json" },
+      });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input);
+        if (
+          path === "/api/ideas/idea-1/github/pull" &&
+          init?.method === "POST"
+        ) {
+          details = "Body pulled from GitHub";
+          return json({ item: idea({ ...linked, details }) });
+        }
+        if (path === "/api/auth/me") {
+          return json({ authenticated: true, username: "admin" });
+        }
+        if (path === "/api/projects") return json({ items: [project] });
+        if (path === "/api/ideas") {
+          return json({ items: [idea({ ...linked, details })] });
+        }
+        if (path === "/api/documents") return json({ items: [] });
+        if (path === "/api/github") return json({ enabled: true });
+        if (path === "/api/board") {
+          return json({
+            columns: {
+              ready: [card()],
+              planned: [],
+              in_progress: [],
+              review: [],
+              done: [],
+            },
+          });
+        }
+        return new Response("{}", { status: 404 });
+      }),
+    );
+    const { AppShell } = await import("../src/client/main.js");
+    render(<AppShell />);
+
+    await userEvent.click(await screen.findByText("Sync me"));
+    const view = await screen.findByRole("dialog");
+    expect(within(view).getByText("Old card details")).toBeTruthy();
+    await userEvent.click(
+      within(view).getByRole("button", { name: "Pull from GitHub" }),
+    );
+
+    expect(
+      await within(view).findByText("Body pulled from GitHub"),
+    ).toBeTruthy();
   });
 });

@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -153,10 +159,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Unmount first, so component effects and timers end while the stubs still exist.
+  cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.resetModules();
-  document.body.innerHTML = "";
 });
 
 const loadAppShell = async () => {

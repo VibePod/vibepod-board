@@ -54,6 +54,7 @@ import {
   RefreshCcw,
   Save,
   Sun,
+  Trash2,
   Upload,
 } from "lucide-react";
 import {
@@ -65,7 +66,7 @@ import {
   useState,
 } from "react";
 import { createRoot } from "react-dom/client";
-import { buildWorkOrder } from "../shared/dependencies.js";
+import { buildWorkOrder, formatTaskKey } from "../shared/dependencies.js";
 import {
   endpointOptions,
   integrationExamples,
@@ -92,6 +93,7 @@ import {
   type ReadinessEvent,
 } from "../shared/types.js";
 import vibepodIconUrl from "./assets/icon.png";
+import { DeleteTaskDialog, type DeleteTaskTarget } from "./DeleteTaskDialog.js";
 import { GitHubIssueBadge, GitHubSyncPanel } from "./GitHubIssue.js";
 import { type GitHubStatus, issueLinkForIdea } from "./githubIssue.js";
 import {
@@ -376,6 +378,10 @@ const App = () => {
   const [isTokenManagerOpen, setIsTokenManagerOpen] = useState(false);
   const [tokens, setTokens] = useState<ApiTokenSummary[]>([]);
   const [githubStatus, setGitHubStatus] = useState<GitHubStatus | null>(null);
+  // The dialog replaces the modal it was opened from; `restore` brings that back on cancel.
+  const [deleteTarget, setDeleteTarget] = useState<
+    (DeleteTaskTarget & { restore: () => void }) | null
+  >(null);
   const [createdToken, setCreatedToken] = useState<CreatedTokenState>(null);
   const [tokenDraft, setTokenDraft] = useState<CreateApiTokenInput>(
     emptyTokenDraft(),
@@ -664,7 +670,14 @@ const App = () => {
         (project) => project.id === taskViewIdea.projectId,
       ) ?? null)
     : null;
-  const taskViewCard = taskViewModal?.card ?? null;
+  // The modal keeps the card it was opened from only as a fallback: a sync or edit while it
+  // is open reloads the board, and the view must show that fresh card.
+  const taskViewCard = taskViewModal
+    ? (boardColumns
+        .flatMap((column) => state.columns[column] ?? [])
+        .find((card) => card.id === taskViewModal.card.id) ??
+      taskViewModal.card)
+    : null;
   const ideaById = new Map(state.ideas.map((idea) => [idea.id, idea]));
   const taskOverview =
     taskViewIdea && taskViewProject
@@ -1051,6 +1064,39 @@ const App = () => {
       originalDraft: { ...draft },
       isFullscreen: false,
     });
+  };
+
+  const requestDeleteTask = (idea: Idea, restore: () => void) => {
+    const project = state.projects.find((item) => item.id === idea.projectId);
+    setTaskViewModal(null);
+    setTaskModal(null);
+    setDeleteTarget({
+      idea,
+      taskId: formatTaskKey(project?.key ?? "", idea.taskNumber),
+      restore,
+    });
+  };
+
+  const cancelDeleteTask = () => {
+    deleteTarget?.restore();
+    setDeleteTarget(null);
+  };
+
+  const confirmDeleteTask = async ({ idea, taskId }: DeleteTaskTarget) => {
+    const result = await api<{ dependents: string[] }>(
+      `/api/ideas/${idea.id}`,
+      {
+        method: "DELETE",
+      },
+    );
+    setDeleteTarget(null);
+    await loadState();
+    const unblocked = result.dependents.length;
+    setNotice(
+      unblocked > 0
+        ? `Deleted ${taskId}. ${unblocked} dependent task${unblocked === 1 ? "" : "s"} lost this dependency.`
+        : `Deleted ${taskId}.`,
+    );
   };
 
   const updateTaskDraft = (patch: Partial<TaskDraft>) => {
@@ -2434,6 +2480,19 @@ const App = () => {
             <Group justify="flex-end">
               <Button
                 type="button"
+                variant="subtle"
+                color="red"
+                mr="auto"
+                leftSection={<Trash2 size={16} />}
+                onClick={() => {
+                  const view = taskViewModal;
+                  requestDeleteTask(taskViewIdea, () => setTaskViewModal(view));
+                }}
+              >
+                Delete
+              </Button>
+              <Button
+                type="button"
                 variant="default"
                 onClick={() => setTaskViewModal(null)}
               >
@@ -2740,6 +2799,26 @@ const App = () => {
                 />
               </MarkdownField>
               <Group justify="flex-end" gap="sm">
+                {taskModal.mode === "edit" &&
+                  taskModal.draft.id &&
+                  ideaById.has(taskModal.draft.id) && (
+                    <Button
+                      type="button"
+                      variant="subtle"
+                      color="red"
+                      mr="auto"
+                      leftSection={<Trash2 size={16} />}
+                      onClick={() => {
+                        const editing = taskModal;
+                        requestDeleteTask(
+                          ideaById.get(editing.draft.id as string) as Idea,
+                          () => setTaskModal(editing),
+                        );
+                      }}
+                    >
+                      Delete
+                    </Button>
+                  )}
                 <Button
                   type="button"
                   variant="default"
@@ -2755,6 +2834,12 @@ const App = () => {
           </form>
         )}
       </Modal>
+
+      <DeleteTaskDialog
+        target={deleteTarget}
+        onCancel={cancelDeleteTask}
+        onConfirm={confirmDeleteTask}
+      />
 
       <Modal
         opened={!!noteModal}

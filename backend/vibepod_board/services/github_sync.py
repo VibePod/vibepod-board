@@ -6,6 +6,7 @@ never changed by GitHub state — a closed issue only shows as a badge.
 """
 
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime
 
 from sqlmodel import Session, select
@@ -16,12 +17,14 @@ from vibepod_board.access import (
     default_project_id_for_create,
 )
 from vibepod_board.enums import IdeaStatus
-from vibepod_board.errors import BadRequest, Conflict
+from vibepod_board.errors import BadRequest, Conflict, NotFound
 from vibepod_board.github import (
     GitHubClient,
     IssueRef,
     RemoteIssue,
     issue_body,
+    normalize_repository,
+    parse_issue_url,
     repository_from_remote,
 )
 from vibepod_board.schemas import ApiModel, Idea, now
@@ -56,7 +59,11 @@ def target_repository(idea: IdeaRow, default_repository: str | None) -> str:
     )
     if not repository:
         raise BadRequest("No GitHub repository for this task")
-    return repository
+    return normalize_repository(repository)
+
+
+def generated_body(idea: IdeaRow) -> str:
+    return issue_body(idea.summary, idea.details, list(idea.acceptance_criteria)).strip()
 
 
 def _linked_ref(idea: IdeaRow) -> IssueRef | None:
@@ -80,9 +87,13 @@ def push(
     client: GitHubClient,
     default_repository: str | None,
 ) -> Idea:
-    idea = require_idea(session, idea_id)
+    # Locked until commit: a second push of the same task waits here and then sees the link
+    # the first one stored, instead of creating another issue.
+    idea = session.exec(select(IdeaRow).where(IdeaRow.id == idea_id).with_for_update()).first()
+    if idea is None:
+        raise NotFound(f"Idea not found: {idea_id}")
     assert_can_access_project(access, idea.project_id)
-    body = issue_body(idea.summary, idea.details, list(idea.acceptance_criteria))
+    body = generated_body(idea)
     ref = _linked_ref(idea)
 
     if ref is None:
@@ -113,6 +124,10 @@ def pull(session: Session, access: AccessContext, idea_id: str, client: GitHubCl
         raise Conflict("Task is not linked to a GitHub issue")
 
     issue = client.get_issue(ref)
+    if issue.body.strip() == generated_body(idea):
+        # The body is the one Push wrote from this task; copying it back into details would
+        # nest the task's own sections inside the next push.
+        issue = replace(issue, body="")
     timestamp = now()
     apply_remote(idea, issue, timestamp)
     idea.updated_at = timestamp
@@ -135,13 +150,18 @@ def upsert_issue(
     project_id: str | None = None,
 ) -> UpsertResult:
     """Creates the task for an issue, or refreshes the task already linked to it."""
+    if remote_updated_at.tzinfo is None:
+        raise BadRequest("remoteUpdatedAt must include a UTC offset")
+    ref = IssueRef(normalize_repository(repository), number)
+    if parse_issue_url(url) != ref:
+        raise BadRequest(f"Issue URL does not match {ref}: {url}")
     resolved_project_id = resolve_project_id_for_create(
         session, default_project_id_for_create(access, project_id)
     )
     assert_can_access_project(access, resolved_project_id)
     issue = RemoteIssue(
-        ref=IssueRef(repository.strip(), number),
-        url=url.strip(),
+        ref=ref,
+        url=ref.url,
         title=title,
         body=body,
         labels=list(labels),

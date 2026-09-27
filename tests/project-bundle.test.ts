@@ -100,7 +100,7 @@ describe("project bundle validation", () => {
   }[] = [
     {
       name: "unsupported version",
-      mutate: (bundle) => ({ ...bundle, bundleVersion: 2 }),
+      mutate: (bundle) => ({ ...bundle, bundleVersion: 99 }),
     },
     {
       name: "foreign idea",
@@ -170,6 +170,49 @@ describe("project bundle validation", () => {
       ],
       boardCards: [{ id: "card-1", dependsOn: [], blockedBy: [] }],
     });
+  });
+
+  it("accepts GitHub sync state in version 2 bundles only", () => {
+    const linked = (bundleVersion: 1 | 2) => {
+      const bundle = validBundle();
+      return {
+        ...bundle,
+        bundleVersion,
+        ideas: [
+          {
+            ...bundle.ideas[0],
+            githubIssueUrl: "https://github.com/o/r/issues/1",
+            githubIssueNumber: 1,
+            githubRepository: "o/r",
+            githubIssueState: "open" as const,
+          },
+          bundle.ideas[1],
+        ],
+      };
+    };
+
+    expect(parseProjectBundle(linked(2)).ideas[0].githubRepository).toBe("o/r");
+    expect(() => parseProjectBundle(linked(1))).toThrow(
+      "GitHub sync fields require bundleVersion 2",
+    );
+  });
+
+  it("rejects two tasks linked to the same GitHub issue", () => {
+    const bundle = validBundle();
+    const link = {
+      githubIssueUrl: "https://github.com/o/r/issues/1",
+      githubIssueNumber: 1,
+    };
+    expect(() =>
+      parseProjectBundle({
+        ...bundle,
+        bundleVersion: 2,
+        ideas: [
+          { ...bundle.ideas[0], ...link, githubRepository: "O/R" },
+          { ...bundle.ideas[1], ...link, githubRepository: "o/r" },
+        ],
+      }),
+    ).toThrow("Duplicate GitHub issue link: o/r#1");
   });
 
   it("rejects unknown fields", () => {

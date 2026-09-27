@@ -132,12 +132,21 @@ class BundleDocument(BundleModel):
     updated_at: BundleTimestamp
 
 
+GITHUB_SYNC_FIELDS = (
+    "github_repository",
+    "github_issue_state",
+    "github_issue_updated_at",
+    "github_synced_at",
+)
+
+
 def _duplicates[T](values: Iterable[T]) -> list[T]:
     return [value for value, count in Counter(values).items() if count > 1]
 
 
 class ProjectBundle(BundleModel):
-    bundle_version: Literal[1]
+    # 2 adds GitHub sync state on tasks; version 1 bundles are still accepted.
+    bundle_version: Literal[1, 2]
     exported_at: BundleTimestamp
     project: BundleProject
     ideas: list[BundleIdea]
@@ -164,6 +173,18 @@ def relationship_issues(bundle: ProjectBundle) -> list[str]:
         f"Duplicate task number: {n}"
         for n in _duplicates(idea.task_number for idea in bundle.ideas)
     ]
+    linked = [
+        f"{idea.github_repository.lower()}#{idea.github_issue_number}"
+        for idea in bundle.ideas
+        if idea.github_repository and idea.github_issue_number
+    ]
+    issues += [f"Duplicate GitHub issue link: {issue}" for issue in _duplicates(linked)]
+    if bundle.bundle_version == 1:
+        issues += [
+            "GitHub sync fields require bundleVersion 2"
+            for idea in bundle.ideas
+            if any(getattr(idea, field) is not None for field in GITHUB_SYNC_FIELDS)
+        ][:1]
     issues += [
         f"Duplicate board card id: {i}" for i in _duplicates(c.id for c in bundle.board_cards)
     ]

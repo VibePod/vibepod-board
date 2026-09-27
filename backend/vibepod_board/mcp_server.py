@@ -8,7 +8,6 @@ configurations keep working.
 
 import json
 from collections.abc import Callable
-from datetime import datetime
 from typing import Annotated, Any, Literal
 
 import anyio
@@ -17,7 +16,7 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken, TokenVerifier
 from fastmcp.server.dependencies import get_access_token
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field
 from sqlmodel import Session
 
 from vibepod_board.access import AccessContext, require_admin, token_access
@@ -225,6 +224,16 @@ def create_mcp_server(
         )
 
     @mcp.tool(
+        title="Delete Task",
+        description="Permanently delete a task with its board card, dependency edges and "
+        "readiness history; documents stop linking to it. This cannot be undone — to reject "
+        "work but keep the record, set status to denied with update_idea instead. A linked "
+        "GitHub issue is not touched. Returns the ids of tasks that depended on it.",
+    )
+    def delete_idea(id: TaskId) -> dict[str, Any]:
+        return run(lambda s, a: ideas.delete_idea(s, a, id))
+
+    @mcp.tool(
         title="Push Task to GitHub",
         description="Create the task's GitHub issue, or update its title, body and labels "
         "when the task is already linked. Fails when the issue changed on GitHub since the "
@@ -256,10 +265,18 @@ def create_mcp_server(
     def upsert_github_issue(
         repository: Annotated[str, Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")],
         number: Annotated[int, Field(gt=0)],
-        url: Annotated[str, Field(min_length=1)],
+        url: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description="The issue's html_url; must name the same repository and number.",
+            ),
+        ],
         title: Annotated[str, Field(min_length=1)],
         state: Literal["open", "closed"],
-        remoteUpdatedAt: datetime,  # noqa: N803
+        remoteUpdatedAt: Annotated[  # noqa: N803
+            AwareDatetime, Field(description="The issue's updated_at, with a UTC offset.")
+        ],
         body: str | None = None,
         labels: list[str] | None = None,
         projectId: str | None = None,  # noqa: N803

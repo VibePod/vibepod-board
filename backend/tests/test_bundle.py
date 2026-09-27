@@ -127,7 +127,7 @@ def _set(path: list[Any], value: Any) -> Callable[[dict[str, Any]], None]:
 
 
 INVALID_CASES = {
-    "unsupported version": _set(["bundleVersion"], 2),
+    "unsupported version": _set(["bundleVersion"], 99),
     "foreign idea": _set(["ideas", 0, "projectId"], "other"),
     "missing dependency": _set(["ideas", 1, "dependsOn"], ["missing"]),
     "dependency cycle": _set(["ideas", 0, "dependsOn"], ["idea-2"]),
@@ -145,4 +145,33 @@ def test_rejects_invalid_bundles(mutate: Callable[[dict[str, Any]], None]) -> No
     bundle = copy.deepcopy(valid_bundle())
     mutate(bundle)
     with pytest.raises(ValidationError):
+        parse_project_bundle(bundle)
+
+
+def _linked(bundle: dict[str, Any], version: int, repositories: tuple[str, str]) -> None:
+    bundle["bundleVersion"] = version
+    for idea, repository in zip(bundle["ideas"], repositories, strict=True):
+        idea.update(
+            githubIssueUrl="https://github.com/o/r/issues/1",
+            githubIssueNumber=1,
+            githubRepository=repository,
+            githubIssueState="open",
+        )
+
+
+def test_accepts_github_sync_state_in_version_2_only() -> None:
+    bundle = valid_bundle()
+    _linked(bundle, 2, ("o/r", "o/r"))
+    bundle["ideas"][1] = valid_bundle()["ideas"][1]
+    assert parse_project_bundle(bundle).ideas[0].github_repository == "o/r"
+
+    bundle["bundleVersion"] = 1
+    with pytest.raises(ValidationError, match="GitHub sync fields require bundleVersion 2"):
+        parse_project_bundle(bundle)
+
+
+def test_rejects_two_tasks_linked_to_the_same_issue() -> None:
+    bundle = valid_bundle()
+    _linked(bundle, 2, ("O/R", "o/r"))
+    with pytest.raises(ValidationError, match="Duplicate GitHub issue link: o/r#1"):
         parse_project_bundle(bundle)

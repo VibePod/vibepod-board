@@ -65,6 +65,7 @@ GITHUB_REPOSITORY=owner/repo    # optional default; a task's GitHub remote URL w
 - `GET /api/ideas`
 - `POST /api/ideas`
 - `PATCH /api/ideas/:id`
+- `DELETE /api/ideas/:id`
 - `POST /api/ideas/:id/ready`
 - `POST /api/ideas/:id/dependencies`
 - `PUT /api/ideas/:id/dependencies`
@@ -122,6 +123,7 @@ Tools:
 - `list_ideas`
 - `create_idea`
 - `update_idea`
+- `delete_idea`
 - `mark_idea_ready`
 - `add_idea_dependency`
 - `remove_idea_dependency`
@@ -143,6 +145,10 @@ Tools:
 Resource:
 
 - `vibepod-board://state`
+
+## Deleting Tasks
+
+**Delete** in the task view or the Edit Task dialog removes a task for good after a confirmation (also `DELETE /api/ideas/:id` and the `delete_idea` MCP tool, both limited to the caller's projects). Its board card, dependency links and readiness history go with it, documents stop linking to it, and tasks that depended on it lose that dependency. A linked GitHub issue is not touched, and task numbers are never reused. To reject work but keep the record, set the task's status to **Denied** instead.
 
 ## Task Dependencies
 

@@ -57,6 +57,10 @@ class ProjectRow(SQLModel, table=True):
     key: str = Field(sa_column=Column(Text, nullable=False, unique=True))
     title: str = Field(sa_column=Column(Text, nullable=False))
     summary: str = _text("")
+    # Highest task number ever issued in the project; numbers are never reused.
+    last_task_number: int = Field(
+        default=0, sa_column=Column(Integer, nullable=False, server_default=text("0"))
+    )
     created_at: datetime = _timestamp()
     updated_at: datetime = _timestamp()
 
