@@ -3391,8 +3391,16 @@ const filterColumnsByProject = (
 
 const projectCounts = (projectId: string, state: AppState) => {
   const columns = filterColumnsByProject(state.columns, projectId);
+  // Archived tasks are left out, matching the project's task list.
+  const archivedIdeaIds = new Set(
+    state.archivedCards.flatMap((card) =>
+      card.projectId === projectId && card.ideaId ? [card.ideaId] : [],
+    ),
+  );
   return {
-    tasks: state.ideas.filter((idea) => idea.projectId === projectId).length,
+    tasks: state.ideas.filter(
+      (idea) => idea.projectId === projectId && !archivedIdeaIds.has(idea.id),
+    ).length,
     cards: countCards(columns),
     notes: state.documents.filter(
       (document) => document.projectId === projectId,

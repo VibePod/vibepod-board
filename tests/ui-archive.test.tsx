@@ -331,3 +331,15 @@ describe("the archive view", () => {
     expect(screen.getByText("1 of 1 tasks")).toBeTruthy();
   });
 });
+
+describe("the projects page", () => {
+  it("does not count archived tasks", async () => {
+    await renderApp("/projects");
+
+    const heading = await screen.findByText("Current Application");
+    const projectCard = heading.closest(".project-card") as HTMLElement;
+    expect(within(projectCard).getByText("1 tasks")).toBeTruthy();
+    expect(within(projectCard).getByText("1 cards")).toBeTruthy();
+    expect(within(projectCard).getByText("0 notes")).toBeTruthy();
+  });
+});
