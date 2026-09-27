@@ -139,6 +139,14 @@ const duplicateValues = <T>(values: T[]): Set<T> => {
 const cyclicIdeaIds = (bundle: ProjectBundle): string[] =>
   findCyclicTaskIds(dependencyMap(bundle.ideas));
 
+/** Fields added by bundle version 2. */
+const githubSyncFields = [
+  "githubRepository",
+  "githubIssueState",
+  "githubIssueUpdatedAt",
+  "githubSyncedAt",
+] as const;
+
 const validateRelationships = (bundle: ProjectBundle, ctx: z.RefinementCtx) => {
   const ideaIds = new Set(bundle.ideas.map((idea) => idea.id));
   const cardIds = new Set(bundle.boardCards.map((card) => card.id));
@@ -150,6 +158,29 @@ const validateRelationships = (bundle: ProjectBundle, ctx: z.RefinementCtx) => {
     bundle.ideas.map((idea) => idea.taskNumber),
   )) {
     addIssue(ctx, ["ideas"], `Duplicate task number: ${taskNumber}`);
+  }
+  // The database allows one task per GitHub issue and project; GitHub names are
+  // case-insensitive.
+  for (const issue of duplicateValues(
+    bundle.ideas
+      .filter((idea) => idea.githubRepository && idea.githubIssueNumber)
+      .map(
+        (idea) =>
+          `${idea.githubRepository?.toLowerCase()}#${idea.githubIssueNumber}`,
+      ),
+  )) {
+    addIssue(ctx, ["ideas"], `Duplicate GitHub issue link: ${issue}`);
+  }
+  if (bundle.bundleVersion === 1) {
+    bundle.ideas.forEach((idea, index) => {
+      if (githubSyncFields.some((field) => idea[field] !== undefined)) {
+        addIssue(
+          ctx,
+          ["ideas", index],
+          "GitHub sync fields require bundleVersion 2",
+        );
+      }
+    });
   }
   for (const id of duplicateValues(bundle.boardCards.map((card) => card.id))) {
     addIssue(ctx, ["boardCards"], `Duplicate board card id: ${id}`);
@@ -246,7 +277,7 @@ const validateRelationships = (bundle: ProjectBundle, ctx: z.RefinementCtx) => {
 
 export const projectBundleSchema = z
   .object({
-    bundleVersion: z.literal(1),
+    bundleVersion: z.union([z.literal(1), z.literal(2)]),
     exportedAt: timestampSchema,
     project: projectSchema,
     ideas: z.array(ideaSchema),

@@ -118,7 +118,8 @@ export type BoardData = {
 };
 
 export type ProjectBundle = {
-  bundleVersion: 1;
+  /** 2 adds GitHub sync state on tasks; version 1 bundles are still accepted. */
+  bundleVersion: 1 | 2;
   exportedAt: string;
   project: Project;
   ideas: Idea[];
