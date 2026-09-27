@@ -118,8 +118,10 @@ import {
 import type { MarkdownFieldMode } from "./markdownField.js";
 import {
   formatNavigationPath,
+  formatNavigationUrl,
   type NavigationState,
   type NavigationView,
+  parseBoardSearch,
   parseNavigationPath,
 } from "./navigation.js";
 import {
@@ -144,7 +146,11 @@ import {
   taskToDraft,
 } from "./taskDraftUtils.js";
 import { formatTaskId } from "./taskIdentity.js";
-import { filterAndSortTasks, type TaskSortOption } from "./taskListUtils.js";
+import {
+  filterAndSortTasks,
+  filterColumnsBySearch,
+  type TaskSortOption,
+} from "./taskListUtils.js";
 import { taskNavigationFor } from "./taskNavigation.js";
 import { taskOverviewForIdea } from "./taskOverviewUtils.js";
 import "./styles.css";
@@ -293,6 +299,10 @@ const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
 };
 
 const initialNavigation = parseNavigationPath(window.location.pathname);
+const initialBoardSearch =
+  initialNavigation.activeView === "board"
+    ? parseBoardSearch(window.location.search)
+    : "";
 
 const appTheme = createTheme({
   primaryColor: "teal",
@@ -378,6 +388,7 @@ const App = () => {
   const [taskStatusFilter, setTaskStatusFilter] = useState<IdeaStatus | "">("");
   const [taskLabelFilter, setTaskLabelFilter] = useState("");
   const [taskSearch, setTaskSearch] = useState("");
+  const [boardSearch, setBoardSearch] = useState(initialBoardSearch);
   const [draggingCardId, setDraggingCardId] = useState("");
   const [dragOverColumn, setDragOverColumn] = useState<BoardColumn | null>(
     null,
@@ -460,6 +471,7 @@ const App = () => {
     });
     setSelectedProjectId("");
     setActiveView("projects");
+    setBoardSearch("");
     setIsTokenManagerOpen(false);
   };
 
@@ -578,18 +590,23 @@ const App = () => {
   }, []);
 
   useEffect(() => {
-    const normalizedPath = formatNavigationPath({
-      activeView: initialNavigation.activeView,
-      selectedProjectId: initialNavigation.selectedProjectId,
-    });
-    if (window.location.pathname !== normalizedPath) {
-      window.history.replaceState(null, "", normalizedPath);
+    const normalizedUrl = formatNavigationUrl(
+      initialNavigation,
+      initialBoardSearch,
+    );
+    if (currentUrl() !== normalizedUrl) {
+      window.history.replaceState(null, "", normalizedUrl);
     }
 
     const updateNavigationFromUrl = () => {
       const nextNavigation = parseNavigationPath(window.location.pathname);
       setActiveView(nextNavigation.activeView);
       setSelectedProjectId(nextNavigation.selectedProjectId);
+      setBoardSearch(
+        nextNavigation.activeView === "board"
+          ? parseBoardSearch(window.location.search)
+          : "",
+      );
     };
 
     window.addEventListener("popstate", updateNavigationFromUrl);
@@ -682,6 +699,19 @@ const App = () => {
         : emptyColumns,
     [state.columns, selectedProject],
   );
+  const visibleProjectColumns = useMemo(
+    () =>
+      selectedProject && boardSearch.trim()
+        ? filterColumnsBySearch(
+            projectColumns,
+            boardSearch,
+            selectedProject.key,
+            new Map(state.ideas.map((idea) => [idea.id, idea])),
+          )
+        : projectColumns,
+    [projectColumns, boardSearch, selectedProject, state.ideas],
+  );
+  const isBoardFiltered = visibleProjectColumns !== projectColumns;
   const projectDocuments = selectedProject
     ? state.documents.filter(
         (document) => document.projectId === selectedProject.id,
@@ -916,12 +946,24 @@ const App = () => {
   }
 
   const navigateTo = (navigation: NavigationState) => {
-    const path = formatNavigationPath(navigation);
-    if (window.location.pathname !== path) {
-      window.history.pushState(null, "", path);
+    // Navigating always lands on an unfiltered view.
+    const url = formatNavigationUrl(navigation);
+    if (currentUrl() !== url) {
+      window.history.pushState(null, "", url);
     }
     setSelectedProjectId(navigation.selectedProjectId);
     setActiveView(navigation.activeView);
+    setBoardSearch("");
+  };
+
+  const changeBoardSearch = (search: string) => {
+    setBoardSearch(search);
+    // Typing refines the current page rather than adding history entries.
+    window.history.replaceState(
+      null,
+      "",
+      formatNavigationUrl({ activeView: "board", selectedProjectId }, search),
+    );
   };
 
   const selectProject = (projectId: string | null) => {
@@ -2065,9 +2107,21 @@ const App = () => {
                   </Text>
                 </Box>
                 <Badge variant="light" color="blue">
-                  {countCards(projectColumns)} cards
+                  {isBoardFiltered
+                    ? `${countCards(visibleProjectColumns)} of ${countCards(projectColumns)} cards`
+                    : `${countCards(projectColumns)} cards`}
                 </Badge>
               </Group>
+              <TextInput
+                className="board-search"
+                mt="sm"
+                label="Search"
+                placeholder="Search ID, title, details, labels"
+                value={boardSearch}
+                onChange={(event) =>
+                  changeBoardSearch(event.currentTarget.value)
+                }
+              />
             </Paper>
             <div className="board">
               {boardColumns.map((column) => (
@@ -2122,12 +2176,14 @@ const App = () => {
                           </ActionIcon>
                         )}
                       <Badge variant="light" color="gray">
-                        {projectColumns[column]?.length ?? 0}
+                        {isBoardFiltered
+                          ? `${visibleProjectColumns[column]?.length ?? 0} / ${projectColumns[column]?.length ?? 0}`
+                          : (projectColumns[column]?.length ?? 0)}
                       </Badge>
                     </Group>
                   </Group>
                   <Stack className="column-card-list" gap="xs" p="sm">
-                    {(projectColumns[column] ?? []).map((card) => {
+                    {(visibleProjectColumns[column] ?? []).map((card) => {
                       const linkedIdea = state.ideas.find(
                         (idea) => idea.id === card.ideaId,
                       );
@@ -3371,6 +3427,8 @@ export const AppShell = () => (
     <App />
   </MantineProvider>
 );
+
+const currentUrl = () => `${window.location.pathname}${window.location.search}`;
 
 const countCards = (columns: BoardColumns) =>
   boardColumns.reduce(
