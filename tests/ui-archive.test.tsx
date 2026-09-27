@@ -66,7 +66,9 @@ const jsonResponse = (body: unknown, status = 200) =>
  * An in-memory board API: two tasks with done cards, `shipped` already
  * archived. Archive and unarchive requests move cards between the lists.
  */
-const boardApi = () => {
+type ApiFailures = { failing: Set<string> };
+
+const boardApi = (failures: ApiFailures = { failing: new Set() }) => {
   const ideas = [
     idea({ id: "idea-1", taskNumber: 1, title: "Finished login" }),
     idea({
@@ -101,6 +103,9 @@ const boardApi = () => {
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       const method = init?.method ?? "GET";
+      if (failures.failing.has(`${method} ${path}`)) {
+        return jsonResponse({ error: "Server exploded" }, 500);
+      }
       if (path === "/api/auth/me") {
         return jsonResponse({ authenticated: true, username: "admin" });
       }
@@ -144,9 +149,12 @@ const posts = (fetchMock: ReturnType<typeof boardApi>) =>
     .filter(([, init]) => (init as RequestInit | undefined)?.method === "POST")
     .map(([input]) => String(input));
 
-const renderApp = async (path: string) => {
+const renderApp = async (
+  path: string,
+  failures: ApiFailures = { failing: new Set() },
+) => {
   window.history.replaceState(null, "", path);
-  const fetchMock = boardApi();
+  const fetchMock = boardApi(failures);
   vi.stubGlobal("fetch", fetchMock);
   const { AppShell } = await import("../src/client/main.js");
   render(<AppShell />);
@@ -305,5 +313,21 @@ describe("the archive view", () => {
     expect(screen.queryByText("Shipped export")).toBeNull();
     expect(screen.getByText("1 of 1 tasks")).toBeTruthy();
     expect(screen.queryByRole("checkbox", { name: "Archived" })).toBeNull();
+  });
+
+  it("keeps archived tasks hidden when the archive fails to reload", async () => {
+    const failures: ApiFailures = { failing: new Set() };
+    await renderApp(`/projects/${project.id}/tasks`, failures);
+    expect(await screen.findByText("Finished login")).toBeTruthy();
+
+    failures.failing.add("GET /api/board/archived");
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(
+      await screen.findByText("Failed to load archived cards"),
+    ).toBeTruthy();
+    expect(screen.getByText("Finished login")).toBeTruthy();
+    expect(screen.queryByText("Shipped export")).toBeNull();
+    expect(screen.getByText("1 of 1 tasks")).toBeTruthy();
   });
 });

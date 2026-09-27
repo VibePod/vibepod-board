@@ -407,22 +407,22 @@ const App = () => {
         api<{ items: Project[] }>("/api/projects"),
         api<{ items: Idea[] }>("/api/ideas"),
         api<{ columns: BoardColumns }>("/api/board"),
-        // The board stays usable when the archive cannot be read.
-        api<{ items: BoardCard[] }>("/api/board/archived").catch(() => ({
-          items: [] as BoardCard[],
-        })),
+        // The board stays usable when the archive cannot be read; the
+        // previously loaded archived cards are kept so they stay hidden.
+        api<{ items: BoardCard[] }>("/api/board/archived").catch(() => null),
         api<{ items: PlanDocument[] }>("/api/documents"),
         // Sync buttons stay disabled when the status cannot be read.
         api<GitHubStatus>("/api/github").catch(() => null),
       ]);
     setGitHubStatus(github);
-    setState({
+    setState((prev) => ({
       projects: projects.items,
       ideas: ideas.items,
       columns: board.columns,
-      archivedCards: archived.items,
+      archivedCards: archived ? archived.items : prev.archivedCards,
       documents: documents.items,
-    });
+    }));
+    if (!archived) setError("Failed to load archived cards");
     setIsLoading(false);
   };
 
