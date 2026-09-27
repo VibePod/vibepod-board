@@ -2024,7 +2024,9 @@ const App = () => {
                             <Badge variant="light" color="gray" size="sm">
                               {taskCard.taskId}
                             </Badge>
-                            <Title order={3}>{taskCard.title}</Title>
+                            <Title order={3} className="list-entry-title">
+                              {taskCard.title}
+                            </Title>
                             {taskCard.isBlocked &&
                               blockedBadge(taskCard.blockedByCount)}
                             {githubIssueBadge(idea)}
@@ -2071,7 +2073,7 @@ const App = () => {
                             </Badge>
                           )}
                         </Box>
-                        {statusBadge(taskCard.status)}
+                        {statusBadge(taskCard.status, "sm")}
                       </Group>
                     </Box>
                     <Box
@@ -2440,10 +2442,10 @@ const App = () => {
                         gap="sm"
                         wrap="nowrap"
                       >
-                        <Text fw={700} size="md">
+                        <Text className="list-entry-title">
                           {document.title}
                         </Text>
-                        <Badge variant="light" color="violet">
+                        <Badge variant="light" color="violet" size="sm">
                           {document.kind}
                         </Badge>
                       </Group>
@@ -3495,8 +3497,13 @@ const statusColors: Record<IdeaStatus, string> = {
   denied: "red",
 };
 
-const statusBadge = (status: IdeaStatus) => (
-  <Badge variant="light" color={statusColors[status]} tt="capitalize">
+const statusBadge = (status: IdeaStatus, size: "sm" | "md" = "md") => (
+  <Badge
+    variant="light"
+    color={statusColors[status]}
+    size={size}
+    tt="capitalize"
+  >
     {status}
   </Badge>
 );

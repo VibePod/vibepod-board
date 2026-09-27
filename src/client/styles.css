@@ -376,11 +376,17 @@ body {
   min-width: 0;
 }
 
-.task-card-title h3 {
+/* Shared type scale for the archive, task and note list entries. */
+.list-entry-title {
   font-size: 16px;
+  font-weight: 700;
   line-height: 1.25;
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+.list-entry-meta {
+  font-size: 12px;
 }
 
 .task-ready-control {

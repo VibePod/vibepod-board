@@ -119,7 +119,9 @@ export const ArchiveView = ({
                     {row.taskId}
                   </Badge>
                 )}
-                <Title order={3}>{row.title}</Title>
+                <Title order={3} className="list-entry-title">
+                  {row.title}
+                </Title>
               </Group>
               {(row.labels.length > 0 || row.branchName) && (
                 <Group gap={6}>
@@ -146,7 +148,7 @@ export const ArchiveView = ({
                   )}
                 </Group>
               )}
-              <Text size="xs" c="dimmed">
+              <Text className="list-entry-meta" c="dimmed">
                 Archived {formatArchivedAt(row.archivedAt)}
               </Text>
             </Stack>
