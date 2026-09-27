@@ -337,6 +337,10 @@ body {
   color: var(--app-text);
 }
 
+.archive-card {
+  border-left-color: var(--app-border);
+}
+
 .task-card-edit-area {
   cursor: pointer;
   display: grid;

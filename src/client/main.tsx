@@ -32,6 +32,8 @@ import {
 } from "@mantine/core";
 import "@mantine/core/styles.css";
 import {
+  Archive,
+  ArchiveRestore,
   ChevronLeft,
   ChevronRight,
   Columns3,
@@ -92,6 +94,12 @@ import {
   type ProjectBundle,
   type ReadinessEvent,
 } from "../shared/types.js";
+import {
+  ArchiveDoneDialog,
+  type ArchiveDoneTarget,
+} from "./ArchiveDoneDialog.js";
+import { ArchiveView } from "./ArchiveView.js";
+import { type ArchivedTaskRow, archivedTaskRows } from "./archiveUtils.js";
 import vibepodIconUrl from "./assets/icon.png";
 import { DeleteTaskDialog, type DeleteTaskTarget } from "./DeleteTaskDialog.js";
 import { GitHubIssueBadge, GitHubSyncPanel } from "./GitHubIssue.js";
@@ -145,6 +153,8 @@ type AppState = {
   projects: Project[];
   ideas: Idea[];
   columns: BoardColumns;
+  /** Cards archived from the Done column; they are not part of `columns`. */
+  archivedCards: BoardCard[];
   documents: PlanDocument[];
 };
 
@@ -332,6 +342,7 @@ const App = () => {
     projects: [],
     ideas: [],
     columns: emptyColumns,
+    archivedCards: [],
     documents: [],
   });
   const [activeView, setActiveView] = useState<ActiveView>(
@@ -382,6 +393,8 @@ const App = () => {
   const [deleteTarget, setDeleteTarget] = useState<
     (DeleteTaskTarget & { restore: () => void }) | null
   >(null);
+  const [archiveDoneTarget, setArchiveDoneTarget] =
+    useState<ArchiveDoneTarget | null>(null);
   const [createdToken, setCreatedToken] = useState<CreatedTokenState>(null);
   const [tokenDraft, setTokenDraft] = useState<CreateApiTokenInput>(
     emptyTokenDraft(),
@@ -389,19 +402,25 @@ const App = () => {
 
   const loadState = async () => {
     setError("");
-    const [projects, ideas, board, documents, github] = await Promise.all([
-      api<{ items: Project[] }>("/api/projects"),
-      api<{ items: Idea[] }>("/api/ideas"),
-      api<{ columns: BoardColumns }>("/api/board"),
-      api<{ items: PlanDocument[] }>("/api/documents"),
-      // Sync buttons stay disabled when the status cannot be read.
-      api<GitHubStatus>("/api/github").catch(() => null),
-    ]);
+    const [projects, ideas, board, archived, documents, github] =
+      await Promise.all([
+        api<{ items: Project[] }>("/api/projects"),
+        api<{ items: Idea[] }>("/api/ideas"),
+        api<{ columns: BoardColumns }>("/api/board"),
+        // The board stays usable when the archive cannot be read.
+        api<{ items: BoardCard[] }>("/api/board/archived").catch(() => ({
+          items: [] as BoardCard[],
+        })),
+        api<{ items: PlanDocument[] }>("/api/documents"),
+        // Sync buttons stay disabled when the status cannot be read.
+        api<GitHubStatus>("/api/github").catch(() => null),
+      ]);
     setGitHubStatus(github);
     setState({
       projects: projects.items,
       ideas: ideas.items,
       columns: board.columns,
+      archivedCards: archived.items,
       documents: documents.items,
     });
     setIsLoading(false);
@@ -432,7 +451,13 @@ const App = () => {
       () => undefined,
     );
     setAuth({ status: "unauthenticated" });
-    setState({ projects: [], ideas: [], columns: emptyColumns, documents: [] });
+    setState({
+      projects: [],
+      ideas: [],
+      columns: emptyColumns,
+      archivedCards: [],
+      documents: [],
+    });
     setSelectedProjectId("");
     setActiveView("projects");
     setIsTokenManagerOpen(false);
@@ -673,11 +698,13 @@ const App = () => {
   // The modal keeps the card it was opened from only as a fallback: a sync or edit while it
   // is open reloads the board, and the view must show that fresh card.
   const taskViewCard = taskViewModal
-    ? (boardColumns
-        .flatMap((column) => state.columns[column] ?? [])
-        .find((card) => card.id === taskViewModal.card.id) ??
-      taskViewModal.card)
+    ? ([
+        ...boardColumns.flatMap((column) => state.columns[column] ?? []),
+        ...state.archivedCards,
+      ].find((card) => card.id === taskViewModal.card.id) ?? taskViewModal.card)
     : null;
+  // An archived task opens read-only; Unarchive is the way back to the board.
+  const isTaskViewArchived = Boolean(taskViewCard?.archivedAt);
   const ideaById = new Map(state.ideas.map((idea) => [idea.id, idea]));
   const taskOverview =
     taskViewIdea && taskViewProject
@@ -689,11 +716,33 @@ const App = () => {
   const taskModalLabelOptions = Array.from(
     new Set([...taskLabelOptions, ...(taskModal?.draft.labels ?? [])]),
   ).sort((a, b) => a.localeCompare(b));
+  const projectArchivedCards = useMemo(
+    () =>
+      selectedProject
+        ? state.archivedCards.filter(
+            (card) => card.projectId === selectedProject.id,
+          )
+        : [],
+    [state.archivedCards, selectedProject],
+  );
+  const archivedIdeaIds = useMemo(
+    () =>
+      new Set(
+        projectArchivedCards.flatMap((card) =>
+          card.ideaId ? [card.ideaId] : [],
+        ),
+      ),
+    [projectArchivedCards],
+  );
   // The graph derivations below traverse the dependency graph, so they are
-  // memoized: the task modal re-renders on every keystroke.
+  // memoized: the task modal re-renders on every keystroke. Archived cards are
+  // included: an archived task is still done for the tasks that depend on it.
   const projectCards = useMemo(
-    () => boardColumns.flatMap((column) => projectColumns[column] ?? []),
-    [projectColumns],
+    () => [
+      ...boardColumns.flatMap((column) => projectColumns[column] ?? []),
+      ...projectArchivedCards,
+    ],
+    [projectColumns, projectArchivedCards],
   );
   const projectCardColumns = useMemo(
     () =>
@@ -778,6 +827,9 @@ const App = () => {
       direction < 0 ? taskModalNavigation.previous : taskModalNavigation.next,
     );
   };
+  const archivedRows = selectedProject
+    ? archivedTaskRows(projectArchivedCards, ideaById, selectedProject.key)
+    : [];
   const showProjectSidebar = shouldShowProjectSidebar(
     activeView,
     !!selectedProject,
@@ -1245,6 +1297,44 @@ const App = () => {
     setTaskViewModal({ ideaId: idea.id, card });
   };
 
+  const archiveCard = async (card: BoardCard) => {
+    setError("");
+    setNotice("");
+    try {
+      await api(`/api/board/${card.id}/archive`, { method: "POST" });
+      await loadState();
+      setNotice(`Archived ${card.title}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to archive card");
+    }
+  };
+
+  const confirmArchiveDone = async ({ projectId }: ArchiveDoneTarget) => {
+    const result = await api<{ items: BoardCard[] }>(
+      "/api/board/archive-done",
+      { method: "POST", body: JSON.stringify({ projectId }) },
+    );
+    setArchiveDoneTarget(null);
+    await loadState();
+    const count = result.items.length;
+    setNotice(`Archived ${count} done card${count === 1 ? "" : "s"}.`);
+  };
+
+  const unarchiveCard = async (card: BoardCard) => {
+    setError("");
+    setNotice("");
+    try {
+      await api(`/api/board/${card.id}/unarchive`, { method: "POST" });
+      await loadState();
+      setNotice(`Restored ${card.title} to Done.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to unarchive card");
+    }
+  };
+
+  const archivedCardForRow = (row: ArchivedTaskRow) =>
+    state.archivedCards.find((card) => card.id === row.cardId);
+
   const moveCard = async (card: BoardCard, column: BoardColumn) => {
     setError("");
     await api(`/api/board/${card.id}`, {
@@ -1428,6 +1518,33 @@ const App = () => {
             >
               <Columns3 size={18} />
               Board
+            </a>
+            <a
+              className={activeView === "archive" ? "active" : ""}
+              href={
+                selectedProject
+                  ? formatNavigationPath({
+                      activeView: "archive",
+                      selectedProjectId: selectedProject.id,
+                    })
+                  : formatNavigationPath({
+                      activeView: "projects",
+                      selectedProjectId: "",
+                    })
+              }
+              aria-disabled={!selectedProject}
+              onClick={(event) => {
+                event.preventDefault();
+                if (selectedProject) {
+                  navigateTo({
+                    activeView: "archive",
+                    selectedProjectId: selectedProject.id,
+                  });
+                }
+              }}
+            >
+              <Archive size={18} />
+              Archive
             </a>
             <a
               className={activeView === "documents" ? "active" : ""}
@@ -1813,6 +1930,7 @@ const App = () => {
                   idea,
                   state.columns,
                   selectedProject.key,
+                  archivedIdeaIds,
                 );
                 return (
                   <Card
@@ -1905,8 +2023,9 @@ const App = () => {
                       onPointerDown={(event) => event.stopPropagation()}
                     >
                       <Checkbox
-                        label="Ready"
+                        label={taskCard.isArchived ? "Archived" : "Ready"}
                         checked={taskCard.isReady}
+                        disabled={taskCard.isArchived}
                         onChange={(event) =>
                           void setBoardAvailability(
                             idea,
@@ -1968,9 +2087,30 @@ const App = () => {
                     <Title className="column-title" order={4}>
                       {columnLabels[column]}
                     </Title>
-                    <Badge variant="light" color="gray">
-                      {projectColumns[column]?.length ?? 0}
-                    </Badge>
+                    <Group gap={6} wrap="nowrap">
+                      {column === "done" &&
+                        (projectColumns.done?.length ?? 0) > 0 && (
+                          <ActionIcon
+                            variant="subtle"
+                            color="gray"
+                            size="sm"
+                            aria-label="Archive all done"
+                            title="Archive all done"
+                            onClick={() =>
+                              setArchiveDoneTarget({
+                                projectId: selectedProject.id,
+                                projectTitle: selectedProject.title,
+                                count: projectColumns.done.length,
+                              })
+                            }
+                          >
+                            <Archive size={16} />
+                          </ActionIcon>
+                        )}
+                      <Badge variant="light" color="gray">
+                        {projectColumns[column]?.length ?? 0}
+                      </Badge>
+                    </Group>
                   </Group>
                   <Stack className="column-card-list" gap="xs" p="sm">
                     {(projectColumns[column] ?? []).map((card) => {
@@ -2138,14 +2278,36 @@ const App = () => {
                                   ))}
                               </Stack>
                             )}
-                            {cardTaskId && (
+                            {(cardTaskId || column === "done") && (
                               <Group
                                 className="board-card-task-id"
                                 justify="flex-end"
                               >
-                                <Badge variant="light" color="gray" size="sm">
-                                  {cardTaskId}
-                                </Badge>
+                                {column === "done" && (
+                                  <Button
+                                    type="button"
+                                    variant="subtle"
+                                    color="gray"
+                                    size="compact-xs"
+                                    mr="auto"
+                                    leftSection={<Archive size={12} />}
+                                    aria-label={`Archive ${card.title}`}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void archiveCard(card);
+                                    }}
+                                    onKeyDown={(event) =>
+                                      event.stopPropagation()
+                                    }
+                                  >
+                                    Archive
+                                  </Button>
+                                )}
+                                {cardTaskId && (
+                                  <Badge variant="light" color="gray" size="sm">
+                                    {cardTaskId}
+                                  </Badge>
+                                )}
                               </Group>
                             )}
                           </Stack>
@@ -2157,6 +2319,20 @@ const App = () => {
               ))}
             </div>
           </Stack>
+        )}
+
+        {activeView === "archive" && selectedProject && (
+          <ArchiveView
+            rows={archivedRows}
+            onOpen={(row) => {
+              const card = archivedCardForRow(row);
+              if (card) openCardTask(card);
+            }}
+            onUnarchive={async (row) => {
+              const card = archivedCardForRow(row);
+              if (card) await unarchiveCard(card);
+            }}
+          />
         )}
 
         {activeView === "documents" && selectedProject && (
@@ -2390,11 +2566,24 @@ const App = () => {
                 {statusBadge(taskOverview.status)}
               </Group>
               {labelBadges(taskOverview.labels)}
-              <GitHubSyncPanel
-                idea={taskViewIdea}
-                status={githubStatus}
-                onSync={(action) => syncGitHubIssue(taskViewIdea.id, action)}
-              />
+              {isTaskViewArchived && taskViewCard?.archivedAt ? (
+                <Group gap="xs">
+                  <Badge
+                    variant="light"
+                    color="gray"
+                    leftSection={<Archive size={12} aria-hidden />}
+                  >
+                    Archived {formatDateTime(taskViewCard.archivedAt)}
+                  </Badge>
+                  {githubIssueBadge(taskViewIdea)}
+                </Group>
+              ) : (
+                <GitHubSyncPanel
+                  idea={taskViewIdea}
+                  status={githubStatus}
+                  onSync={(action) => syncGitHubIssue(taskViewIdea.id, action)}
+                />
+              )}
             </Stack>
 
             <Paper className="overview-section" withBorder radius="md" p="md">
@@ -2477,39 +2666,64 @@ const App = () => {
               </Paper>
             )}
 
-            <Group justify="flex-end">
-              <Button
-                type="button"
-                variant="subtle"
-                color="red"
-                mr="auto"
-                leftSection={<Trash2 size={16} />}
-                onClick={() => {
-                  const view = taskViewModal;
-                  requestDeleteTask(taskViewIdea, () => setTaskViewModal(view));
-                }}
-              >
-                Delete
-              </Button>
-              <Button
-                type="button"
-                variant="default"
-                onClick={() => setTaskViewModal(null)}
-              >
-                Close
-              </Button>
-              <Button
-                type="button"
-                variant="light"
-                leftSection={<Pencil size={16} />}
-                onClick={() => {
-                  setTaskViewModal(null);
-                  openEditTask(taskViewIdea);
-                }}
-              >
-                Edit Task
-              </Button>
-            </Group>
+            {isTaskViewArchived && taskViewCard ? (
+              <Group justify="flex-end">
+                <Button
+                  type="button"
+                  variant="default"
+                  onClick={() => setTaskViewModal(null)}
+                >
+                  Close
+                </Button>
+                <Button
+                  type="button"
+                  variant="light"
+                  leftSection={<ArchiveRestore size={16} />}
+                  onClick={() => {
+                    setTaskViewModal(null);
+                    void unarchiveCard(taskViewCard);
+                  }}
+                >
+                  Unarchive
+                </Button>
+              </Group>
+            ) : (
+              <Group justify="flex-end">
+                <Button
+                  type="button"
+                  variant="subtle"
+                  color="red"
+                  mr="auto"
+                  leftSection={<Trash2 size={16} />}
+                  onClick={() => {
+                    const view = taskViewModal;
+                    requestDeleteTask(taskViewIdea, () =>
+                      setTaskViewModal(view),
+                    );
+                  }}
+                >
+                  Delete
+                </Button>
+                <Button
+                  type="button"
+                  variant="default"
+                  onClick={() => setTaskViewModal(null)}
+                >
+                  Close
+                </Button>
+                <Button
+                  type="button"
+                  variant="light"
+                  leftSection={<Pencil size={16} />}
+                  onClick={() => {
+                    setTaskViewModal(null);
+                    openEditTask(taskViewIdea);
+                  }}
+                >
+                  Edit Task
+                </Button>
+              </Group>
+            )}
           </Stack>
         )}
       </Modal>
@@ -2839,6 +3053,11 @@ const App = () => {
         target={deleteTarget}
         onCancel={cancelDeleteTask}
         onConfirm={confirmDeleteTask}
+      />
+      <ArchiveDoneDialog
+        target={archiveDoneTarget}
+        onCancel={() => setArchiveDoneTarget(null)}
+        onConfirm={confirmArchiveDone}
       />
 
       <Modal
@@ -3247,6 +3466,9 @@ const viewTitle = (activeView: ActiveView, project: Project | undefined) => {
   }
   if (activeView === "board") {
     return "Kanban Board";
+  }
+  if (activeView === "archive") {
+    return `${project.title} Archive`;
   }
   return `${project.title} Notes`;
 };

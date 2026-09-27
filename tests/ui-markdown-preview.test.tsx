@@ -110,7 +110,7 @@ const renderTasksView = async (section: "tasks" | "board" = "tasks") => {
       if (path === "/api/ideas") {
         return jsonResponse({ items: [markdownIdea] });
       }
-      if (path === "/api/documents") {
+      if (path === "/api/documents" || path === "/api/board/archived") {
         return jsonResponse({ items: [] });
       }
       return jsonResponse({

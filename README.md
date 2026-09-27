@@ -76,6 +76,10 @@ GITHUB_REPOSITORY=owner/repo    # optional default; a task's GitHub remote URL w
 - `GET /api/github`
 - `GET /api/board`
 - `PATCH /api/board/:id`
+- `GET /api/board/archived`
+- `POST /api/board/archive-done`
+- `POST /api/board/:id/archive`
+- `POST /api/board/:id/unarchive`
 - `POST /api/board/:id/readiness`
 - `POST /api/ideas/:id/readiness`
 - `GET /api/ideas/:id/readiness`
@@ -89,7 +93,7 @@ GITHUB_REPOSITORY=owner/repo    # optional default; a task's GitHub remote URL w
 - `POST /api/tokens/:id/revoke`
 - `GET /api/mcp-info`
 
-`GET /api/ideas`, `GET /api/board`, `GET /api/documents`, and `GET /api/work-order` accept `projectId` query params for project-scoped reads.
+`GET /api/ideas`, `GET /api/board`, `GET /api/board/archived`, `GET /api/documents`, and `GET /api/work-order` accept `projectId` query params for project-scoped reads.
 
 Browser/full REST access uses the admin session cookie. Project-scoped API clients use `Authorization: Bearer <token>`.
 
@@ -132,6 +136,9 @@ Tools:
 - `list_board`
 - `move_board_card`
 - `update_board_card`
+- `archive_board_card`
+- `unarchive_board_card`
+- `list_archived_cards`
 - `set_card_readiness`
 - `set_idea_readiness`
 - `list_idea_readiness`
@@ -149,6 +156,14 @@ Resource:
 ## Deleting Tasks
 
 **Delete** in the task view or the Edit Task dialog removes a task for good after a confirmation (also `DELETE /api/ideas/:id` and the `delete_idea` MCP tool, both limited to the caller's projects). Its board card, dependency links and readiness history go with it, documents stop linking to it, and tasks that depended on it lose that dependency. A linked GitHub issue is not touched, and task numbers are never reused. To reject work but keep the record, set the task's status to **Denied** instead.
+
+## Archiving Done Cards
+
+Cards in the **Done** column can be archived so the column does not grow forever: **Archive** on a done card, **Archive all done** on the Done column header (after a confirmation), `POST /api/board/:id/archive`, `POST /api/board/archive-done` with `{"projectId": ...}`, or the `archive_board_card` MCP tool. Cards in other columns are rejected (`409`).
+
+Archived cards leave the board (`GET /api/board`, `list_board`) and are listed in the project's **Archive** view (`/projects/:id/archive`), by `GET /api/board/archived`, and by the `list_archived_cards` MCP tool. The task keeps its record, dependencies, readiness history and GitHub link, and still counts as done for the tasks that depend on it. Task edits and GitHub pulls keep refreshing an archived card, but never bring it back; an archived card cannot be moved or edited, and its task cannot be taken off the board. **Unarchive** (`POST /api/board/:id/unarchive`, `unarchive_board_card`) returns it to Done.
+
+Project exports are bundle version 3 and carry each card's `archivedAt`; version 1 and 2 bundles still import.
 
 ## Task Dependencies
 
