@@ -104,7 +104,7 @@ const boardApi = (failures: ApiFailures = { failing: new Set() }) => {
       const path = String(input);
       const method = init?.method ?? "GET";
       if (failures.failing.has(`${method} ${path}`)) {
-        return jsonResponse({ error: "Server exploded" }, 500);
+        return jsonResponse({ error: `${method} ${path} failed` }, 500);
       }
       if (path === "/api/auth/me") {
         return jsonResponse({ authenticated: true, username: "admin" });
@@ -236,6 +236,54 @@ describe("archiving from the board", () => {
       ([input]) => String(input) === "/api/board/archive-done",
     ) as [string, RequestInit];
     expect(JSON.parse(String(init.body))).toEqual({ projectId: project.id });
+  });
+
+  it("keeps the dialog open with its error when archiving fails", async () => {
+    const failures: ApiFailures = {
+      failing: new Set(["POST /api/board/archive-done"]),
+    };
+    await renderApp(`/projects/${project.id}/board`, failures);
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Archive all done" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Archive Done Cards",
+    });
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Archive Cards" }),
+    );
+
+    expect(
+      await within(dialog).findByText("POST /api/board/archive-done failed"),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("dialog", { name: "Archive Done Cards" }),
+    ).toBeTruthy();
+  });
+
+  it("reports a failed refresh after archiving the done column", async () => {
+    const failures: ApiFailures = { failing: new Set() };
+    await renderApp(`/projects/${project.id}/board`, failures);
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Archive all done" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Archive Done Cards",
+    });
+    failures.failing.add("GET /api/board");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Archive Cards" }),
+    );
+
+    expect(await screen.findByText("GET /api/board failed")).toBeTruthy();
+    expect(screen.getByText("Archived 1 done card.")).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Archive Done Cards" }),
+      ).toBeNull(),
+    );
   });
 });
 

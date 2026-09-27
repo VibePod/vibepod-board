@@ -1320,10 +1320,16 @@ const App = () => {
       "/api/board/archive-done",
       { method: "POST", body: JSON.stringify({ projectId }) },
     );
+    // The cards are archived: close the dialog before refreshing, so a
+    // refresh failure is reported globally instead of inside the dialog.
     setArchiveDoneTarget(null);
-    await loadState();
     const count = result.items.length;
     setNotice(`Archived ${count} done card${count === 1 ? "" : "s"}.`);
+    try {
+      await loadState();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load board");
+    }
   };
 
   const unarchiveCard = async (card: BoardCard) => {
