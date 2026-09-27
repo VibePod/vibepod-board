@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { filterAndSortTasks } from "../src/client/taskListUtils.js";
-import type { Idea } from "../src/shared/types.js";
+import {
+  filterAndSortTasks,
+  filterColumnsBySearch,
+  matchesTaskSearch,
+} from "../src/client/taskListUtils.js";
+import type { BoardCard, BoardColumns, Idea } from "../src/shared/types.js";
 
 const task = (
   patch: Partial<Idea> & Pick<Idea, "id" | "title" | "createdAt">,
@@ -120,5 +124,156 @@ describe("task list utilities", () => {
     expect(
       filterAndSortTasks(tasks, { sort: "rating_desc" }).map((item) => item.id),
     ).toEqual(["high", "mid-new", "mid-old", "low", "unrated"]);
+  });
+});
+
+describe("task search matcher", () => {
+  const target = {
+    projectKey: "VP",
+    taskNumber: 85,
+    title: "Publish launch page",
+    summary: "Marketing release",
+    details: "Ship before the 2026 conference",
+    labels: ["frontend"],
+  };
+
+  it("matches the full task ID in any case with surrounding whitespace", () => {
+    expect(matchesTaskSearch(target, "VP-85")).toBe(true);
+    expect(matchesTaskSearch(target, "vp-85")).toBe(true);
+    expect(matchesTaskSearch(target, "  Vp-85 ")).toBe(true);
+  });
+
+  it("matches task IDs exactly rather than by prefix", () => {
+    expect(matchesTaskSearch({ ...target, taskNumber: 850 }, "VP-85")).toBe(
+      false,
+    );
+    expect(matchesTaskSearch(target, "VP-8")).toBe(false);
+    expect(
+      matchesTaskSearch(
+        { ...target, taskNumber: 850, details: "Follow-up to VP-85" },
+        "VP-85",
+      ),
+    ).toBe(false);
+  });
+
+  it("matches bare and hash-prefixed numbers by task number only", () => {
+    expect(matchesTaskSearch(target, "85")).toBe(true);
+    expect(matchesTaskSearch(target, "#85")).toBe(true);
+    expect(matchesTaskSearch(target, " #85 ")).toBe(true);
+    expect(
+      matchesTaskSearch(
+        { ...target, taskNumber: 12, title: "Raise limit to 85 requests" },
+        "85",
+      ),
+    ).toBe(false);
+    expect(matchesTaskSearch({ ...target, taskNumber: 850 }, "#85")).toBe(
+      false,
+    );
+    expect(matchesTaskSearch(target, "2026")).toBe(false);
+  });
+
+  it("never matches ID or number queries on targets without a task", () => {
+    const card = { projectKey: "VP", title: "Card 85", labels: [] };
+    expect(matchesTaskSearch(card, "85")).toBe(false);
+    expect(matchesTaskSearch(card, "VP-85")).toBe(false);
+    expect(matchesTaskSearch(card, "card")).toBe(true);
+  });
+
+  it("keeps case-insensitive substring search on text fields", () => {
+    expect(matchesTaskSearch(target, "")).toBe(true);
+    expect(matchesTaskSearch(target, "   ")).toBe(true);
+    expect(matchesTaskSearch(target, "LAUNCH")).toBe(true);
+    expect(matchesTaskSearch(target, "marketing")).toBe(true);
+    expect(matchesTaskSearch(target, "before the 2026")).toBe(true);
+    expect(matchesTaskSearch(target, "frontend")).toBe(true);
+    expect(matchesTaskSearch(target, "backend")).toBe(false);
+  });
+
+  it("treats ID-shaped text for another project key as plain text", () => {
+    const covid = { ...target, details: "Tracks COVID-19 guidance" };
+    expect(matchesTaskSearch(covid, "covid-19")).toBe(true);
+    expect(matchesTaskSearch(target, "AB-85")).toBe(false);
+  });
+
+  it("finds tasks by ID in the task list", () => {
+    const tasks = [
+      task({
+        id: "target",
+        taskNumber: 85,
+        title: "Target",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+      task({
+        id: "longer",
+        taskNumber: 850,
+        title: "Longer number",
+        createdAt: "2026-02-01T00:00:00.000Z",
+      }),
+      task({
+        id: "mentions",
+        taskNumber: 3,
+        title: "Mentions 85 in text",
+        createdAt: "2026-03-01T00:00:00.000Z",
+      }),
+    ];
+    const ids = (search: string) =>
+      filterAndSortTasks(tasks, { search, projectKey: "VP" }).map(
+        (item) => item.id,
+      );
+
+    expect(ids("vp-85")).toEqual(["target"]);
+    expect(ids("85")).toEqual(["target"]);
+    expect(ids("#85")).toEqual(["target"]);
+    expect(ids("mentions")).toEqual(["mentions"]);
+  });
+});
+
+describe("board search", () => {
+  const card = (patch: Partial<BoardCard> & Pick<BoardCard, "id">) =>
+    ({
+      projectId: "project-1",
+      title: "",
+      details: "",
+      column: "ready",
+      labels: [],
+      dependsOn: [],
+      blockedBy: [],
+      ...patch,
+    }) as BoardCard;
+
+  it("filters every column by the linked task, or the card itself", () => {
+    const ideas = new Map([
+      [
+        "idea-85",
+        task({
+          id: "idea-85",
+          taskNumber: 85,
+          title: "Linked task",
+          summary: "Only on the task",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        }),
+      ],
+    ]);
+    const columns: BoardColumns = {
+      ready: [card({ id: "linked", ideaId: "idea-85", title: "Linked task" })],
+      planned: [card({ id: "loose", title: "Loose card", labels: ["ops"] })],
+      in_progress: [],
+      review: [card({ id: "other", title: "Other", details: "Only on 85" })],
+      done: [],
+    };
+    const ids = (search: string) =>
+      Object.values(filterColumnsBySearch(columns, search, "VP", ideas))
+        .flat()
+        .map((item) => item.id);
+
+    expect(ids("")).toEqual(["linked", "loose", "other"]);
+    expect(ids("VP-85")).toEqual(["linked"]);
+    expect(ids("85")).toEqual(["linked"]);
+    expect(ids("only on the task")).toEqual(["linked"]);
+    expect(ids("OPS")).toEqual(["loose"]);
+    expect(ids("only on")).toEqual(["linked", "other"]);
+    expect(filterColumnsBySearch(columns, "85", "VP", ideas).planned).toEqual(
+      [],
+    );
   });
 });

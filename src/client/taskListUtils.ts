@@ -1,4 +1,9 @@
-import type { Idea, IdeaStatus } from "../shared/types.js";
+import {
+  type BoardColumns,
+  boardColumns,
+  type Idea,
+  type IdeaStatus,
+} from "../shared/types.js";
 
 export const taskSortOptions = [
   "created_desc",
@@ -16,6 +21,8 @@ export type TaskListFilters = {
   status?: IdeaStatus | "";
   label?: string;
   search?: string;
+  /** Project key used to match full task ID queries such as "VP-85". */
+  projectKey?: string;
   /** Task id to work-order position, used by the dependency_asc sort. */
   workOrder?: Map<string, number>;
 };
@@ -24,7 +31,6 @@ export const filterAndSortTasks = (
   tasks: Idea[],
   filters: TaskListFilters,
 ): Idea[] => {
-  const search = filters.search?.trim().toLocaleLowerCase() ?? "";
   const label = filters.label?.trim() ?? "";
   const status = filters.status ?? "";
   const sort = filters.sort ?? "created_desc";
@@ -37,15 +43,73 @@ export const filterAndSortTasks = (
       if (label && !task.labels.includes(label)) {
         return false;
       }
-      if (!search) {
-        return true;
-      }
-      return [task.title, task.summary, task.details, ...task.labels]
-        .join(" ")
-        .toLocaleLowerCase()
-        .includes(search);
+      return matchesTaskSearch(
+        { ...task, projectKey: filters.projectKey },
+        filters.search,
+      );
     })
     .sort((a, b) => compareTasks(a, b, sort, filters.workOrder));
+};
+
+/** What a search query can see of a task or board card. */
+export type TaskSearchTarget = {
+  projectKey?: string;
+  /** Absent for board cards that are not linked to a task. */
+  taskNumber?: number;
+  title: string;
+  summary?: string;
+  details?: string;
+  labels: string[];
+};
+
+const taskIdQuery = /^([a-z]+)-(\d+)$/;
+const taskNumberQuery = /^#?(\d+)$/;
+
+/**
+ * Shared search for the task list and the board. A bare number ("85", "#85") or a full
+ * task ID of the target's project ("VP-85", any case) matches that task number exactly;
+ * anything else is a case-insensitive substring search over the text fields.
+ */
+export const matchesTaskSearch = (
+  target: TaskSearchTarget,
+  search: string | undefined,
+): boolean => {
+  const query = search?.trim().toLocaleLowerCase() ?? "";
+  if (!query) {
+    return true;
+  }
+  const numberMatch = taskNumberQuery.exec(query);
+  if (numberMatch) {
+    return target.taskNumber === Number(numberMatch[1]);
+  }
+  const idMatch = taskIdQuery.exec(query);
+  if (idMatch && idMatch[1] === target.projectKey?.toLocaleLowerCase()) {
+    return target.taskNumber === Number(idMatch[2]);
+  }
+  return [target.title, target.summary, target.details, ...target.labels]
+    .join(" ")
+    .toLocaleLowerCase()
+    .includes(query);
+};
+
+/**
+ * Filters every board column with the task search. Cards linked to a task match on the
+ * task; cards without one match on their own title, details and labels.
+ */
+export const filterColumnsBySearch = (
+  columns: BoardColumns,
+  search: string,
+  projectKey: string,
+  ideaById: Map<string, Idea>,
+): BoardColumns => {
+  const filtered = { ...columns };
+  for (const column of boardColumns) {
+    filtered[column] = (columns[column] ?? []).filter((card) => {
+      const idea = card.ideaId ? ideaById.get(card.ideaId) : undefined;
+      return matchesTaskSearch({ ...(idea ?? card), projectKey }, search);
+    });
+  }
+  return filtered;
 };
 
 const compareTasks = (

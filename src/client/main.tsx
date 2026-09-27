@@ -808,6 +808,7 @@ const App = () => {
         status: taskStatusFilter,
         label: taskLabelFilter,
         search: taskSearch,
+        projectKey: selectedProject?.key,
         workOrder: workOrderPositions,
       }),
     [
@@ -816,6 +817,7 @@ const App = () => {
       taskStatusFilter,
       taskLabelFilter,
       taskSearch,
+      selectedProject?.key,
       workOrderPositions,
     ],
   );
@@ -1862,7 +1864,7 @@ const App = () => {
               <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm">
                 <TextInput
                   label="Search"
-                  placeholder="Search title, details, labels"
+                  placeholder="Search ID, title, details, labels"
                   value={taskSearch}
                   onChange={(event) => setTaskSearch(event.currentTarget.value)}
                 />
