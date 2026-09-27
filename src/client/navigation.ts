@@ -2,6 +2,7 @@ export const navigationViews = [
   "projects",
   "ideas",
   "board",
+  "archive",
   "documents",
 ] as const;
 
@@ -15,12 +16,14 @@ export type NavigationState = {
 const projectSections: Record<Exclude<NavigationView, "projects">, string> = {
   ideas: "tasks",
   board: "board",
+  archive: "archive",
   documents: "notes",
 };
 
 const sectionViews: Record<string, Exclude<NavigationView, "projects">> = {
   tasks: "ideas",
   board: "board",
+  archive: "archive",
   notes: "documents",
 };
 

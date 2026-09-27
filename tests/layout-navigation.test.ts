@@ -31,6 +31,14 @@ describe("layout navigation helpers", () => {
     });
   });
 
+  it("keeps the archive view when switching projects", () => {
+    expect(navigationForProjectSelection("archive", "project-2")).toEqual({
+      activeView: "archive",
+      selectedProjectId: "project-2",
+    });
+    expect(shouldShowProjectSidebar("archive", true)).toBe(true);
+  });
+
   it("shows project side navigation only inside a valid project", () => {
     expect(shouldShowProjectSidebar("projects", false)).toBe(false);
     expect(shouldShowProjectSidebar("ideas", false)).toBe(false);
