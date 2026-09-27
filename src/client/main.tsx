@@ -101,6 +101,7 @@ import {
 import { ArchiveView } from "./ArchiveView.js";
 import { type ArchivedTaskRow, archivedTaskRows } from "./archiveUtils.js";
 import vibepodIconUrl from "./assets/icon.png";
+import { CopyableCode } from "./CopyableCode.js";
 import { DeleteTaskDialog, type DeleteTaskTarget } from "./DeleteTaskDialog.js";
 import { GitHubIssueBadge, GitHubSyncPanel } from "./GitHubIssue.js";
 import { type GitHubStatus, issueLinkForIdea } from "./githubIssue.js";
@@ -3218,7 +3219,11 @@ const App = () => {
                     New Token
                   </Badge>
                 </Group>
-                <Code block>{createdToken.token}</Code>
+                <CopyableCode
+                  value={createdToken.token}
+                  label="token"
+                  variant="block"
+                />
                 <Stack className="token-config" gap="md">
                   {integrationExamplesForToken(createdToken.token).map(
                     (example) => (
@@ -3232,16 +3237,18 @@ const App = () => {
                         <Stack gap="sm">
                           <Title order={4}>{example.name}</Title>
                           {example.command && (
-                            <pre>
-                              <code>{example.command}</code>
-                            </pre>
+                            <CopyableCode
+                              value={example.command}
+                              label={`${example.name} command`}
+                            />
                           )}
                           <Text size="sm" fw={700}>
                             {example.configLabel}
                           </Text>
-                          <pre>
-                            <code>{example.config}</code>
-                          </pre>
+                          <CopyableCode
+                            value={example.config}
+                            label={`${example.name} config`}
+                          />
                         </Stack>
                       </Paper>
                     ),
@@ -3364,7 +3371,11 @@ const App = () => {
               >
                 <Stack gap="xs">
                   <Title order={3}>{endpoint.label}</Title>
-                  <Code>{endpoint.url}</Code>
+                  <CopyableCode
+                    value={endpoint.url}
+                    label={`${endpoint.label} URL`}
+                    variant="inline"
+                  />
                   <Text c="dimmed">{endpoint.description}</Text>
                 </Stack>
               </Paper>
@@ -3400,15 +3411,17 @@ const App = () => {
                   {example.command && (
                     <>
                       <Title order={4}>Command</Title>
-                      <pre>
-                        <code>{example.command}</code>
-                      </pre>
+                      <CopyableCode
+                        value={example.command}
+                        label={`${example.name} command`}
+                      />
                     </>
                   )}
                   <Title order={4}>{example.configLabel}</Title>
-                  <pre>
-                    <code>{example.config}</code>
-                  </pre>
+                  <CopyableCode
+                    value={example.config}
+                    label={`${example.name} config`}
+                  />
                   <Text className="verify" c="dimmed">
                     {example.verify}
                   </Text>

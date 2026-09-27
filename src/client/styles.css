@@ -804,6 +804,39 @@ body {
   overflow-wrap: anywhere;
 }
 
+.copyable-code {
+  position: relative;
+}
+
+/* Keep room for the copy button so it never covers the code. */
+.copyable-code > pre,
+.copyable-code > .mantine-Code-root {
+  padding-right: 44px;
+}
+
+.copyable-code > .copy-value-button {
+  position: absolute;
+  right: 6px;
+  top: 6px;
+}
+
+.copyable-code > pre + .copy-value-button {
+  color: var(--app-code-text);
+}
+
+.copyable-code > pre + .copy-value-button:hover {
+  background: rgb(255 255 255 / 12%);
+}
+
+.copyable-inline {
+  max-width: 100%;
+}
+
+.copyable-inline .mantine-Code-root {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .task-overview-modal-body {
   background: var(--app-surface-muted);
 }
