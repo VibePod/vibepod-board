@@ -27,6 +27,7 @@ from vibepod_board.services.common import (
     transactional,
 )
 from vibepod_board.services.dependencies import decorate_idea, decorate_ideas, replace_dependencies
+from vibepod_board.services.github_link import link_url
 from vibepod_board.services.projects import list_projects, resolve_project_id_for_create
 from vibepod_board.tables import BoardCardRow, IdeaRow
 
@@ -47,7 +48,7 @@ def list_ideas(
     return decorate_ideas(session, [idea_from_row(row) for row in rows])
 
 
-def _next_task_number(session: Session, project_id: str) -> int:
+def next_task_number(session: Session, project_id: str) -> int:
     highest = session.exec(
         select(func.coalesce(func.max(IdeaRow.task_number), 0)).where(
             IdeaRow.project_id == project_id
@@ -69,6 +70,7 @@ def create_idea(
     depends_on: Sequence[str] | None = None,
     repository_local_path: str | None = None,
     repository_remote_url: str | None = None,
+    github_issue_url: str | None = None,
 ) -> Idea:
     assert_title(title, "Idea")
     resolved_project_id = resolve_project_id_for_create(
@@ -79,7 +81,7 @@ def create_idea(
     idea = IdeaRow(
         id=new_id(),
         project_id=resolved_project_id,
-        task_number=_next_task_number(session, resolved_project_id),
+        task_number=next_task_number(session, resolved_project_id),
         title=title.strip(),
         summary=(summary or "").strip(),
         details=(details or "").strip(),
@@ -91,6 +93,8 @@ def create_idea(
         created_at=timestamp,
         updated_at=timestamp,
     )
+    if github_issue_url:
+        link_url(session, idea, github_issue_url)
     session.add(idea)
     session.flush()
     if depends_on:
@@ -113,6 +117,7 @@ def update_idea(
     status: IdeaStatus | None = None,
     repository_local_path: str | None = None,
     repository_remote_url: str | None = None,
+    github_issue_url: str | None = None,
 ) -> Idea:
     idea = require_idea(session, idea_id)
     assert_can_access_project(access, idea.project_id)
@@ -131,6 +136,8 @@ def update_idea(
         idea.repository_local_path = normalize_optional_text(repository_local_path)
     if repository_remote_url is not None:
         idea.repository_remote_url = normalize_optional_text(repository_remote_url)
+    if github_issue_url is not None:
+        link_url(session, idea, github_issue_url)
 
     next_status = IdeaStatus(status or idea.status)
     # Writing details or acceptance criteria is refinement, so a bare idea moves along.
@@ -162,7 +169,7 @@ def set_board_availability(
         idea.status = IdeaStatus.READY
         idea.updated_at = timestamp
         session.flush()
-        ensure_card(session, idea, timestamp=timestamp)
+        ensure_card(session, idea, timestamp)
         add_activity(session, "idea.ready", f"Marked idea ready: {idea.title}", timestamp)
         return decorate_idea(session, idea)
 

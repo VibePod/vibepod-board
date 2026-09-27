@@ -8,6 +8,7 @@ from sqlmodel import SQLModel
 
 from vibepod_board.db import migrate
 
+HEAD = "0002"
 LEGACY_SCHEMA = (Path(__file__).parent / "legacy_schema.sql").read_text()
 # The first TS schema, before repository, readiness and dependency support.
 ORIGINAL_SCHEMA = LEGACY_SCHEMA.split("alter table board_cards add column", 1)[0]
@@ -77,7 +78,7 @@ def test_adopts_a_database_created_by_the_typescript_server(empty_db: Engine) ->
 
     migrate(empty_db)
 
-    assert revision(empty_db) == "0001"
+    assert revision(empty_db) == HEAD
     assert schema_diff(empty_db) == []
     with empty_db.connect() as connection:
         assert connection.execute(text("select key from projects")).scalars().all() == ["APP"]
@@ -103,5 +104,5 @@ def test_catches_up_an_original_typescript_database(empty_db: Engine) -> None:
 
 def test_migrating_twice_is_a_no_op(db: Engine) -> None:
     migrate(db)
-    assert revision(db) == "0001"
+    assert revision(db) == HEAD
     assert schema_diff(db) == []

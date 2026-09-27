@@ -92,6 +92,8 @@ import {
   type ReadinessEvent,
 } from "../shared/types.js";
 import vibepodIconUrl from "./assets/icon.png";
+import { GitHubIssueBadge, GitHubSyncPanel } from "./GitHubIssue.js";
+import { type GitHubStatus, issueLinkForIdea } from "./githubIssue.js";
 import {
   navigationForProjectSelection,
   projectSelectorOptions,
@@ -373,6 +375,7 @@ const App = () => {
   const [isMcpGuideOpen, setIsMcpGuideOpen] = useState(false);
   const [isTokenManagerOpen, setIsTokenManagerOpen] = useState(false);
   const [tokens, setTokens] = useState<ApiTokenSummary[]>([]);
+  const [githubStatus, setGitHubStatus] = useState<GitHubStatus | null>(null);
   const [createdToken, setCreatedToken] = useState<CreatedTokenState>(null);
   const [tokenDraft, setTokenDraft] = useState<CreateApiTokenInput>(
     emptyTokenDraft(),
@@ -380,12 +383,15 @@ const App = () => {
 
   const loadState = async () => {
     setError("");
-    const [projects, ideas, board, documents] = await Promise.all([
+    const [projects, ideas, board, documents, github] = await Promise.all([
       api<{ items: Project[] }>("/api/projects"),
       api<{ items: Idea[] }>("/api/ideas"),
       api<{ columns: BoardColumns }>("/api/board"),
       api<{ items: PlanDocument[] }>("/api/documents"),
+      // Sync buttons stay disabled when the status cannot be read.
+      api<GitHubStatus>("/api/github").catch(() => null),
     ]);
+    setGitHubStatus(github);
     setState({
       projects: projects.items,
       ideas: ideas.items,
@@ -424,6 +430,13 @@ const App = () => {
     setSelectedProjectId("");
     setActiveView("projects");
     setIsTokenManagerOpen(false);
+  };
+
+  const syncGitHubIssue = async (ideaId: string, action: "push" | "pull") => {
+    await api<{ item: Idea }>(`/api/ideas/${ideaId}/github/${action}`, {
+      method: "POST",
+    });
+    await loadState();
   };
 
   const loadTokens = async () => {
@@ -1064,7 +1077,8 @@ const App = () => {
       JSON.stringify(draft.labels) !== JSON.stringify(baseline.labels) ||
       JSON.stringify(draft.dependsOn) !== JSON.stringify(baseline.dependsOn) ||
       draft.repositoryLocalPath !== baseline.repositoryLocalPath ||
-      draft.repositoryRemoteUrl !== baseline.repositoryRemoteUrl
+      draft.repositoryRemoteUrl !== baseline.repositoryRemoteUrl ||
+      draft.githubIssueUrl !== baseline.githubIssueUrl
     );
   };
 
@@ -1792,6 +1806,7 @@ const App = () => {
                             <Title order={3}>{taskCard.title}</Title>
                             {taskCard.isBlocked &&
                               blockedBadge(taskCard.blockedByCount)}
+                            {githubIssueBadge(idea)}
                           </Group>
                           {labelBadges(taskCard.labels)}
                           {idea.readinessScore !== undefined && (
@@ -1959,6 +1974,12 @@ const App = () => {
                         >
                           <Stack gap="xs">
                             <Title order={4}>{card.title}</Title>
+                            {card.ideaId &&
+                              ideaById.has(card.ideaId) &&
+                              githubIssueBadge(
+                                ideaById.get(card.ideaId) as Idea,
+                                "xs",
+                              )}
                             {card.blockedBy.length > 0 && (
                               <Group
                                 className="board-card-blocked"
@@ -2323,6 +2344,11 @@ const App = () => {
                 {statusBadge(taskOverview.status)}
               </Group>
               {labelBadges(taskOverview.labels)}
+              <GitHubSyncPanel
+                idea={taskViewIdea}
+                status={githubStatus}
+                onSync={(action) => syncGitHubIssue(taskViewIdea.id, action)}
+              />
             </Stack>
 
             <Paper className="overview-section" withBorder radius="md" p="md">
@@ -2645,6 +2671,15 @@ const App = () => {
                   placeholder="git@github.com:owner/repo.git"
                 />
               </SimpleGrid>
+              <TextInput
+                label="GitHub Issue URL"
+                description="Links the task to an issue. Leave empty to unlink."
+                value={taskModal.draft.githubIssueUrl}
+                onChange={(event) =>
+                  updateTaskDraft({ githubIssueUrl: event.target.value })
+                }
+                placeholder="https://github.com/owner/repo/issues/123"
+              />
               <MultiSelect
                 label="Depends on"
                 description="Tasks that must be done before this one. Options that would create a cycle are hidden."
@@ -3098,6 +3133,11 @@ const labelBadges = (labels: string[], size: "xs" | "sm" = "sm"): ReactNode =>
       ))}
     </Group>
   ) : null;
+
+const githubIssueBadge = (idea: Idea, size: "xs" | "sm" = "sm"): ReactNode => {
+  const link = issueLinkForIdea(idea);
+  return link ? <GitHubIssueBadge link={link} size={size} /> : null;
+};
 
 const blockedBadge = (blockedByCount: number): ReactNode => (
   <Badge

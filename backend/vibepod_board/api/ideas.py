@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Query, Request, status
+from fastapi import APIRouter, Body, Query, status
 
 from vibepod_board.api.models import (
     DependencyAdd,
@@ -13,10 +13,8 @@ from vibepod_board.api.models import (
 from vibepod_board.api.responses import Item, Items
 from vibepod_board.auth import AccessDep
 from vibepod_board.db import SessionDep
-from vibepod_board.errors import NotFound
-from vibepod_board.github import create_issue
-from vibepod_board.schemas import BoardCard, Idea, ReadinessEvent, TaskWorkOrder
-from vibepod_board.services import board, dependencies, ideas, readiness
+from vibepod_board.schemas import Idea, ReadinessEvent, TaskWorkOrder
+from vibepod_board.services import dependencies, ideas, readiness
 
 router = APIRouter(prefix="/api", tags=["ideas"])
 
@@ -84,21 +82,6 @@ def work_order(
     session: SessionDep, access: AccessDep, project_id: ProjectFilter = None
 ) -> TaskWorkOrder:
     return ideas.work_order(session, access, _project_filter(project_id))
-
-
-@router.post("/ideas/{idea_id}/sync-github")
-def sync_github(
-    idea_id: str, request: Request, session: SessionDep, access: AccessDep
-) -> dict[str, object]:
-    settings = request.app.state.settings
-    link = board.LOCAL
-    if settings.github_token and settings.github_repository:
-        idea = next((i for i in ideas.list_ideas(session, access) if i.id == idea_id), None)
-        if idea is None:
-            raise NotFound(f"Idea not found: {idea_id}")
-        link = create_issue(settings, idea)
-    card: BoardCard = board.create_card_from_idea(session, access, idea_id, link)
-    return {"mode": link.mode, "card": card.model_dump(mode="json")}
 
 
 @router.post("/ideas/{idea_id}/readiness")

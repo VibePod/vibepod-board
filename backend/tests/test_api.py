@@ -232,7 +232,6 @@ def test_creates_projects_and_scopes_project_work_through_query_params(
     task = create_idea_via_api(agent, projectId=project_id, title="Publish landing page")
     create_idea_via_api(agent, projectId=other_project_id, title="Backlog task")
     mark_ready_via_api(agent, task["id"])
-    assert agent.post(f"/api/ideas/{task['id']}/sync-github", json={}).status_code == 200
     response = agent.post(
         "/api/documents", json={"projectId": project_id, "title": "Launch notes", "kind": "notes"}
     )
@@ -303,23 +302,6 @@ def test_creates_ideas_and_lists_them(client: TestClient) -> None:
     assert response.status_code == 200
     assert len(response.json()["items"]) == 1
     assert response.json()["items"][0]["title"] == "Kanban processing"
-
-
-def test_promotes_a_ready_idea_into_the_board_via_local_github_sync_mode(
-    client: TestClient,
-) -> None:
-    agent = login(client)
-    created = agent.post("/api/ideas", json={"title": "Sync bridge"})
-    idea_id = created.json()["item"]["id"]
-
-    mark_ready_via_api(agent, idea_id)
-    sync = agent.post(f"/api/ideas/{idea_id}/sync-github", json={})
-    assert sync.status_code == 200
-    assert sync.json()["mode"] == "local"
-    assert sync.json()["card"]["column"] == "ready"
-
-    board = get_board(agent)
-    assert len(board["columns"]["ready"]) == 1
 
 
 def test_updates_board_card_branch_names_through_board_api(client: TestClient) -> None:

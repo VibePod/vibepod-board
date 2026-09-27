@@ -118,6 +118,9 @@ async def test_lists_every_tool_and_the_state_resource(
         "create_document",
         "update_document",
         "list_documents",
+        "push_github_issue",
+        "pull_github_issue",
+        "upsert_github_issue",
     }
     assert resources == ["vibepod-board://state"]
     assert [project["key"] for project in state["projects"]] == ["APP"]

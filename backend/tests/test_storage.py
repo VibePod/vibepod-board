@@ -11,9 +11,7 @@ from vibepod_board.enums import BoardColumn, DocumentKind, IdeaStatus
 from vibepod_board.errors import BadRequest, Conflict
 from vibepod_board.schemas import BoardCard
 from vibepod_board.services.board import (
-    LOCAL,
     board_columns,
-    create_card_from_idea,
     move_card,
     update_card,
 )
@@ -269,7 +267,8 @@ def test_stores_execution_plan_documents_linked_to_ideas_and_board_cards(
     session: Session,
 ) -> None:
     idea = create_idea(session, admin, title="MCP bridge", labels=["mcp"])
-    card = create_card_from_idea(session, admin, mark_ready(session, admin, idea.id).id, LOCAL)
+    mark_ready(session, admin, idea.id)
+    card = board_columns(session, admin).ready[0]
 
     document = create_document(
         session,

@@ -66,6 +66,16 @@ class IdeaRow(SQLModel, table=True):
     __table_args__ = (
         UniqueConstraint("project_id", "task_number", name="ideas_project_id_task_number_key"),
         Index("ideas_project_updated_idx", "project_id", text("updated_at DESC")),
+        Index(
+            "ideas_github_issue_key",
+            "project_id",
+            "github_repository",
+            "github_issue_number",
+            unique=True,
+            postgresql_where=text(
+                "github_repository IS NOT NULL AND github_issue_number IS NOT NULL"
+            ),
+        ),
     )
 
     id: str = Field(sa_column=Column(Text, primary_key=True))
@@ -79,6 +89,10 @@ class IdeaRow(SQLModel, table=True):
     acceptance_criteria: list[str] = _json_list()
     github_issue_url: str | None = _text()
     github_issue_number: int | None = Field(default=None, sa_column=Column(Integer))
+    github_repository: str | None = _text()
+    github_issue_state: str | None = _text()
+    github_issue_updated_at: datetime | None = _timestamp(nullable=True)
+    github_synced_at: datetime | None = _timestamp(nullable=True)
     repository_local_path: str | None = _text()
     repository_remote_url: str | None = _text()
     readiness_score: int | None = Field(default=None, sa_column=Column(Integer))
