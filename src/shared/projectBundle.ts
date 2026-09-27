@@ -83,6 +83,7 @@ const boardCardSchema = z
     readinessScore: optionalReadinessScoreSchema,
     readinessReason: optionalTextSchema,
     readinessEvaluatedAt: timestampSchema.optional(),
+    archivedAt: timestampSchema.optional(),
     createdAt: timestampSchema,
     updatedAt: timestampSchema,
   })
@@ -182,6 +183,25 @@ const validateRelationships = (bundle: ProjectBundle, ctx: z.RefinementCtx) => {
       }
     });
   }
+  bundle.boardCards.forEach((card, index) => {
+    if (card.archivedAt === undefined) {
+      return;
+    }
+    if (bundle.bundleVersion < 3) {
+      addIssue(
+        ctx,
+        ["boardCards", index, "archivedAt"],
+        "Archived board cards require bundleVersion 3",
+      );
+    }
+    if (card.column !== "done") {
+      addIssue(
+        ctx,
+        ["boardCards", index, "column"],
+        `Archived board card must be in done: ${card.id}`,
+      );
+    }
+  });
   for (const id of duplicateValues(bundle.boardCards.map((card) => card.id))) {
     addIssue(ctx, ["boardCards"], `Duplicate board card id: ${id}`);
   }
@@ -277,7 +297,7 @@ const validateRelationships = (bundle: ProjectBundle, ctx: z.RefinementCtx) => {
 
 export const projectBundleSchema = z
   .object({
-    bundleVersion: z.union([z.literal(1), z.literal(2)]),
+    bundleVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
     exportedAt: timestampSchema,
     project: projectSchema,
     ideas: z.array(ideaSchema),

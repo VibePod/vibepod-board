@@ -175,3 +175,22 @@ def test_rejects_two_tasks_linked_to_the_same_issue() -> None:
     _linked(bundle, 2, ("O/R", "o/r"))
     with pytest.raises(ValidationError, match="Duplicate GitHub issue link: o/r#1"):
         parse_project_bundle(bundle)
+
+
+def test_accepts_archived_cards_in_version_3_only() -> None:
+    bundle = valid_bundle()
+    bundle["bundleVersion"] = 3
+    bundle["boardCards"][0].update(column="done", archivedAt=STAMP)
+    assert parse_project_bundle(bundle).board_cards[0].archived_at is not None
+
+    bundle["bundleVersion"] = 2
+    with pytest.raises(ValidationError, match="Archived board cards require bundleVersion 3"):
+        parse_project_bundle(bundle)
+
+
+def test_rejects_archived_cards_outside_the_done_column() -> None:
+    bundle = valid_bundle()
+    bundle["bundleVersion"] = 3
+    bundle["boardCards"][0].update(column="review", archivedAt=STAMP)
+    with pytest.raises(ValidationError, match="Archived board card must be in done: card-1"):
+        parse_project_bundle(bundle)

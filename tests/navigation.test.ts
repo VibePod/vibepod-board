@@ -32,6 +32,30 @@ describe("client navigation URLs", () => {
     });
   });
 
+  it("parses the project archive URL", () => {
+    expect(parseNavigationPath("/projects/project-1/archive")).toEqual({
+      activeView: "archive",
+      selectedProjectId: "project-1",
+    });
+    expect(parseNavigationPath("/projects/project%201/archive/")).toEqual({
+      activeView: "archive",
+      selectedProjectId: "project 1",
+    });
+  });
+
+  it("formats and round-trips the project archive URL", () => {
+    const navigation = {
+      activeView: "archive" as const,
+      selectedProjectId: "project 1",
+    };
+    expect(formatNavigationPath(navigation)).toBe(
+      "/projects/project%201/archive",
+    );
+    expect(parseNavigationPath(formatNavigationPath(navigation))).toEqual(
+      navigation,
+    );
+  });
+
   it("formats shareable project URLs", () => {
     expect(
       formatNavigationPath({ activeView: "projects", selectedProjectId: "" }),

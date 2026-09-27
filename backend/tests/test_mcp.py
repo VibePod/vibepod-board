@@ -122,6 +122,9 @@ async def test_lists_every_tool_and_the_state_resource(
         "pull_github_issue",
         "upsert_github_issue",
         "delete_idea",
+        "archive_board_card",
+        "unarchive_board_card",
+        "list_archived_cards",
     }
     assert resources == ["vibepod-board://state"]
     assert [project["key"] for project in state["projects"]] == ["APP"]
@@ -249,3 +252,35 @@ async def test_deletes_tasks_in_mapped_projects_only(
     deleted = await call(url, token, "delete_idea", id=scoped["mine"].id)
     assert deleted == {"id": scoped["mine"].id, "taskId": "APP-1", "dependents": []}
     assert (await call(url, token, "list_ideas"))["items"] == []
+
+
+async def test_archives_done_cards_in_mapped_projects_only(
+    server_url: str, scoped: dict[str, Any]
+) -> None:
+    url, token = server_url, scoped["token"]
+    card_id = scoped["mine_card"].id
+
+    with pytest.raises(ToolError, match="Only cards in the done column can be archived"):
+        await call(url, token, "archive_board_card", id=card_id)
+    await call(url, token, "move_board_card", id=card_id, column="done")
+
+    archived = await call(url, token, "archive_board_card", id=card_id)
+    assert archived["item"]["archivedAt"]
+    listed = await call(url, token, "list_board")
+    assert all(cards == [] for cards in listed["columns"].values())
+    archive = await call(url, token, "list_archived_cards", projectId=scoped["app"].id)
+    assert [item["id"] for item in archive["items"]] == [card_id]
+
+    with pytest.raises(ToolError, match="Board card is archived"):
+        await call(url, token, "move_board_card", id=card_id, column="review")
+    with pytest.raises(ToolError, match="Token is not allowed to access project"):
+        await call(url, token, "archive_board_card", id=scoped["their_card"].id)
+    with pytest.raises(ToolError, match="Token is not allowed to access project"):
+        await call(url, token, "list_archived_cards", projectId=scoped["api"].id)
+
+    restored = await call(url, token, "unarchive_board_card", id=card_id)
+    assert restored["item"]["column"] == "done"
+    assert "archivedAt" not in restored["item"]
+    listed = await call(url, token, "list_board")
+    assert [card["id"] for card in listed["columns"]["done"]] == [card_id]
+    assert (await call(url, token, "list_archived_cards"))["items"] == []

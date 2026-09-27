@@ -343,7 +343,11 @@ def create_mcp_server(
     def mark_idea_ready(id: TaskId) -> dict[str, Any]:
         return run(lambda s, a: {"item": ideas.mark_ready(s, a, id)})
 
-    @mcp.tool(title="List Board", description="Read the Kanban board columns.")
+    @mcp.tool(
+        title="List Board",
+        description="Read the Kanban board columns. Archived cards are left out; see "
+        "list_archived_cards.",
+    )
     def list_board(projectId: ProjectFilter = None) -> dict[str, Any]:  # noqa: N803
         return run(lambda s, a: {"columns": board.board_columns(s, a, projectId)})
 
@@ -353,6 +357,29 @@ def create_mcp_server(
     )
     def move_board_card(id: TaskId, column: BoardColumn) -> dict[str, Any]:
         return run(lambda s, a: {"item": board.move_card(s, a, id, column)})
+
+    @mcp.tool(
+        title="Archive Board Card",
+        description="Archive a card from the done column: it leaves the board (list_board) "
+        "but keeps its task, dependencies, readiness history and GitHub link, and still "
+        "counts as done. Cards in other columns are rejected.",
+    )
+    def archive_board_card(id: TaskId) -> dict[str, Any]:
+        return run(lambda s, a: {"item": board.archive_card(s, a, id)})
+
+    @mcp.tool(
+        title="Unarchive Board Card",
+        description="Put an archived card back on the board in the done column.",
+    )
+    def unarchive_board_card(id: TaskId) -> dict[str, Any]:
+        return run(lambda s, a: {"item": board.unarchive_card(s, a, id)})
+
+    @mcp.tool(
+        title="List Archived Cards",
+        description="List archived board cards, most recently archived first.",
+    )
+    def list_archived_cards(projectId: ProjectFilter = None) -> dict[str, Any]:  # noqa: N803
+        return run(lambda s, a: {"items": board.list_archived_cards(s, a, projectId)})
 
     @mcp.tool(
         title="Update Board Card",

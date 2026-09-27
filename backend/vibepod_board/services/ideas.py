@@ -12,6 +12,7 @@ from vibepod_board.access import (
     default_project_id_for_create,
 )
 from vibepod_board.enums import IdeaStatus
+from vibepod_board.errors import Conflict
 from vibepod_board.graph import build_work_order, format_task_key
 from vibepod_board.schemas import DeletedIdea, Idea, TaskWorkOrder, now
 from vibepod_board.services.board import ensure_card, list_cards, sync_card_from_idea
@@ -185,6 +186,13 @@ def set_board_availability(
         add_activity(session, "idea.ready", f"Marked idea ready: {idea.title}", timestamp)
         return decorate_idea(session, idea)
 
+    archived = session.exec(
+        select(BoardCardRow.id).where(
+            BoardCardRow.idea_id == idea.id, col(BoardCardRow.archived_at).is_not(None)
+        )
+    ).first()
+    if archived:
+        raise Conflict("Task is archived; unarchive its card before taking it off the board")
     session.execute(delete(BoardCardRow).where(col(BoardCardRow.idea_id) == idea.id))
     refined = bool(idea.details or idea.acceptance_criteria)
     idea.status = IdeaStatus.REFINING if refined else IdeaStatus.IDEA

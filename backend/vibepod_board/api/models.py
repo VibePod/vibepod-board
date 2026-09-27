@@ -97,6 +97,10 @@ class BoardCardUpdate(ApiModel):
     repository_remote_url: StrictStr | None = None
 
 
+class ArchiveDoneRequest(ApiModel):
+    project_id: RequiredText
+
+
 class ReadinessRequest(ApiModel):
     score: Annotated[StrictInt, Field(ge=1, le=10)]
     reason: RequiredText
