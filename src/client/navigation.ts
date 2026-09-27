@@ -55,6 +55,21 @@ export const formatNavigationPath = ({
   return `/projects/${encodeURIComponent(selectedProjectId)}/${projectSections[activeView]}`;
 };
 
+/** The board search lives in the `q` query parameter so a filtered board is linkable. */
+export const parseBoardSearch = (search: string): string =>
+  new URLSearchParams(search).get("q") ?? "";
+
+export const formatNavigationUrl = (
+  navigation: NavigationState,
+  boardSearch = "",
+): string => {
+  const path = formatNavigationPath(navigation);
+  if (navigation.activeView !== "board" || !boardSearch.trim()) {
+    return path;
+  }
+  return `${path}?${new URLSearchParams({ q: boardSearch })}`;
+};
+
 const safeDecode = (value: string): string => {
   try {
     return decodeURIComponent(value);

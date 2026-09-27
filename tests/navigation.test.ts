@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatNavigationPath,
+  formatNavigationUrl,
+  parseBoardSearch,
   parseNavigationPath,
 } from "../src/client/navigation.js";
 
@@ -78,5 +80,30 @@ describe("client navigation URLs", () => {
         selectedProjectId: "project-1",
       }),
     ).toBe("/projects/project-1/notes");
+  });
+});
+
+describe("board search URLs", () => {
+  it("reads the board search from the q parameter", () => {
+    expect(parseBoardSearch("?q=VP-85")).toBe("VP-85");
+    expect(parseBoardSearch("?q=launch%20page")).toBe("launch page");
+    expect(parseBoardSearch("?q=%2385")).toBe("#85");
+    expect(parseBoardSearch("")).toBe("");
+    expect(parseBoardSearch("?other=1")).toBe("");
+  });
+
+  it("adds a non-blank board search to board URLs only", () => {
+    const board = { activeView: "board", selectedProjectId: "p-1" } as const;
+    expect(formatNavigationUrl(board, "#85")).toBe(
+      "/projects/p-1/board?q=%2385",
+    );
+    expect(formatNavigationUrl(board, "launch page")).toBe(
+      "/projects/p-1/board?q=launch+page",
+    );
+    expect(formatNavigationUrl(board, "  ")).toBe("/projects/p-1/board");
+    expect(formatNavigationUrl(board)).toBe("/projects/p-1/board");
+    expect(
+      formatNavigationUrl({ ...board, activeView: "ideas" }, "VP-85"),
+    ).toBe("/projects/p-1/tasks");
   });
 });
