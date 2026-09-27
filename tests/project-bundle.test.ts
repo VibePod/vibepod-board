@@ -197,6 +197,29 @@ describe("project bundle validation", () => {
     );
   });
 
+  it("accepts archived board cards in version 3 bundles only", () => {
+    const archived = (bundleVersion: 1 | 2 | 3, column: "done" | "review") => {
+      const bundle = validBundle();
+      return {
+        ...bundle,
+        bundleVersion,
+        boardCards: [
+          { ...bundle.boardCards[0], column, archivedAt: timestamp },
+        ],
+      };
+    };
+
+    expect(
+      parseProjectBundle(archived(3, "done")).boardCards[0].archivedAt,
+    ).toBe(timestamp);
+    expect(() => parseProjectBundle(archived(2, "done"))).toThrow(
+      "Archived board cards require bundleVersion 3",
+    );
+    expect(() => parseProjectBundle(archived(3, "review"))).toThrow(
+      "Archived board card must be in done: card-1",
+    );
+  });
+
   it("rejects two tasks linked to the same GitHub issue", () => {
     const bundle = validBundle();
     const link = {

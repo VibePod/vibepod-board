@@ -74,6 +74,8 @@ export type BoardCard = {
   readinessScore?: number;
   readinessReason?: string;
   readinessEvaluatedAt?: string;
+  /** Set once a done card is archived: it leaves the board but keeps its task. */
+  archivedAt?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -118,8 +120,11 @@ export type BoardData = {
 };
 
 export type ProjectBundle = {
-  /** 2 adds GitHub sync state on tasks; version 1 bundles are still accepted. */
-  bundleVersion: 1 | 2;
+  /**
+   * 2 adds GitHub sync state on tasks, 3 archived board cards; older bundles are
+   * still accepted.
+   */
+  bundleVersion: 1 | 2 | 3;
   exportedAt: string;
   project: Project;
   ideas: Idea[];
