@@ -8,7 +8,9 @@ from sqlalchemy import update
 from sqlmodel import Session, col, select
 
 from vibepod_board.access import AccessContext, assert_can_access_project
+from vibepod_board.errors import Conflict
 from vibepod_board.schemas import BoardCard, Idea, ReadinessEvent, now
+from vibepod_board.services.board import ARCHIVED_MESSAGE
 from vibepod_board.services.common import (
     add_activity,
     card_from_row,
@@ -61,6 +63,10 @@ def set_card_readiness(
         session.refresh(card)
         return decorate_card(session, card_from_row(card))
 
+    # A linked card scores its task, which archived cards keep mirroring; a card without a
+    # task has nothing else to write to, so it stays frozen while archived.
+    if card.archived_at is not None:
+        raise Conflict(ARCHIVED_MESSAGE)
     score, reason = normalize_readiness(score, reason)
     card.readiness_score = score
     card.readiness_reason = reason

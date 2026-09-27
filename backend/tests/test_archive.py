@@ -11,6 +11,7 @@ from vibepod_board.enums import BoardColumn
 from vibepod_board.errors import Conflict, Forbidden
 from vibepod_board.github import GitHubClient
 from vibepod_board.services import board, github_sync, ideas, projects, readiness, transfer
+from vibepod_board.tables import BoardCardRow
 
 ADMIN = admin_access("admin")
 REPO = "vibepod/board"
@@ -127,6 +128,31 @@ def test_task_updates_refresh_but_never_resurrect_an_archived_card(
     [archived] = board.list_archived_cards(session, ADMIN, project.id)
     assert (archived.id, archived.title, archived.labels) == (card.id, "Renamed", ["later"])
     assert archived.readiness_score == 9
+
+
+def test_scoring_an_archived_card_goes_to_its_task(session: Session, project) -> None:
+    task, card = done_card(session, project)
+    board.archive_card(session, ADMIN, card.id)
+
+    scored = readiness.set_card_readiness(session, ADMIN, card.id, 8, "Clear")
+
+    assert scored.readiness_score == 8
+    assert readiness.list_idea_readiness(session, ADMIN, task.id)[0].score == 8
+    assert board.board_columns(session, ADMIN, project.id).done == []
+
+
+def test_an_archived_card_without_a_task_cannot_be_scored(session: Session, project) -> None:
+    _, card = done_card(session, project)
+    board.archive_card(session, ADMIN, card.id)
+    row = session.get(BoardCardRow, card.id)
+    assert row is not None
+    row.idea_id = None
+    session.commit()
+
+    with pytest.raises(Conflict, match="Board card is archived"):
+        readiness.set_card_readiness(session, ADMIN, card.id, 8, "Clear")
+    [archived] = board.list_archived_cards(session, ADMIN, project.id)
+    assert archived.readiness_score is None
 
 
 def test_an_archived_task_cannot_be_taken_off_the_board(session: Session, project) -> None:
