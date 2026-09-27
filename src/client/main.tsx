@@ -75,6 +75,7 @@ import {
   integrationExamplesForToken,
 } from "../shared/integrationExamples.js";
 import {
+  type ApiTokenProject,
   type ApiTokenSummary,
   type AuthMeResponse,
   type BoardCard,
@@ -154,6 +155,7 @@ import {
 } from "./taskListUtils.js";
 import { taskNavigationFor } from "./taskNavigation.js";
 import { taskOverviewForIdea } from "./taskOverviewUtils.js";
+import { formatTokenProjectLabel } from "./tokenProjects.js";
 import "./styles.css";
 
 type AppState = {
@@ -231,6 +233,7 @@ type ProjectImportState = {
 type CreatedTokenState = {
   name: string;
   token: string;
+  projects: ApiTokenProject[];
 } | null;
 
 const emptyColumns: BoardColumns = {
@@ -508,7 +511,11 @@ const App = () => {
         method: "POST",
         body: JSON.stringify(tokenDraft),
       });
-      setCreatedToken({ name: created.item.name, token: created.token });
+      setCreatedToken({
+        name: created.item.name,
+        token: created.token,
+        projects: created.item.projects,
+      });
       setTokenDraft(emptyTokenDraft());
       await loadTokens();
     } catch (err) {
@@ -3221,6 +3228,7 @@ const App = () => {
                     New Token
                   </Badge>
                 </Group>
+                <TokenProjects projects={createdToken.projects} />
                 <CopyableCode
                   value={createdToken.token}
                   label="token"
@@ -3320,13 +3328,9 @@ const App = () => {
                         </Badge>
                       )}
                     </Group>
-                    <Group gap={6} mt="xs">
-                      {token.projects.map((project) => (
-                        <Badge key={project.id} variant="light" color="gray">
-                          {project.key}
-                        </Badge>
-                      ))}
-                    </Group>
+                    <Box mt="xs">
+                      <TokenProjects projects={token.projects} />
+                    </Box>
                     <Text c="dimmed" size="sm" mt="xs">
                       Created {formatDateTime(token.createdAt)}
                       {token.lastUsedAt
@@ -3502,6 +3506,27 @@ const formatDateTime = (value: string) =>
         timeStyle: "short",
       }).format(new Date(value))
     : "";
+
+const TokenProjects = ({ projects }: { projects: ApiTokenProject[] }) => (
+  <Stack gap={4}>
+    <Text size="xs" fw={700} tt="uppercase" c="dimmed">
+      Projects
+    </Text>
+    <Group gap={6}>
+      {projects.length > 0 ? (
+        projects.map((project) => (
+          <Badge key={project.id} variant="light" color="gray" tt="none">
+            {formatTokenProjectLabel(project)}
+          </Badge>
+        ))
+      ) : (
+        <Badge variant="light" color="orange" tt="none">
+          No projects
+        </Badge>
+      )}
+    </Group>
+  </Stack>
+);
 
 const statusColors: Record<IdeaStatus, string> = {
   idea: "gray",
