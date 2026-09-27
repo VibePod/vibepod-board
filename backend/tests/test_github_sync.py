@@ -211,6 +211,13 @@ def test_links_unlinks_and_guards_duplicate_links(session: Session, project) -> 
     with pytest.raises(BadRequest, match=INVALID_URL):
         ideas.update_idea(session, ADMIN, second.id, github_issue_url="https://example.com/5")
 
+    with pytest.raises(Conflict, match="already linked"):
+        task(session, project, title="Third", github_issue_url=url)
+    fresh = task(
+        session, project, title="Fourth", github_issue_url=f"https://github.com/{REPO}/issues/6"
+    )
+    assert fresh.github_issue_number == 6
+
     unlinked = ideas.update_idea(session, ADMIN, first.id, github_issue_url="")
     assert unlinked.github_issue_url is None
     assert unlinked.github_repository is None

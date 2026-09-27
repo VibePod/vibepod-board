@@ -35,6 +35,7 @@ describe("task draft utilities", () => {
       dependsOn: [],
       repositoryLocalPath: "",
       repositoryRemoteUrl: "",
+      githubIssueUrl: "",
       status: "idea",
     });
   });
@@ -50,6 +51,7 @@ describe("task draft utilities", () => {
           acceptanceCriteria: ["Labels are selectable", "Criteria is readable"],
           repositoryLocalPath: "/workspace/vibepod-board",
           repositoryRemoteUrl: "git@github.com:vibepod/vibepod-board.git",
+          githubIssueUrl: "https://github.com/vibepod/vibepod-board/issues/9",
         }),
       ),
     ).toMatchObject({
@@ -60,6 +62,7 @@ describe("task draft utilities", () => {
       acceptanceCriteria: "Labels are selectable\nCriteria is readable",
       repositoryLocalPath: "/workspace/vibepod-board",
       repositoryRemoteUrl: "git@github.com:vibepod/vibepod-board.git",
+      githubIssueUrl: "https://github.com/vibepod/vibepod-board/issues/9",
       status: "refining",
     });
   });
@@ -75,6 +78,7 @@ describe("task draft utilities", () => {
         dependsOn: [],
         repositoryLocalPath: "/workspace/vibepod-board",
         repositoryRemoteUrl: "git@github.com:vibepod/vibepod-board.git",
+        githubIssueUrl: " https://github.com/vibepod/vibepod-board/issues/9 ",
         status: "ready",
       }),
     ).toEqual({
@@ -89,6 +93,7 @@ describe("task draft utilities", () => {
       dependsOn: [],
       repositoryLocalPath: "/workspace/vibepod-board",
       repositoryRemoteUrl: "git@github.com:vibepod/vibepod-board.git",
+      githubIssueUrl: "https://github.com/vibepod/vibepod-board/issues/9",
     });
   });
 });

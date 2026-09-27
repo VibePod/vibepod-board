@@ -34,15 +34,21 @@ The backend applies database migrations on startup. Set `ALEMBIC_AUTO_UPGRADE=fa
 
 The container joins the shared VibePod Docker network named `vibepod-network` by default. See [docs/integration-guide.md](docs/integration-guide.md) for MCP and VibePod container wiring.
 
-## Optional GitHub Issue Sync
+## GitHub Issue Sync
 
-Ready tasks become board cards locally. The API sync endpoint can optionally attach a GitHub issue when GitHub environment variables are configured.
+Tasks can be linked to a GitHub issue. The link, the issue state (open/closed) and the last sync time are stored on the task and shown as a badge that opens the issue in a new tab.
 
-To create real GitHub issues, set:
+- **Link by hand:** paste the issue URL into **GitHub Issue URL** in the task dialog (empty unlinks), or send `githubIssueUrl` with `POST /api/ideas`/`PATCH /api/ideas/:id` or the `update_idea` MCP tool.
+- **Push / Pull buttons** in the task view (also `POST /api/ideas/:id/github/push|pull`, MCP `push_github_issue`/`pull_github_issue`):
+  - Push creates the issue for an unlinked task, otherwise updates its title, body and labels. It refuses (`409`) when the issue changed on GitHub since the last sync — pull first. It never opens or closes the issue.
+  - Pull refreshes title, labels and state. The issue body only fills empty task details, so local refinement is kept. Task status and board column never change.
+- **Agent import:** the `upsert_github_issue` MCP tool creates a task for an issue the agent fetched, or refreshes the task already linked to that repository and number. One issue links to at most one task per project.
+
+Push and Pull need a token on the server:
 
 ```bash
-GITHUB_TOKEN=ghp_xxx
-GITHUB_REPOSITORY=owner/repo
+GITHUB_TOKEN=ghp_xxx            # fine-grained token with Issues read/write
+GITHUB_REPOSITORY=owner/repo    # optional default; a task's GitHub remote URL wins
 ```
 
 ## API
@@ -64,7 +70,9 @@ GITHUB_REPOSITORY=owner/repo
 - `PUT /api/ideas/:id/dependencies`
 - `DELETE /api/ideas/:id/dependencies/:dependsOnId`
 - `GET /api/work-order`
-- `POST /api/ideas/:id/sync-github`
+- `POST /api/ideas/:id/github/push`
+- `POST /api/ideas/:id/github/pull`
+- `GET /api/github`
 - `GET /api/board`
 - `PATCH /api/board/:id`
 - `POST /api/board/:id/readiness`
@@ -125,6 +133,9 @@ Tools:
 - `set_card_readiness`
 - `set_idea_readiness`
 - `list_idea_readiness`
+- `push_github_issue`
+- `pull_github_issue`
+- `upsert_github_issue`
 - `create_document`
 - `update_document`
 - `list_documents`

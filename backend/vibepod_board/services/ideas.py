@@ -70,6 +70,7 @@ def create_idea(
     depends_on: Sequence[str] | None = None,
     repository_local_path: str | None = None,
     repository_remote_url: str | None = None,
+    github_issue_url: str | None = None,
 ) -> Idea:
     assert_title(title, "Idea")
     resolved_project_id = resolve_project_id_for_create(
@@ -92,6 +93,8 @@ def create_idea(
         created_at=timestamp,
         updated_at=timestamp,
     )
+    if github_issue_url:
+        link_url(session, idea, github_issue_url)
     session.add(idea)
     session.flush()
     if depends_on:

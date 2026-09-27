@@ -77,7 +77,7 @@ class BundleIdea(BundleModel):
     github_issue_url: StrictStr | None = None
     github_issue_number: StrictInt | None = None
     github_repository: StrictStr | None = None
-    github_issue_state: StrictStr | None = None
+    github_issue_state: Literal["open", "closed"] | None = None
     github_issue_updated_at: BundleTimestamp | None = None
     github_synced_at: BundleTimestamp | None = None
     repository_local_path: StrictStr | None = None

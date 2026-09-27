@@ -61,6 +61,7 @@ class IdeaCreate(ApiModel):
     depends_on: list[StrictStr] = Field(default_factory=list)
     repository_local_path: StrictStr | None = None
     repository_remote_url: StrictStr | None = None
+    github_issue_url: StrictStr | None = None
 
 
 class IdeaUpdate(ApiModel):

@@ -39,6 +39,12 @@ export type Idea = {
   blockedBy: string[];
   githubIssueUrl?: string;
   githubIssueNumber?: number;
+  /** `owner/repo` of the linked issue. */
+  githubRepository?: string;
+  githubIssueState?: "open" | "closed";
+  /** The issue's `updated_at` as of the last sync. */
+  githubIssueUpdatedAt?: string;
+  githubSyncedAt?: string;
   repositoryLocalPath?: string;
   repositoryRemoteUrl?: string;
   readinessScore?: number;
@@ -164,6 +170,7 @@ export type UpdateIdeaInput = Partial<
     | "status"
     | "repositoryLocalPath"
     | "repositoryRemoteUrl"
+    | "githubIssueUrl"
   >
 >;
 
