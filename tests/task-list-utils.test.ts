@@ -276,4 +276,51 @@ describe("board search", () => {
       [],
     );
   });
+
+  it("searches a linked card's own title, details and labels too", () => {
+    const ideas = new Map([
+      [
+        "idea-85",
+        task({
+          id: "idea-85",
+          taskNumber: 85,
+          title: "Task title",
+          summary: "Task summary",
+          details: "Task details",
+          labels: ["task-label"],
+          createdAt: "2026-01-01T00:00:00.000Z",
+        }),
+      ],
+    ]);
+    const columns: BoardColumns = {
+      ready: [
+        card({
+          id: "linked",
+          ideaId: "idea-85",
+          title: "Card heading",
+          details: "Card-only rollout notes",
+          labels: ["card-label"],
+        }),
+      ],
+      planned: [],
+      in_progress: [],
+      review: [],
+      done: [],
+    };
+    const ids = (search: string) =>
+      Object.values(filterColumnsBySearch(columns, search, "VP", ideas))
+        .flat()
+        .map((item) => item.id);
+
+    expect(ids("card heading")).toEqual(["linked"]);
+    expect(ids("rollout notes")).toEqual(["linked"]);
+    expect(ids("card-label")).toEqual(["linked"]);
+    expect(ids("task title")).toEqual(["linked"]);
+    expect(ids("task summary")).toEqual(["linked"]);
+    expect(ids("task details")).toEqual(["linked"]);
+    expect(ids("task-label")).toEqual(["linked"]);
+    expect(ids("VP-85")).toEqual(["linked"]);
+    expect(ids("#85")).toEqual(["linked"]);
+    expect(ids("unrelated")).toEqual([]);
+  });
 });

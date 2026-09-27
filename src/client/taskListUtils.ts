@@ -93,8 +93,9 @@ export const matchesTaskSearch = (
 };
 
 /**
- * Filters every board column with the task search. Cards linked to a task match on the
- * task; cards without one match on their own title, details and labels.
+ * Filters every board column with the task search. Every card matches on its own title,
+ * details and labels; cards linked to a task also match on the task's text fields and on
+ * its task ID and number.
  */
 export const filterColumnsBySearch = (
   columns: BoardColumns,
@@ -106,7 +107,17 @@ export const filterColumnsBySearch = (
   for (const column of boardColumns) {
     filtered[column] = (columns[column] ?? []).filter((card) => {
       const idea = card.ideaId ? ideaById.get(card.ideaId) : undefined;
-      return matchesTaskSearch({ ...(idea ?? card), projectKey }, search);
+      const target: TaskSearchTarget = idea
+        ? {
+            projectKey,
+            taskNumber: idea.taskNumber,
+            title: `${idea.title} ${card.title}`,
+            summary: idea.summary,
+            details: `${idea.details} ${card.details}`,
+            labels: [...idea.labels, ...card.labels],
+          }
+        : { ...card, projectKey };
+      return matchesTaskSearch(target, search);
     });
   }
   return filtered;
