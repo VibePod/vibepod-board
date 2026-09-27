@@ -225,6 +225,16 @@ def create_mcp_server(
         )
 
     @mcp.tool(
+        title="Delete Task",
+        description="Permanently delete a task with its board card, dependency edges and "
+        "readiness history; documents stop linking to it. This cannot be undone — to reject "
+        "work but keep the record, set status to denied with update_idea instead. A linked "
+        "GitHub issue is not touched. Returns the ids of tasks that depended on it.",
+    )
+    def delete_idea(id: TaskId) -> dict[str, Any]:
+        return run(lambda s, a: ideas.delete_idea(s, a, id))
+
+    @mcp.tool(
         title="Push Task to GitHub",
         description="Create the task's GitHub issue, or update its title, body and labels "
         "when the task is already linked. Fails when the issue changed on GitHub since the "

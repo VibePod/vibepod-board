@@ -109,6 +109,13 @@ class BoardCard(ApiModel):
     updated_at: Timestamp
 
 
+class DeletedIdea(ApiModel):
+    id: str
+    task_id: str
+    # Tasks that depended on the deleted one and lost that dependency.
+    dependents: list[str]
+
+
 class ReadinessEvent(ApiModel):
     id: str
     idea_id: str

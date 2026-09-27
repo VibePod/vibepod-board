@@ -12,8 +12,8 @@ from vibepod_board.access import (
     default_project_id_for_create,
 )
 from vibepod_board.enums import IdeaStatus
-from vibepod_board.graph import build_work_order
-from vibepod_board.schemas import Idea, TaskWorkOrder, now
+from vibepod_board.graph import build_work_order, format_task_key
+from vibepod_board.schemas import DeletedIdea, Idea, TaskWorkOrder, now
 from vibepod_board.services.board import ensure_card, list_cards, sync_card_from_idea
 from vibepod_board.services.common import (
     add_activity,
@@ -29,7 +29,7 @@ from vibepod_board.services.common import (
 from vibepod_board.services.dependencies import decorate_idea, decorate_ideas, replace_dependencies
 from vibepod_board.services.github_link import link_url
 from vibepod_board.services.projects import list_projects, resolve_project_id_for_create
-from vibepod_board.tables import BoardCardRow, IdeaRow
+from vibepod_board.tables import BoardCardRow, DocumentRow, IdeaRow, TaskDependencyRow
 
 
 def list_ideas(
@@ -193,3 +193,37 @@ def work_order(
     cards = list_cards(session, access, project_id)
     keys = {project.id: project.key for project in list_projects(session, access)}
     return build_work_order(tasks, cards, keys)
+
+
+@transactional
+def delete_idea(session: Session, access: AccessContext, idea_id: str) -> DeletedIdea:
+    """Deletes a task for good: its board card, dependency edges and readiness history go
+    with it, and documents stop linking to it. A linked GitHub issue is left alone."""
+    idea = require_idea(session, idea_id)
+    assert_can_access_project(access, idea.project_id)
+    project = require_project(session, idea.project_id)
+    task_id = format_task_key(project.key, idea.task_number)
+    dependents = list(
+        session.exec(
+            select(TaskDependencyRow.idea_id)
+            .where(TaskDependencyRow.depends_on_idea_id == idea.id)
+            .order_by(col(TaskDependencyRow.idea_id))
+        )
+    )
+
+    card_ids = set(session.exec(select(BoardCardRow.id).where(BoardCardRow.idea_id == idea.id)))
+    documents = session.exec(
+        select(DocumentRow).where(DocumentRow.project_id == idea.project_id)
+    ).all()
+    for document in documents:
+        if idea.id in document.linked_idea_ids:
+            document.linked_idea_ids = [i for i in document.linked_idea_ids if i != idea.id]
+        if card_ids & set(document.linked_card_ids):
+            document.linked_card_ids = [i for i in document.linked_card_ids if i not in card_ids]
+
+    session.execute(delete(BoardCardRow).where(col(BoardCardRow.idea_id) == idea.id))
+    title = idea.title
+    session.delete(idea)
+    session.flush()
+    add_activity(session, "idea.deleted", f"Deleted task {task_id}: {title}")
+    return DeletedIdea(id=idea_id, task_id=task_id, dependents=dependents)

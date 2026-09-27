@@ -121,6 +121,7 @@ async def test_lists_every_tool_and_the_state_resource(
         "push_github_issue",
         "pull_github_issue",
         "upsert_github_issue",
+        "delete_idea",
     }
     assert resources == ["vibepod-board://state"]
     assert [project["key"] for project in state["projects"]] == ["APP"]
@@ -236,3 +237,15 @@ async def test_runs_the_dependency_workflow(server_url: str, scoped: dict[str, A
     card_id = board_state["columns"]["ready"][0]["id"]
     moved = await call(url, token, "move_board_card", id=card_id, column="done")
     assert moved["item"]["column"] == "done"
+
+
+async def test_deletes_tasks_in_mapped_projects_only(
+    server_url: str, scoped: dict[str, Any]
+) -> None:
+    url, token = server_url, scoped["token"]
+    with pytest.raises(ToolError, match="Token is not allowed to access project"):
+        await call(url, token, "delete_idea", id=scoped["theirs"].id)
+
+    deleted = await call(url, token, "delete_idea", id=scoped["mine"].id)
+    assert deleted == {"id": scoped["mine"].id, "taskId": "APP-1", "dependents": []}
+    assert (await call(url, token, "list_ideas"))["items"] == []

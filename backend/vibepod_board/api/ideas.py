@@ -13,7 +13,7 @@ from vibepod_board.api.models import (
 from vibepod_board.api.responses import Item, Items
 from vibepod_board.auth import AccessDep
 from vibepod_board.db import SessionDep
-from vibepod_board.schemas import Idea, ReadinessEvent, TaskWorkOrder
+from vibepod_board.schemas import DeletedIdea, Idea, ReadinessEvent, TaskWorkOrder
 from vibepod_board.services import dependencies, ideas, readiness
 
 router = APIRouter(prefix="/api", tags=["ideas"])
@@ -43,6 +43,11 @@ def update_idea(
 ) -> Item[Idea]:
     changes = body.model_dump(exclude_unset=True, by_alias=False)
     return Item(item=ideas.update_idea(session, access, idea_id, **changes))
+
+
+@router.delete("/ideas/{idea_id}")
+def delete_idea(idea_id: str, session: SessionDep, access: AccessDep) -> DeletedIdea:
+    return ideas.delete_idea(session, access, idea_id)
 
 
 @router.post("/ideas/{idea_id}/ready")
