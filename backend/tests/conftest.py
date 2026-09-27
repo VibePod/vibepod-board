@@ -7,10 +7,13 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 from sqlmodel import Session
 
+from vibepod_board.config import Settings
 from vibepod_board.db import create_db_engine, migrate, set_engine
+from vibepod_board.main import create_app
 
 
 def _pg_bin(name: str) -> str:
@@ -99,3 +102,30 @@ def db(engine: Engine) -> Engine:
 def session(db: Engine) -> Iterator[Session]:
     with Session(db, expire_on_commit=False) as session:
         yield session
+
+
+@pytest.fixture
+def settings(database_url: str) -> Settings:
+    return Settings(
+        database_url=database_url,
+        admin_username="admin",
+        admin_password="secret",
+        public_dir=None,
+        auto_migrate=False,
+        github_token=None,
+        github_repository=None,
+        pool_size=5,
+    )
+
+
+@pytest.fixture
+def client(db: Engine, settings: Settings) -> Iterator[TestClient]:
+    """An API client without a session; `login(client)` turns it into the admin."""
+    with TestClient(create_app(settings, run_migrations=False)) as test_client:
+        yield test_client
+
+
+def login(client: TestClient) -> TestClient:
+    response = client.post("/api/auth/login", json={"username": "admin", "password": "secret"})
+    assert response.status_code == 200, response.text
+    return client
