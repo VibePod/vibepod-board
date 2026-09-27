@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 from sqlmodel import Session
 
-from vibepod_board.config import Settings
+from vibepod_board.config import Settings, to_sqlalchemy_url
 from vibepod_board.db import create_db_engine, migrate, set_engine
 from vibepod_board.main import create_app
 
@@ -34,7 +34,7 @@ def _free_port() -> int:
 def database_url() -> Iterator[str]:
     """A throwaway Postgres cluster, or the database named by TEST_DATABASE_URL."""
     if url := os.environ.get("TEST_DATABASE_URL"):
-        yield url
+        yield to_sqlalchemy_url(url)
         return
 
     data_dir = Path(tempfile.mkdtemp(prefix="vibepod-board-pg-"))

@@ -37,9 +37,7 @@ def get_settings() -> Settings:
         raise RuntimeError("DATABASE_URL is required")
     username = os.environ.get("ADMIN_USERNAME")
     password = os.environ.get("ADMIN_PASSWORD")
-    if os.environ.get("NODE_ENV", os.environ.get("APP_ENV")) == "production" and not (
-        username and password
-    ):
+    if os.environ.get("APP_ENV") == "production" and not (username and password):
         raise RuntimeError("ADMIN_USERNAME and ADMIN_PASSWORD are required in production")
     public_dir = Path(os.environ.get("PUBLIC_DIR", DEFAULT_PUBLIC_DIR))
     return Settings(

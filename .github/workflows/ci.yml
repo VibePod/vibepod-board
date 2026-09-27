@@ -5,8 +5,26 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
-  test:
+  client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run build
+
+  backend:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -24,16 +42,15 @@ jobs:
           --health-retries 10
     env:
       TEST_DATABASE_URL: postgres://vibepod:vibepod@localhost:5432/vibepod_board_test
-      DATABASE_URL: postgres://vibepod:vibepod@localhost:5432/vibepod_board_test
-      ADMIN_USERNAME: admin
-      ADMIN_PASSWORD: admin-password
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
         with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm test
-      - run: npm run typecheck
-      - run: npm run build
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest

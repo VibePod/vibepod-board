@@ -23,3 +23,11 @@ repos:
     rev: v1.7.12
     hooks:
       - id: actionlint
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.9
+    hooks:
+      - id: ruff-check
+        files: ^backend/
+      - id: ruff-format
+        files: ^backend/
