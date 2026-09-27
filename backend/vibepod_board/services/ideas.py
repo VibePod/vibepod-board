@@ -29,7 +29,13 @@ from vibepod_board.services.common import (
 from vibepod_board.services.dependencies import decorate_idea, decorate_ideas, replace_dependencies
 from vibepod_board.services.github_link import link_url
 from vibepod_board.services.projects import list_projects, resolve_project_id_for_create
-from vibepod_board.tables import BoardCardRow, DocumentRow, IdeaRow, TaskDependencyRow
+from vibepod_board.tables import (
+    BoardCardRow,
+    DocumentRow,
+    IdeaRow,
+    ProjectRow,
+    TaskDependencyRow,
+)
 
 
 def list_ideas(
@@ -49,12 +55,18 @@ def list_ideas(
 
 
 def next_task_number(session: Session, project_id: str) -> int:
+    """Issues the project's next task number. The project row is locked, so concurrent
+    creates wait for each other, and the high-water mark keeps deleted numbers retired."""
+    project = session.exec(
+        select(ProjectRow).where(ProjectRow.id == project_id).with_for_update()
+    ).one()
     highest = session.exec(
         select(func.coalesce(func.max(IdeaRow.task_number), 0)).where(
             IdeaRow.project_id == project_id
         )
     ).one()
-    return int(highest) + 1
+    project.last_task_number = max(project.last_task_number, int(highest)) + 1
+    return project.last_task_number
 
 
 @transactional

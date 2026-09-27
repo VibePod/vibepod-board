@@ -67,9 +67,11 @@ def test_deletes_the_task_with_its_card_edges_history_and_document_links(
 def test_task_numbers_are_not_reused_after_a_delete(session: Session, project) -> None:
     ideas.create_idea(session, ADMIN, title="One", project_id=project.id)
     two = ideas.create_idea(session, ADMIN, title="Two", project_id=project.id)
+    # Deleting the highest number is the case a MAX(task_number) + 1 allocator gets wrong.
     ideas.delete_idea(session, ADMIN, two.id)
-    ideas.create_idea(session, ADMIN, title="Three", project_id=project.id)
-    three = ideas.create_idea(session, ADMIN, title="Four", project_id=project.id)
+
+    three = ideas.create_idea(session, ADMIN, title="Three", project_id=project.id)
+
     assert three.task_number == 3
 
 

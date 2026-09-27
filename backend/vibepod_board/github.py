@@ -15,7 +15,7 @@ from vibepod_board.errors import BoardError, NotFound
 
 API_URL = "https://api.github.com"
 _ISSUE_URL = re.compile(
-    r"^https://github\.com/(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/(?P<number>\d+)/?$"
+    r"(?i)^https://github\.com/(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/(?P<number>\d+)/?$"
 )
 _REPO_PATH = re.compile(r"^(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$")
 
@@ -50,9 +50,16 @@ class RemoteIssue:
     updated_at: datetime
 
 
+def normalize_repository(repository: str) -> str:
+    """GitHub treats `owner/repo` case-insensitively, so identities are stored lowercase."""
+    return repository.strip().lower()
+
+
 def parse_issue_url(url: str) -> IssueRef | None:
     match = _ISSUE_URL.match(url.strip())
-    return IssueRef(match["repo"], int(match["number"])) if match else None
+    if not match:
+        return None
+    return IssueRef(normalize_repository(match["repo"]), int(match["number"]))
 
 
 def repository_from_remote(remote: str | None) -> str | None:
@@ -63,7 +70,7 @@ def repository_from_remote(remote: str | None) -> str | None:
     for prefix in ("git@github.com:", "https://github.com/", "ssh://git@github.com/"):
         if remote.startswith(prefix):
             match = _REPO_PATH.match(remote[len(prefix) :])
-            return match["repo"] if match else None
+            return normalize_repository(match["repo"]) if match else None
     return None
 
 
@@ -81,7 +88,7 @@ def issue_body(summary: str, details: str, acceptance_criteria: list[str]) -> st
 
 def _remote_issue(repository: str, data: dict[str, Any]) -> RemoteIssue:
     return RemoteIssue(
-        ref=IssueRef(repository, int(data["number"])),
+        ref=IssueRef(normalize_repository(repository), int(data["number"])),
         url=data["html_url"],
         title=data["title"],
         body=data.get("body") or "",
@@ -89,6 +96,16 @@ def _remote_issue(repository: str, data: dict[str, Any]) -> RemoteIssue:
         state=data["state"],
         updated_at=datetime.fromisoformat(data["updated_at"].replace("Z", "+00:00")),
     )
+
+
+def _error_detail(response: httpx.Response, limit: int = 300) -> str:
+    """GitHub's own explanation (e.g. why a 422 failed), bounded for error messages."""
+    try:
+        payload = response.json()
+        detail = payload.get("message") if isinstance(payload, dict) else None
+    except ValueError:
+        detail = None
+    return (detail or response.text or "")[:limit]
 
 
 class GitHubClient:
@@ -115,7 +132,9 @@ class GitHubClient:
         if response.status_code == 404:
             raise NotFound(f"Issue not found on GitHub: {ref}")
         if response.is_error:
-            raise GitHubUnavailable(f"GitHub request failed: {response.status_code}")
+            raise GitHubUnavailable(
+                f"GitHub request failed: {response.status_code} {_error_detail(response)}".strip()
+            )
         return response.json()
 
     def get_issue(self, ref: IssueRef) -> RemoteIssue:

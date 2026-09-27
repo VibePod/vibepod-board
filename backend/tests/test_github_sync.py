@@ -336,3 +336,127 @@ def test_rest_reports_disabled_sync(client: TestClient) -> None:
     response = agent.post(f"/api/ideas/{created['id']}/github/push")
     assert response.status_code == 503
     assert response.json() == {"error": "GitHub sync is disabled: set GITHUB_TOKEN"}
+
+
+# --- review fixes -------------------------------------------------------------------
+
+
+def test_repository_names_are_case_insensitive(session: Session, project) -> None:
+    first = task(session, project, title="First")
+    second = task(session, project, title="Second")
+    ideas.update_idea(
+        session, ADMIN, first.id, github_issue_url="https://github.com/VibePod/Board/issues/5"
+    )
+
+    with pytest.raises(Conflict, match="already linked to task APP-1"):
+        ideas.update_idea(
+            session, ADMIN, second.id, github_issue_url="https://github.com/vibepod/board/issues/5"
+        )
+    linked = next(i for i in ideas.list_ideas(session, ADMIN, project.id) if i.id == first.id)
+    assert linked.github_repository == "vibepod/board"
+    refreshed = upsert(
+        session,
+        project_id=project.id,
+        repository="VibePod/Board",
+        number=5,
+        url="https://github.com/VIBEPOD/board/issues/5",
+    )
+    assert refreshed.item.id == first.id
+
+
+def test_upsert_rejects_a_url_that_names_another_issue(session: Session, project) -> None:
+    for url in (
+        "https://github.com/vibepod/board/issues/13",
+        "https://github.com/other/repo/issues/12",
+        "https://evil.example/vibepod/board/issues/12",
+    ):
+        with pytest.raises(BadRequest, match="does not match"):
+            upsert(session, project_id=project.id, url=url)
+    assert ideas.list_ideas(session, ADMIN, project.id) == []
+
+
+def test_upsert_requires_timezone_aware_timestamps(session: Session, project) -> None:
+    upsert(session, project_id=project.id)
+    with pytest.raises(BadRequest, match="must include a UTC offset"):
+        upsert(session, project_id=project.id, remote_updated_at=T0.replace(tzinfo=None))
+
+
+def test_pull_does_not_copy_the_body_push_generated(
+    session: Session, project, fake: FakeGitHub, github: GitHubClient
+) -> None:
+    created = task(
+        session, project, title="Generated", summary="Why", acceptance_criteria=["Works"]
+    )
+    github_sync.push(session, ADMIN, created.id, github, default_repository=REPO)
+    fake.edit(REPO, 1, state="closed")
+
+    pulled = github_sync.pull(session, ADMIN, created.id, github)
+
+    assert pulled.details == ""
+    assert pulled.github_issue_state == "closed"
+
+
+def test_github_error_details_reach_the_caller(fake: FakeGitHub) -> None:
+    import httpx
+
+    from vibepod_board.github import GitHubUnavailable
+
+    def reject(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(422, json={"message": "Validation Failed: labels is invalid"})
+
+    client = GitHubClient("token", httpx.MockTransport(reject))
+    with pytest.raises(GitHubUnavailable, match="422 Validation Failed: labels is invalid"):
+        client.create_issue(REPO, "T", "B", ["bad"])
+
+    def html(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="<html>" + "x" * 1000)
+
+    with pytest.raises(GitHubUnavailable) as error:
+        GitHubClient("token", httpx.MockTransport(html)).create_issue(REPO, "T", "B", [])
+    assert len(error.value.message) < 350
+
+
+def test_concurrent_pushes_create_one_issue(engine: Engine, project, fake: FakeGitHub) -> None:
+    import threading
+
+    from sqlmodel import Session as DbSession
+
+    with DbSession(engine) as setup:
+        created = task(setup, project, title="Race")
+    barrier = threading.Barrier(2)
+    real_create = fake._handle
+
+    def slow_handle(request):
+        if request.method == "POST":
+            # Hold the first creation open so the second push overlaps it.
+            barrier_wait = getattr(slow_handle, "waited", False)
+            if not barrier_wait:
+                slow_handle.waited = True
+                import time
+
+                time.sleep(0.5)
+        return real_create(request)
+
+    import httpx
+
+    transport = httpx.MockTransport(slow_handle)
+    errors: list[Exception] = []
+
+    def push() -> None:
+        barrier.wait()
+        try:
+            with DbSession(engine, expire_on_commit=False) as own:
+                github_sync.push(
+                    own, ADMIN, created.id, GitHubClient("t", transport), default_repository=REPO
+                )
+        except Exception as error:  # noqa: BLE001 - the loser may see a stale-sync conflict
+            errors.append(error)
+
+    threads = [threading.Thread(target=push) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20)
+
+    assert [key for key in fake.issues] == [(REPO, 1)]
+    assert all(isinstance(error, Conflict) for error in errors)

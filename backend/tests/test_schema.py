@@ -8,7 +8,7 @@ from sqlmodel import SQLModel
 
 from vibepod_board.db import migrate
 
-HEAD = "0002"
+HEAD = "0003"
 LEGACY_SCHEMA = (Path(__file__).parent / "legacy_schema.sql").read_text()
 # The first TS schema, before repository, readiness and dependency support.
 ORIGINAL_SCHEMA = LEGACY_SCHEMA.split("alter table board_cards add column", 1)[0]
@@ -106,3 +106,46 @@ def test_migrating_twice_is_a_no_op(db: Engine) -> None:
     migrate(db)
     assert revision(db) == HEAD
     assert schema_diff(db) == []
+
+
+def test_0003_adopts_links_from_the_old_sync_endpoint_and_retires_task_numbers(
+    empty_db: Engine,
+) -> None:
+    from alembic import command
+
+    from vibepod_board.db import alembic_config
+
+    config = alembic_config()
+    with empty_db.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "0002")
+        connection.execute(
+            text(
+                "insert into projects (id, key, title, created_at, updated_at) "
+                "values ('p1', 'APP', 'App', now(), now())"
+            )
+        )
+        for idea_id, number, url in [
+            ("a", 1, "https://github.com/VibePod/Board/issues/7"),
+            ("b", 2, "https://github.com/vibepod/board/issues/7"),  # same issue, other case
+            ("c", 5, "https://example.com/not-github/1"),
+        ]:
+            connection.execute(
+                text(
+                    "insert into ideas (id, project_id, task_number, title, status, "
+                    "github_issue_url, github_issue_number, created_at, updated_at) "
+                    "values (:id, 'p1', :n, 'T', 'idea', :url, 7, now() + :n * interval '1 s', "
+                    "now())"
+                ),
+                {"id": idea_id, "n": number, "url": url},
+            )
+
+    migrate(empty_db)
+
+    with empty_db.connect() as connection:
+        repositories = dict(
+            connection.execute(text("select id, github_repository from ideas")).all()
+        )
+        last = connection.execute(text("select last_task_number from projects")).scalar_one()
+    assert repositories == {"a": "vibepod/board", "b": None, "c": None}
+    assert last == 5

@@ -215,6 +215,10 @@ def import_project(
         )
         session.flush()
     _insert_children(session, bundle, destination)
+    imported = session.get(ProjectRow, destination)
+    if imported is not None:
+        highest = max((idea.task_number for idea in bundle.ideas), default=0)
+        imported.last_task_number = max(imported.last_task_number, highest)
     add_activity(session, "project.imported", f"Imported project: {bundle.project.title}")
 
     project = Project.model_validate(bundle.project.model_dump())
