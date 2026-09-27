@@ -670,7 +670,14 @@ const App = () => {
         (project) => project.id === taskViewIdea.projectId,
       ) ?? null)
     : null;
-  const taskViewCard = taskViewModal?.card ?? null;
+  // The modal keeps the card it was opened from only as a fallback: a sync or edit while it
+  // is open reloads the board, and the view must show that fresh card.
+  const taskViewCard = taskViewModal
+    ? (boardColumns
+        .flatMap((column) => state.columns[column] ?? [])
+        .find((card) => card.id === taskViewModal.card.id) ??
+      taskViewModal.card)
+    : null;
   const ideaById = new Map(state.ideas.map((idea) => [idea.id, idea]));
   const taskOverview =
     taskViewIdea && taskViewProject
