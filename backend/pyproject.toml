@@ -1,0 +1,44 @@
+[project]
+name = "vibepod-board"
+version = "0.1.0"
+description = "Planning board for refining ideas, syncing ready work, and exposing plans through UI, API, and MCP."
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.20",
+    "fastapi>=0.141",
+    "fastmcp>=4.0",
+    "httpx>=0.28",
+    "psycopg[binary]>=3.3",
+    "sqlmodel>=0.0.47",
+    "uvicorn[standard]>=0.54",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["vibepod_board"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["vibepod_board"]
+known-third-party = ["alembic"]

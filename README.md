@@ -2,6 +2,14 @@
 
 Planning board for organizing projects, refining tasks, marking ready work onto a Kanban board, and storing detailed notes or execution plans. The same state is exposed through the browser UI, REST API, and an MCP Streamable HTTP endpoint for Claude Code, Codex, and other MCP clients.
 
+## Stack
+
+- **Backend** (`backend/`): Python 3.12, [FastAPI](https://fastapi.tiangolo.com/) for the REST API, [FastMCP](https://gofastmcp.com/) for the MCP endpoint, [SQLModel](https://sqlmodel.tiangolo.com/) on SQLAlchemy 2 with psycopg 3 for PostgreSQL, and [Alembic](https://alembic.sqlalchemy.org/) for migrations. Managed with [uv](https://docs.astral.sh/uv/).
+- **Client** (`src/client/`): React 18, Mantine 8, built with Vite and served by the backend.
+- **Storage**: PostgreSQL 16.
+
+The OpenAPI schema is served at `/openapi.json`, with interactive docs at `/docs`.
+
 ## Run with Docker
 
 ```bash
@@ -22,11 +30,7 @@ docker compose up --build
 
 Admins sign in through the browser UI and can create project-scoped API/MCP tokens from **API Tokens**.
 
-To import an existing development `board.json` into an empty PostgreSQL database, run:
-
-```bash
-npm run import:json -- ./data/board.json
-```
+The backend applies database migrations on startup. Set `ALEMBIC_AUTO_UPGRADE=false` to run them yourself with `uv run alembic upgrade head` from `backend/`. A database created by the earlier TypeScript server is adopted in place: it is brought up to the baseline revision and stamped, without recreating any data.
 
 The container joins the shared VibePod Docker network named `vibepod-network` by default. See [docs/integration-guide.md](docs/integration-guide.md) for MCP and VibePod container wiring.
 
@@ -63,6 +67,10 @@ GITHUB_REPOSITORY=owner/repo
 - `POST /api/ideas/:id/sync-github`
 - `GET /api/board`
 - `PATCH /api/board/:id`
+- `POST /api/board/:id/readiness`
+- `POST /api/ideas/:id/readiness`
+- `GET /api/ideas/:id/readiness`
+- `GET /api/activity`
 - `GET /api/documents`
 - `POST /api/documents`
 - `PATCH /api/documents/:id`
@@ -113,6 +121,10 @@ Tools:
 - `list_work_order`
 - `list_board`
 - `move_board_card`
+- `update_board_card`
+- `set_card_readiness`
+- `set_idea_readiness`
+- `list_idea_readiness`
 - `create_document`
 - `update_document`
 - `list_documents`
@@ -143,20 +155,26 @@ The graph follows the search, status, and label filters. A dependency on a task 
 
 ## Local Development
 
+Requirements: Node 22, [uv](https://docs.astral.sh/uv/), and a PostgreSQL database.
+
 ```bash
 npm install
+(cd backend && uv sync)
+```
+
+Run the API (with reload) and the Vite UI in two terminals; Vite proxies `/api` and `/mcp` to the API on port 3000:
+
+```bash
 DATABASE_URL=postgres://vibepod:vibepod@localhost:5432/vibepod_board \
 ADMIN_USERNAME=admin \
 ADMIN_PASSWORD=admin \
 npm run dev
-```
-
-For Vite hot reload during UI work, run the API and UI separately:
-
-```bash
-npm run dev
 npm run dev:ui
 ```
+
+To serve a production build of the UI from the API instead, run `npm run build` first; the API serves `dist/client`.
+
+Schema changes go through Alembic: edit the models in `backend/vibepod_board/tables.py`, then generate a revision with `uv run alembic revision --autogenerate -m "..."` from `backend/`.
 
 ## Verification
 
@@ -164,5 +182,9 @@ npm run dev:ui
 npm test
 npm run typecheck
 npm run build
+npm run test:api          # pytest; needs initdb/pg_ctl on PATH (or PG_BIN), or TEST_DATABASE_URL
+(cd backend && uv run ruff check . && uv run ruff format --check .)
 docker build -t vibepod-board:dev .
 ```
+
+The backend tests start a throwaway PostgreSQL cluster with `initdb`/`pg_ctl`. Point `PG_BIN` at a PostgreSQL `bin` directory when those tools are not on `PATH`, or set `TEST_DATABASE_URL` to use an existing database (its `public` schema is dropped between tests).
