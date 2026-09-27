@@ -8,9 +8,11 @@ configurations keep working.
 
 import json
 from collections.abc import Callable
-from typing import Annotated, Any
+from datetime import datetime
+from typing import Annotated, Any, Literal
 
 import anyio
+import httpx
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken, TokenVerifier
@@ -19,13 +21,17 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from vibepod_board.access import AccessContext, require_admin, token_access
+from vibepod_board.api.github import github_client
+from vibepod_board.config import Settings
 from vibepod_board.db import get_engine
 from vibepod_board.enums import BoardColumn, DocumentKind, IdeaStatus
 from vibepod_board.errors import BoardError
+from vibepod_board.github import GitHubClient
 from vibepod_board.services import (
     board,
     dependencies,
     documents,
+    github_sync,
     ideas,
     projects,
     readiness,
@@ -88,8 +94,16 @@ def run(operation: Callable[[Session, AccessContext], Any]) -> dict[str, Any]:
         raise ToolError(error.message) from error
 
 
-def create_mcp_server() -> FastMCP:
+def create_mcp_server(
+    settings: Settings, github_transport: httpx.BaseTransport | None = None
+) -> FastMCP:
     mcp = FastMCP("vibepod-board", version="0.1.0", auth=BoardTokenVerifier())
+
+    def github() -> GitHubClient:
+        try:
+            return github_client(settings, github_transport)
+        except BoardError as error:
+            raise ToolError(error.message) from error
 
     @mcp.resource(
         "vibepod-board://state",
@@ -181,6 +195,13 @@ def create_mcp_server() -> FastMCP:
         ] = None,
         repositoryLocalPath: str | None = None,  # noqa: N803
         repositoryRemoteUrl: str | None = None,  # noqa: N803
+        githubIssueUrl: Annotated[  # noqa: N803
+            str | None,
+            Field(
+                description="Link the task to a GitHub issue "
+                "(https://github.com/owner/repo/issues/123); an empty string unlinks it."
+            ),
+        ] = None,
         status: IdeaStatus | None = None,
     ) -> dict[str, Any]:
         return run(
@@ -198,8 +219,65 @@ def create_mcp_server() -> FastMCP:
                     status=status,
                     repository_local_path=repositoryLocalPath,
                     repository_remote_url=repositoryRemoteUrl,
+                    github_issue_url=githubIssueUrl,
                 )
             }
+        )
+
+    @mcp.tool(
+        title="Push Task to GitHub",
+        description="Create the task's GitHub issue, or update its title, body and labels "
+        "when the task is already linked. Fails when the issue changed on GitHub since the "
+        "last sync; pull first in that case. Never opens or closes the issue.",
+    )
+    def push_github_issue(id: TaskId) -> dict[str, Any]:
+        client = github()
+        return run(
+            lambda s, a: {"item": github_sync.push(s, a, id, client, settings.github_repository)}
+        )
+
+    @mcp.tool(
+        title="Pull Task from GitHub",
+        description="Refresh a linked task from its GitHub issue: title, labels, state and "
+        "sync time. Details are only filled when empty; status and board column never "
+        "change.",
+    )
+    def pull_github_issue(id: TaskId) -> dict[str, Any]:
+        client = github()
+        return run(lambda s, a: {"item": github_sync.pull(s, a, id, client)})
+
+    @mcp.tool(
+        title="Upsert GitHub Issue",
+        description="Import a GitHub issue you fetched yourself: creates a task for it, or "
+        "refreshes the task already linked to the same repository and number in the "
+        "project. Skipped (unchanged: true) when remoteUpdatedAt is not newer than the "
+        "last sync. Details of an existing task are never overwritten.",
+    )
+    def upsert_github_issue(
+        repository: Annotated[str, Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")],
+        number: Annotated[int, Field(gt=0)],
+        url: Annotated[str, Field(min_length=1)],
+        title: Annotated[str, Field(min_length=1)],
+        state: Literal["open", "closed"],
+        remoteUpdatedAt: datetime,  # noqa: N803
+        body: str | None = None,
+        labels: list[str] | None = None,
+        projectId: str | None = None,  # noqa: N803
+    ) -> dict[str, Any]:
+        return run(
+            lambda s, a: github_sync.upsert_issue(
+                s,
+                a,
+                repository=repository,
+                number=number,
+                url=url,
+                title=title,
+                state=state,
+                remote_updated_at=remoteUpdatedAt,
+                body=body or "",
+                labels=labels or [],
+                project_id=projectId,
+            )
         )
 
     @mcp.tool(

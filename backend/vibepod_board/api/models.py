@@ -72,6 +72,7 @@ class IdeaUpdate(ApiModel):
     depends_on: list[StrictStr] | None = None
     repository_local_path: StrictStr | None = None
     repository_remote_url: StrictStr | None = None
+    github_issue_url: StrictStr | None = None
     status: Status | None = None
 
 

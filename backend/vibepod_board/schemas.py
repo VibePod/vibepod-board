@@ -74,6 +74,10 @@ class Idea(ApiModel):
     blocked_by: list[str] = Field(default_factory=list)
     github_issue_url: str | None = None
     github_issue_number: int | None = None
+    github_repository: str | None = None
+    github_issue_state: str | None = None
+    github_issue_updated_at: Timestamp | None = None
+    github_synced_at: Timestamp | None = None
     repository_local_path: str | None = None
     repository_remote_url: str | None = None
     readiness_score: int | None = None

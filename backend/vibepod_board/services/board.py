@@ -1,15 +1,12 @@
 """Kanban board cards. A card is created when its idea becomes ready and mirrors the idea's
 title, details, labels and repository."""
 
-from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
 
 from sqlmodel import Session, col, select
 
 from vibepod_board.access import AccessContext, AdminAccess, assert_can_access_project
-from vibepod_board.enums import BOARD_COLUMNS, BoardColumn, IdeaStatus
-from vibepod_board.errors import Conflict
+from vibepod_board.enums import BOARD_COLUMNS, BoardColumn
 from vibepod_board.schemas import BoardCard, BoardColumns, now
 from vibepod_board.services.common import (
     add_activity,
@@ -18,7 +15,6 @@ from vibepod_board.services.common import (
     new_id,
     normalize_optional_text,
     require_card,
-    require_idea,
     require_project,
     transactional,
 )
@@ -26,18 +22,6 @@ from vibepod_board.services.dependencies import decorate_card, decorate_cards
 from vibepod_board.tables import BoardCardRow, IdeaRow
 
 UNSET = object()
-
-
-@dataclass(frozen=True)
-class GitHubLink:
-    """Where the card's issue lives: `local` keeps it on the board only."""
-
-    mode: Literal["local", "github"] = "local"
-    issue_url: str | None = None
-    issue_number: int | None = None
-
-
-LOCAL = GitHubLink()
 
 
 def _ordered(query):
@@ -73,21 +57,7 @@ def board_columns(
     return BoardColumns(**grouped)
 
 
-def apply_github_link(
-    session: Session, idea_id: str, link: GitHubLink, timestamp: datetime
-) -> None:
-    if link.mode != "github":
-        return
-    idea = session.get(IdeaRow, idea_id)
-    if idea is not None:
-        idea.github_issue_url = link.issue_url
-        idea.github_issue_number = link.issue_number
-        idea.updated_at = timestamp
-
-
-def ensure_card(
-    session: Session, idea: IdeaRow, link: GitHubLink = LOCAL, timestamp: datetime | None = None
-) -> BoardCardRow:
+def ensure_card(session: Session, idea: IdeaRow, timestamp: datetime | None = None) -> BoardCardRow:
     """Creates the idea's card, or refreshes it from the idea when it already exists."""
     timestamp = timestamp or now()
     existing = session.exec(select(BoardCardRow).where(BoardCardRow.idea_id == idea.id)).first()
@@ -97,15 +67,12 @@ def ensure_card(
         existing.labels = list(idea.labels)
         existing.repository_local_path = idea.repository_local_path
         existing.repository_remote_url = idea.repository_remote_url
-        if link.mode == "github":
-            existing.github_issue_url = link.issue_url
-            existing.github_issue_number = link.issue_number
+        existing.github_issue_url = idea.github_issue_url
+        existing.github_issue_number = idea.github_issue_number
         existing.updated_at = timestamp
-        apply_github_link(session, idea.id, link, timestamp)
         session.flush()
         return existing
 
-    github = link.mode == "github"
     card = BoardCardRow(
         id=new_id(),
         project_id=idea.project_id,
@@ -113,8 +80,8 @@ def ensure_card(
         title=idea.title,
         details=card_details_for_idea(idea),
         column_name=BoardColumn.READY,
-        github_issue_url=link.issue_url if github else None,
-        github_issue_number=link.issue_number if github else None,
+        github_issue_url=idea.github_issue_url,
+        github_issue_number=idea.github_issue_number,
         repository_local_path=idea.repository_local_path,
         repository_remote_url=idea.repository_remote_url,
         labels=list(idea.labels),
@@ -126,7 +93,6 @@ def ensure_card(
     )
     session.add(card)
     session.flush()
-    apply_github_link(session, idea.id, link, timestamp)
     add_activity(session, "board.created", f"Created board card: {card.title}", timestamp)
     return card
 
@@ -138,19 +104,10 @@ def sync_card_from_idea(session: Session, idea: IdeaRow, timestamp: datetime) ->
         card.labels = list(idea.labels)
         card.repository_local_path = idea.repository_local_path
         card.repository_remote_url = idea.repository_remote_url
+        card.github_issue_url = idea.github_issue_url
+        card.github_issue_number = idea.github_issue_number
         card.updated_at = timestamp
     session.flush()
-
-
-@transactional
-def create_card_from_idea(
-    session: Session, access: AccessContext, idea_id: str, link: GitHubLink = LOCAL
-) -> BoardCard:
-    idea = require_idea(session, idea_id)
-    assert_can_access_project(access, idea.project_id)
-    if idea.status != IdeaStatus.READY:
-        raise Conflict("Only ready ideas can be moved to the board")
-    return decorate_card(session, card_from_row(ensure_card(session, idea, link)))
 
 
 @transactional
