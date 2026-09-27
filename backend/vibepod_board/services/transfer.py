@@ -1,0 +1,219 @@
+"""Project export/import. An import either creates the project or, with confirmation,
+replaces an existing project with the same key; either way it is one transaction."""
+
+from sqlalchemy import delete
+from sqlmodel import Session, col, select
+
+from vibepod_board.access import token_access
+from vibepod_board.bundle import ProjectBundle, parse_project_bundle
+from vibepod_board.errors import Conflict
+from vibepod_board.schemas import ImportProjectResult, Project, format_timestamp, now
+from vibepod_board.services.board import list_cards
+from vibepod_board.services.common import (
+    add_activity,
+    project_from_row,
+    readiness_from_row,
+    require_project,
+    transactional,
+)
+from vibepod_board.services.documents import list_documents
+from vibepod_board.services.ideas import list_ideas
+from vibepod_board.tables import (
+    BoardCardRow,
+    DocumentRow,
+    IdeaReadinessEventRow,
+    IdeaRow,
+    ProjectRow,
+    TaskDependencyRow,
+)
+
+
+def readiness_events_for(session: Session, idea_ids: list[str]):
+    if not idea_ids:
+        return []
+    rows = session.exec(
+        select(IdeaReadinessEventRow)
+        .where(col(IdeaReadinessEventRow.idea_id).in_(idea_ids))
+        .order_by(col(IdeaReadinessEventRow.created_at).desc())
+    ).all()
+    return [readiness_from_row(row) for row in rows]
+
+
+def export_project(session: Session, project_id: str) -> ProjectBundle:
+    project = project_from_row(require_project(session, project_id))
+    access = token_access("project-export", [project.id])
+    ideas = list_ideas(session, access, project.id)
+    return parse_project_bundle(
+        {
+            "bundleVersion": 1,
+            "exportedAt": format_timestamp(now()),
+            "project": project.model_dump(mode="json"),
+            "ideas": [idea.model_dump(mode="json") for idea in ideas],
+            "boardCards": [
+                card.model_dump(mode="json") for card in list_cards(session, access, project.id)
+            ],
+            "readinessEvents": [
+                event.model_dump(mode="json")
+                for event in readiness_events_for(session, [idea.id for idea in ideas])
+            ],
+            "documents": [
+                document.model_dump(mode="json")
+                for document in list_documents(session, access, project.id)
+            ],
+        }
+    )
+
+
+def _assert_ids_available(session: Session, bundle: ProjectBundle, destination: str) -> None:
+    for entity, table, ids in (
+        ("Idea", IdeaRow, [idea.id for idea in bundle.ideas]),
+        ("Board card", BoardCardRow, [card.id for card in bundle.board_cards]),
+        ("Document", DocumentRow, [document.id for document in bundle.documents]),
+    ):
+        if not ids:
+            continue
+        collision = session.exec(
+            select(table.id).where(col(table.id).in_(ids), table.project_id != destination).limit(1)
+        ).first()
+        if collision:
+            raise Conflict(f"{entity} ID is already used by another project: {collision}")
+
+    event_ids = [event.id for event in bundle.readiness_events]
+    if event_ids:
+        collision = session.exec(
+            select(IdeaReadinessEventRow.id)
+            .join(IdeaRow, col(IdeaRow.id) == IdeaReadinessEventRow.idea_id)
+            .where(col(IdeaReadinessEventRow.id).in_(event_ids), IdeaRow.project_id != destination)
+            .limit(1)
+        ).first()
+        if collision:
+            raise Conflict(f"Readiness event ID is already used by another project: {collision}")
+
+
+def _insert_children(session: Session, bundle: ProjectBundle, destination: str) -> None:
+    for idea in bundle.ideas:
+        session.add(
+            IdeaRow(
+                id=idea.id,
+                project_id=destination,
+                task_number=idea.task_number,
+                title=idea.title,
+                summary=idea.summary,
+                details=idea.details,
+                status=idea.status,
+                labels=list(idea.labels),
+                acceptance_criteria=list(idea.acceptance_criteria),
+                github_issue_url=idea.github_issue_url,
+                github_issue_number=idea.github_issue_number,
+                repository_local_path=idea.repository_local_path,
+                repository_remote_url=idea.repository_remote_url,
+                readiness_score=idea.readiness_score,
+                readiness_reason=idea.readiness_reason,
+                readiness_evaluated_at=idea.readiness_evaluated_at,
+                created_at=idea.created_at,
+                updated_at=idea.updated_at,
+            )
+        )
+    session.flush()
+    for idea in bundle.ideas:
+        for depends_on_id in dict.fromkeys(idea.depends_on):
+            session.add(
+                TaskDependencyRow(
+                    idea_id=idea.id, depends_on_idea_id=depends_on_id, created_at=idea.updated_at
+                )
+            )
+    for card in bundle.board_cards:
+        session.add(
+            BoardCardRow(
+                id=card.id,
+                project_id=destination,
+                idea_id=card.idea_id,
+                title=card.title,
+                details=card.details,
+                column_name=card.column,
+                branch_name=card.branch_name,
+                github_issue_url=card.github_issue_url,
+                github_issue_number=card.github_issue_number,
+                repository_local_path=card.repository_local_path,
+                repository_remote_url=card.repository_remote_url,
+                labels=list(card.labels),
+                readiness_score=card.readiness_score,
+                readiness_reason=card.readiness_reason,
+                readiness_evaluated_at=card.readiness_evaluated_at,
+                created_at=card.created_at,
+                updated_at=card.updated_at,
+            )
+        )
+    for event in bundle.readiness_events:
+        session.add(
+            IdeaReadinessEventRow(
+                id=event.id,
+                idea_id=event.idea_id,
+                score=event.score,
+                reason=event.reason,
+                created_at=event.created_at,
+            )
+        )
+    for document in bundle.documents:
+        session.add(
+            DocumentRow(
+                id=document.id,
+                project_id=destination,
+                title=document.title,
+                kind=document.kind,
+                content=document.content,
+                linked_idea_ids=list(document.linked_idea_ids),
+                linked_card_ids=list(document.linked_card_ids),
+                created_at=document.created_at,
+                updated_at=document.updated_at,
+            )
+        )
+    session.flush()
+
+
+@transactional
+def import_project(
+    session: Session, bundle: ProjectBundle, replace_existing: bool = False
+) -> ImportProjectResult:
+    # Lock the key's row, so two concurrent imports of the same key wait for each other
+    # instead of both reading the pre-import state and racing into a constraint error.
+    existing = session.exec(
+        select(ProjectRow).where(ProjectRow.key == bundle.project.key).with_for_update()
+    ).first()
+    if existing and not replace_existing:
+        raise Conflict(
+            f"Project key {bundle.project.key} already exists; replacement confirmation is required"
+        )
+
+    destination = existing.id if existing else bundle.project.id
+    if not existing and session.get(ProjectRow, bundle.project.id):
+        raise Conflict(f"Project ID is already used: {bundle.project.id}")
+    _assert_ids_available(session, bundle, destination)
+
+    if existing:
+        for table in (BoardCardRow, DocumentRow, IdeaRow):
+            session.execute(delete(table).where(col(table.project_id) == destination))
+        existing.title = bundle.project.title
+        existing.summary = bundle.project.summary
+        existing.created_at = bundle.project.created_at
+        existing.updated_at = bundle.project.updated_at
+        session.flush()
+    else:
+        session.add(
+            ProjectRow(
+                id=destination,
+                key=bundle.project.key,
+                title=bundle.project.title,
+                summary=bundle.project.summary,
+                created_at=bundle.project.created_at,
+                updated_at=bundle.project.updated_at,
+            )
+        )
+        session.flush()
+    _insert_children(session, bundle, destination)
+    add_activity(session, "project.imported", f"Imported project: {bundle.project.title}")
+
+    project = Project.model_validate(bundle.project.model_dump())
+    return ImportProjectResult(
+        item=project.model_copy(update={"id": destination}), replaced=existing is not None
+    )
