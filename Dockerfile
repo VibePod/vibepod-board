@@ -5,6 +5,7 @@ COPY package*.json ./
 RUN npm ci
 
 COPY index.html vite.config.ts tsconfig.client.json ./
+COPY public ./public
 COPY src ./src
 RUN npm run build
 
