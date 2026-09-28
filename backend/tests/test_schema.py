@@ -84,6 +84,52 @@ def test_adopts_a_database_created_by_the_typescript_server(empty_db: Engine) ->
         assert connection.execute(text("select key from projects")).scalars().all() == ["APP"]
 
 
+# What the TypeScript server on the agent-API branch added on every start.
+AGENT_API_SCHEMA = """
+create index if not exists board_cards_idea_idx on board_cards(idea_id);
+create index if not exists ideas_project_status_updated_idx
+  on ideas(project_id, status, updated_at desc);
+create index if not exists board_cards_project_column_updated_idx
+  on board_cards(project_id, column_name, updated_at desc);
+create index if not exists ideas_project_updated_id_idx
+  on ideas(project_id, updated_at desc, id desc);
+create index if not exists board_cards_project_updated_id_idx
+  on board_cards(project_id, updated_at desc, id desc);
+alter table ideas add column if not exists assignee text;
+alter table board_cards add column if not exists assignee text;
+create index if not exists ideas_project_assignee_idx on ideas(project_id, assignee);
+create index if not exists board_cards_project_assignee_idx on board_cards(project_id, assignee);
+"""
+
+
+def test_adopts_a_typescript_database_that_already_has_assignees(empty_db: Engine) -> None:
+    with empty_db.begin() as connection:
+        connection.exec_driver_sql(LEGACY_SCHEMA)
+        connection.exec_driver_sql(AGENT_API_SCHEMA)
+        connection.execute(
+            text(
+                "insert into projects (id, key, title, created_at, updated_at) "
+                "values ('p1', 'APP', 'App', now(), now())"
+            )
+        )
+        connection.execute(
+            text(
+                "insert into ideas (id, project_id, task_number, title, status, assignee, "
+                "created_at, updated_at) "
+                "values ('i1', 'p1', 1, 'Held', 'idea', 'Claude::Worker', now(), now())"
+            )
+        )
+
+    migrate(empty_db)
+
+    assert revision(empty_db) == HEAD
+    assert schema_diff(empty_db) == []
+    with empty_db.connect() as connection:
+        assert connection.execute(text("select assignee from ideas")).scalars().all() == [
+            "Claude::Worker"
+        ]
+
+
 def test_catches_up_an_original_typescript_database(empty_db: Engine) -> None:
     now = datetime.now(UTC)
     with empty_db.begin() as connection:
