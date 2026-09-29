@@ -20,11 +20,19 @@ from pydantic import AwareDatetime, BaseModel, Field
 from sqlmodel import Session
 
 from vibepod_board.access import AccessContext, require_admin, token_access
+from vibepod_board.api.deps import worker_timing
 from vibepod_board.api.github import github_client
 from vibepod_board.api.models import BoardCardBatchItem, IdeaBatchItem
 from vibepod_board.config import Settings
 from vibepod_board.db import get_engine
-from vibepod_board.enums import BoardColumn, DocumentKind, IdeaStatus, ReleaseOutcome
+from vibepod_board.enums import (
+    BoardColumn,
+    DocumentKind,
+    IdeaStatus,
+    ReleaseOutcome,
+    WorkerStatus,
+    WorkerStep,
+)
 from vibepod_board.errors import BoardError
 from vibepod_board.github import GitHubClient
 from vibepod_board.services import (
@@ -39,6 +47,7 @@ from vibepod_board.services import (
     readiness,
     state,
     tokens,
+    workers,
 )
 from vibepod_board.services.claims import MAX_LEASE_SECONDS, MIN_LEASE_SECONDS
 from vibepod_board.services.listing import BATCH_LIMIT
@@ -818,6 +827,88 @@ def create_mcp_server(
     )
     def list_task_history(id: TaskId) -> dict[str, Any]:
         return run(lambda s, a: {"items": history.list_task_history(s, a, id)})
+
+    @mcp.tool(
+        title="List Workers",
+        description="List the automated workers connected to your projects (or one project), "
+        "seen in the last day: name, agent, machine, status (idle, working, paused or "
+        "offline), the task being worked on with its step and since when, and when each was "
+        "last seen.",
+        annotations=READ_ONLY,
+    )
+    def list_workers(projectId: ProjectFilter = None) -> dict[str, Any]:  # noqa: N803
+        return run(
+            lambda s, a: {"items": workers.list_workers(s, a, projectId, worker_timing(settings))}
+        )
+
+    @mcp.tool(
+        title="Register Worker",
+        description="Connect an automated worker to a project; it shows up on the board right "
+        "away. Its name is the holder of the claims it takes (use it as the assignee of "
+        "claim_next_task). Registering a name that is already connected replaces that "
+        "registration. Send worker_heartbeat every heartbeatSeconds, and sign_off_worker when "
+        "done.",
+    )
+    def register_worker(
+        projectId: Annotated[  # noqa: N803
+            str, Field(min_length=1, description="Project id, key or title.")
+        ],
+        name: Annotated[str, Field(min_length=1)],
+        agent: str | None = None,
+        machine: str | None = None,
+    ) -> dict[str, Any]:
+        return run(
+            lambda s, a: workers.register_worker(
+                s, a, projectId, name, agent, machine, worker_timing(settings)
+            )
+        )
+
+    @mcp.tool(
+        title="Worker Heartbeat",
+        description="Report that a worker is alive: its status (idle, working or paused, with "
+        "a reason when paused), the task it works on and the step it is in (preparing_workspace, "
+        "agent_running, verifying, handing_over). Renews the claims the worker holds. The "
+        "reply carries instructions for the worker.",
+    )
+    def worker_heartbeat(
+        id: Annotated[str, Field(min_length=1, description="Worker id from register_worker.")],
+        status: WorkerStatus,
+        statusReason: str | None = None,  # noqa: N803
+        task: Annotated[
+            str | None, Field(min_length=1, description="The task being worked on.")
+        ] = None,
+        step: WorkerStep | None = None,
+        leaseSeconds: LeaseSeconds = None,  # noqa: N803
+    ) -> dict[str, Any]:
+        return run(
+            lambda s, a: workers.heartbeat(
+                s,
+                a,
+                id,
+                status,
+                status_reason=statusReason,
+                task=task,
+                step=step,
+                lease_seconds=leaseSeconds,
+                timing=worker_timing(settings),
+            )
+        )
+
+    @mcp.tool(
+        title="Sign Off Worker",
+        description="Disconnect a worker: it shows as offline right away, and claims it still "
+        "holds go back to Planned without counting an attempt.",
+    )
+    def sign_off_worker(
+        id: Annotated[str, Field(min_length=1, description="Worker id from register_worker.")],
+    ) -> dict[str, Any]:
+        return run(
+            lambda s, a: {
+                "item": workers.sign_off(
+                    s, a, id, settings.claim_max_attempts, worker_timing(settings)
+                )
+            }
+        )
 
     @mcp.tool(
         title="Set Card Readiness",

@@ -186,6 +186,30 @@ class TaskEventRow(SQLModel, table=True):
     created_at: datetime = _timestamp()
 
 
+class WorkerRow(SQLModel, table=True):
+    """An automated runner connected to a project. Its name is the holder of the claims it
+    takes; heartbeats keep it online and renew those claims."""
+
+    __tablename__ = "workers"
+    __table_args__ = (Index("workers_project_seen_idx", "project_id", text("last_seen_at DESC")),)
+
+    id: str = Field(sa_column=Column(Text, primary_key=True))
+    project_id: str = _foreign_key("projects.id", "CASCADE")
+    name: str = Field(sa_column=Column(Text, nullable=False))
+    agent: str = _text("")
+    machine: str = _text("")
+    # idle, working or paused, as last reported; offline is derived from `last_seen_at`.
+    status: str = _text("idle")
+    status_reason: str | None = _text()
+    # The task being worked on, the step it is in and since when it is worked on.
+    idea_id: str | None = _foreign_key("ideas.id", "SET NULL", nullable=True)
+    step: str | None = _text()
+    task_started_at: datetime | None = _timestamp(nullable=True)
+    started_at: datetime = _timestamp()
+    last_seen_at: datetime = _timestamp()
+    stopped_at: datetime | None = _timestamp(nullable=True)
+
+
 class DocumentRow(SQLModel, table=True):
     __tablename__ = "documents"
     __table_args__ = (

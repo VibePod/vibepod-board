@@ -34,16 +34,19 @@ MCP_INFO_TOOLS = (
     "list_readiness",
     "list_task_history",
     "list_work_order",
+    "list_workers",
     "mark_idea_ready",
     "move_board_card",
     "pull_github_issue",
     "push_github_issue",
+    "register_worker",
     "release_task",
     "remove_idea_dependency",
     "renew_task_claim",
     "set_card_readiness",
     "set_idea_dependencies",
     "set_idea_readiness",
+    "sign_off_worker",
     "unarchive_board_card",
     "update_board_card",
     "update_board_cards",
@@ -51,6 +54,7 @@ MCP_INFO_TOOLS = (
     "update_idea",
     "update_ideas",
     "upsert_github_issue",
+    "worker_heartbeat",
 )
 
 AdminSessionDep = Annotated[AdminSession | None, Depends(current_admin_session)]
