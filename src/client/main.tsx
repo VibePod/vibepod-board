@@ -1509,7 +1509,11 @@ const App = () => {
     setError("");
     setNotice("");
     try {
-      await api(`/api/board/${card.id}/cancel`, { method: "POST" });
+      // Guarded by the card this board shows: a newer run is not cancelled blindly.
+      await api(`/api/board/${card.id}/cancel`, {
+        method: "POST",
+        body: JSON.stringify({ expectedUpdatedAt: card.updatedAt }),
+      });
       await loadState();
       setNotice(`Cancelled the run of ${card.title}.`);
     } catch (err) {
@@ -3139,14 +3143,15 @@ const App = () => {
               </Paper>
             )}
 
+            {/* A runner reports after moving the card, so what the workers do reloads too. */}
             <TaskRuns
               ideaId={taskViewIdea.id}
-              reloadKey={taskViewCard?.updatedAt}
+              reloadKey={`${taskViewCard?.updatedAt}|${workerActivitySignature(workers)}`}
             />
 
             <TaskHistory
               ideaId={taskViewIdea.id}
-              reloadKey={taskViewCard?.updatedAt}
+              reloadKey={`${taskViewCard?.updatedAt}|${workerActivitySignature(workers)}`}
             />
 
             {isTaskViewArchived && taskViewCard ? (

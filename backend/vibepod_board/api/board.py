@@ -202,7 +202,15 @@ def cancel_run(
 ) -> Item[BoardCard]:
     """Stops the run of a claimed task: it returns to Planned without counting an attempt,
     and the worker is told to cancel with its next heartbeat reply."""
-    return Item(item=claims.cancel_run(session, access, card_id, body.reason if body else None))
+    return Item(
+        item=claims.cancel_run(
+            session,
+            access,
+            card_id,
+            body.reason if body else None,
+            body.expected_updated_at if body else None,
+        )
+    )
 
 
 @router.post("/{card_id}/readiness")

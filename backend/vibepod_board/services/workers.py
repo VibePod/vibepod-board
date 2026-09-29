@@ -293,14 +293,17 @@ def heartbeat(
         raise Conflict(f"Worker {row.name} is signed off; register again to reconnect")
     timestamp = now()
     idea = None
+    vanished: str | None = None
     if status == WorkerStatus.WORKING:
         if not task:
             raise BadRequest("A working worker must name its task")
         try:
             idea = require_idea_ref(session, access, task)
         except NotFound:
-            # Deleted while the worker was on it: the worker is not working on anything.
+            # Deleted while the worker was on it: it is not working on anything, and it is
+            # told to stop the run.
             status = WorkerStatus.IDLE
+            vanished = task
     if idea is not None:
         if idea.project_id != row.project_id:
             raise BadRequest(f"Task {task} is not in the worker's project")
@@ -316,7 +319,14 @@ def heartbeat(
     row.status_reason = normalize_optional_text(status_reason)
     row.last_seen_at = timestamp
     _renew_claims(session, row, timestamp + lease)
-    return _session_reply(session, row, timing, instructions_for(session, row))
+    instructions = instructions_for(session, row)
+    if vanished is not None:
+        instructions.append(
+            WorkerInstruction(
+                type=InstructionType.CANCEL, reason="The task was deleted", task_id=vanished
+            )
+        )
+    return _session_reply(session, row, timing, instructions)
 
 
 @transactional
