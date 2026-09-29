@@ -1198,6 +1198,7 @@ body {
 
 .worker-live-dot {
   flex-shrink: 0;
+  margin-top: 4px;
   width: 8px;
   height: 8px;
   border-radius: 50%;
