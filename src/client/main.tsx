@@ -97,6 +97,7 @@ import {
   type ProjectBundle,
   type ReadinessEvent,
   type Worker,
+  type WorkerListResponse,
 } from "../shared/types.js";
 import {
   ArchiveDoneDialog,
@@ -145,6 +146,7 @@ import {
 import { githubRemoteToHttpsUrl } from "./repositoryUtils.js";
 import { TaskGraph } from "./TaskGraph.js";
 import { TaskHistory } from "./TaskHistory.js";
+import { TaskRuns } from "./TaskRuns.js";
 import {
   isCardReadinessStale,
   isReadinessStale,
@@ -419,6 +421,11 @@ const App = () => {
     emptyTokenDraft(),
   );
   const [workers, setWorkers] = useState<Worker[]>([]);
+  const [automation, setAutomation] = useState<
+    WorkerListResponse["automation"] | null
+  >(null);
+  // Bumped after a control is used, so the worker list refreshes at once.
+  const [workersVersion, setWorkersVersion] = useState(0);
 
   /** A background reload keeps the error banner: the user has not read it yet. */
   const loadState = async ({ background = false } = {}) => {
@@ -656,20 +663,23 @@ const App = () => {
   // Workers of the open project: their status, and the live indicator on the
   // cards they work on. When what they do changes, automation moved cards, so
   // the board reloads too.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: workersVersion asks for an immediate refresh
   useEffect(() => {
     if (auth.status !== "authenticated" || !selectedProjectId) {
       setWorkers([]);
+      setAutomation(null);
       return;
     }
     let cancelled = false;
     let signature: string | null = null;
     const poll = async () => {
       try {
-        const response = await api<{ items: Worker[] }>(
+        const response = await api<WorkerListResponse>(
           `/api/workers?projectId=${encodeURIComponent(selectedProjectId)}`,
         );
         if (cancelled) return;
         setWorkers(response.items);
+        setAutomation(response.automation ?? null);
         const next = workerActivitySignature(response.items);
         if (signature !== null && next !== signature) {
           void loadStateRef
@@ -678,7 +688,10 @@ const App = () => {
         }
         signature = next;
       } catch {
-        if (!cancelled) setWorkers([]);
+        if (!cancelled) {
+          setWorkers([]);
+          setAutomation(null);
+        }
       }
     };
     void poll();
@@ -689,7 +702,7 @@ const App = () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [auth.status, selectedProjectId]);
+  }, [auth.status, selectedProjectId, workersVersion]);
 
   useEffect(() => {
     if (
@@ -1440,6 +1453,71 @@ const App = () => {
     }
   };
 
+  const pauseAutomation = async (reason: string) => {
+    if (!selectedProject) return;
+    setError("");
+    try {
+      await api(`/api/projects/${selectedProject.id}/automation/pause`, {
+        method: "POST",
+        body: JSON.stringify(reason ? { reason } : {}),
+      });
+      setNotice(`Paused automation of ${selectedProject.key}.`);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to pause automation",
+      );
+    }
+    setWorkersVersion((version) => version + 1);
+  };
+
+  const resumeAutomation = async () => {
+    if (!selectedProject) return;
+    setError("");
+    try {
+      await api(`/api/projects/${selectedProject.id}/automation/resume`, {
+        method: "POST",
+      });
+      setNotice(`Resumed automation of ${selectedProject.key}.`);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to resume automation",
+      );
+    }
+    setWorkersVersion((version) => version + 1);
+  };
+
+  const stopWorker = async (worker: Worker) => {
+    setError("");
+    try {
+      await api(`/api/workers/${worker.id}/stop`, { method: "POST" });
+      setNotice(`Asked ${worker.name} to stop.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to stop worker");
+    }
+    setWorkersVersion((version) => version + 1);
+  };
+
+  /** Stops the automated run of a claimed card; the task returns to Planned. */
+  const cancelRun = async (card: BoardCard) => {
+    if (
+      !window.confirm(
+        `Cancel the run of ${card.title}? The task returns to Planned.`,
+      )
+    ) {
+      return;
+    }
+    setError("");
+    setNotice("");
+    try {
+      await api(`/api/board/${card.id}/cancel`, { method: "POST" });
+      await loadState();
+      setNotice(`Cancelled the run of ${card.title}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to cancel the run");
+    }
+    setWorkersVersion((version) => version + 1);
+  };
+
   const archiveCard = async (card: BoardCard) => {
     setError("");
     setNotice("");
@@ -1811,7 +1889,14 @@ const App = () => {
               </Button>
             )}
             {activeView !== "projects" && selectedProject && (
-              <WorkersIndicator workers={workers} onOpenTask={openTaskById} />
+              <WorkersIndicator
+                workers={workers}
+                automation={automation ?? null}
+                onOpenTask={openTaskById}
+                onStop={stopWorker}
+                onPause={pauseAutomation}
+                onResume={resumeAutomation}
+              />
             )}
             <ActionIcon
               variant="light"
@@ -2545,6 +2630,25 @@ const App = () => {
                                     {formatClaimedSince(card.claimedAt)}
                                   </Text>
                                 )}
+                                {card.claimedAt && (
+                                  <Button
+                                    type="button"
+                                    variant="subtle"
+                                    color="red"
+                                    size="compact-xs"
+                                    ml="auto"
+                                    aria-label={`Cancel run of ${card.title}`}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void cancelRun(card);
+                                    }}
+                                    onKeyDown={(event) =>
+                                      event.stopPropagation()
+                                    }
+                                  >
+                                    Cancel run
+                                  </Button>
+                                )}
                               </Group>
                             )}
                             {card.branchName && (
@@ -2931,13 +3035,28 @@ const App = () => {
               </Alert>
             )}
             {taskViewCard?.claimedAt && taskViewCard.assignee && (
-              <Text className="overview-claim" size="sm" c="dimmed">
-                Claimed by {taskViewCard.assignee}{" "}
-                {formatClaimedSince(taskViewCard.claimedAt)}
-                {taskViewCard.claimExpiresAt
-                  ? `, held until ${formatDateTime(taskViewCard.claimExpiresAt)}`
-                  : ""}
-              </Text>
+              <Group
+                className="overview-claim"
+                gap="sm"
+                justify="space-between"
+              >
+                <Text size="sm" c="dimmed">
+                  Claimed by {taskViewCard.assignee}{" "}
+                  {formatClaimedSince(taskViewCard.claimedAt)}
+                  {taskViewCard.claimExpiresAt
+                    ? `, held until ${formatDateTime(taskViewCard.claimExpiresAt)}`
+                    : ""}
+                </Text>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="light"
+                  color="red"
+                  onClick={() => void cancelRun(taskViewCard)}
+                >
+                  Cancel run
+                </Button>
+              </Group>
             )}
 
             <Paper className="overview-section" withBorder radius="md" p="md">
@@ -3019,6 +3138,11 @@ const App = () => {
                 </Stack>
               </Paper>
             )}
+
+            <TaskRuns
+              ideaId={taskViewIdea.id}
+              reloadKey={taskViewCard?.updatedAt}
+            />
 
             <TaskHistory
               ideaId={taskViewIdea.id}
