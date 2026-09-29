@@ -35,7 +35,7 @@ from vibepod_board.services.common import (
     transactional,
 )
 from vibepod_board.services.dependencies import decorate_card, decorate_idea
-from vibepod_board.services.history import add_task_event
+from vibepod_board.services.history import actor_for, add_task_event
 from vibepod_board.services.ideas import work_order
 from vibepod_board.services.references import (
     require_card_ref,
@@ -112,8 +112,13 @@ def _obstacle(
     return None
 
 
-def _lock_project(session: Session, project_id: str) -> None:
-    session.exec(select(ProjectRow.id).where(ProjectRow.id == project_id).with_for_update()).one()
+def _lock_project(session: Session, project_id: str) -> ProjectRow:
+    return session.exec(
+        select(ProjectRow)
+        .where(ProjectRow.id == project_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one()
 
 
 def _card_of(session: Session, idea_id: str) -> BoardCardRow | None:
@@ -173,6 +178,13 @@ def _claim_result(session: Session, idea: IdeaRow, card: BoardCardRow) -> ClaimR
     return ClaimResult(claimed=True, item=Claim(task=task, card=shown))
 
 
+def _paused(project: ProjectRow) -> ClaimResult:
+    reason = project.automation_paused_reason or "Automation is paused from the board"
+    return ClaimResult(
+        claimed=False, paused=True, reason=f"Automation of {project.key} is paused: {reason}"
+    )
+
+
 @transactional
 def claim_task(
     session: Session,
@@ -198,9 +210,10 @@ def claim_task(
     if min_readiness is not None and not 1 <= min_readiness <= 10:
         raise BadRequest("minReadiness must be an integer from 1 to 10")
 
-    _lock_project(session, project_id)
+    project_row = _lock_project(session, project_id)
     timestamp = now()
     _expire(session, timestamp, max_attempts, project_id)
+    paused = project_row.automation_paused_at is not None
 
     if task:
         idea = require_idea_ref(session, access, task)
@@ -213,12 +226,16 @@ def claim_task(
             if card.claimed_at is not None and card.assignee == holder:
                 card.claim_expires_at = timestamp + lease
                 return _claim_result(session, idea, card)
+        if paused:
+            return _paused(project_row)
         blocked_by = decorate_idea(session, idea).blocked_by
         obstacle = _obstacle(card, idea, blocked_by, wanted, min_readiness)
         if obstacle is not None:
             raise Conflict(f"Task {_key(session, idea)} cannot be claimed: {obstacle}")
         assert card is not None
     else:
+        if paused:
+            return _paused(project_row)
         chosen = _next_claimable(session, access, project_id, wanted, min_readiness)
         if chosen is None:
             return ClaimResult(claimed=False, reason=NOTHING_TO_CLAIM)
@@ -400,6 +417,35 @@ def apply_release(
     add_activity(session, f"board.{kind.value}", f"{_key(session, idea)}: {message}", timestamp)
     session.flush()
     return card
+
+
+@transactional
+def cancel_run(
+    session: Session, access: AccessContext, reference: str, reason: str | None = None
+) -> BoardCard:
+    """Stops a running task from the board: the claim ends and the task returns to Planned
+    without counting an attempt. The worker learns it with its next heartbeat reply."""
+    found = require_card_ref(session, access, reference)
+    assert_can_access_project(access, found.project_id)
+    if not found.idea_id:
+        raise Conflict("Board card has no task, so it has no run to cancel")
+    idea = lock(session, IdeaRow, found.idea_id)
+    card = lock(session, BoardCardRow, found.id)
+    if card.claimed_at is None:
+        raise Conflict(f"Task {_key(session, idea)} has no run to cancel: it is not claimed")
+    holder = card.assignee
+    timestamp = now()
+    _end_claim(card, idea, timestamp)
+    card.column_name = BoardColumn.PLANNED
+    reason = (reason or "").strip()
+    message = f"Run by {holder} cancelled" + (f": {reason}" if reason else "")
+    actor = actor_for(session, access)
+    add_task_event(session, idea.id, TaskEventKind.CANCELLED, message, actor, timestamp)
+    add_activity(
+        session, "board.cancelled", f"{actor} cancelled the run of {_key(session, idea)}", timestamp
+    )
+    session.flush()
+    return decorate_card(session, card_from_row(card))
 
 
 def _locked_or_none[T: IdeaRow | BoardCardRow](
