@@ -37,24 +37,29 @@ export const WorkerActivity = ({ worker }: { worker: Worker }) => {
   return (
     <Group
       className="board-card-worker"
-      gap={6}
+      gap={8}
       wrap="nowrap"
+      align="flex-start"
       aria-label={`Being worked on by ${worker.name}`}
     >
       <span className="worker-live-dot" aria-hidden />
-      <Text size="xs" fw={600} truncate>
-        {worker.name}
-      </Text>
-      {worker.step && (
-        <Text size="xs" c="dimmed" className="board-card-worker-step">
-          {workerStepLabels[worker.step]}
+      <Stack gap={0} style={{ minWidth: 0 }}>
+        <Text size="xs" fw={600} truncate>
+          {worker.name}
         </Text>
-      )}
-      {worker.taskStartedAt && (
-        <Text size="xs" c="dimmed" className="board-card-worker-elapsed">
-          {formatElapsed(elapsedSince(worker.taskStartedAt, now))}
-        </Text>
-      )}
+        <Group gap={6} wrap="nowrap">
+          {worker.step && (
+            <Text size="xs" c="dimmed" className="board-card-worker-step">
+              {workerStepLabels[worker.step]}
+            </Text>
+          )}
+          {worker.taskStartedAt && (
+            <Text size="xs" c="dimmed" className="board-card-worker-elapsed">
+              {formatElapsed(elapsedSince(worker.taskStartedAt, now))}
+            </Text>
+          )}
+        </Group>
+      </Stack>
     </Group>
   );
 };
