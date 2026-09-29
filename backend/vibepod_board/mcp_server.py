@@ -40,6 +40,7 @@ from vibepod_board.services import (
     automation,
     board,
     claims,
+    conversation,
     dependencies,
     documents,
     github_sync,
@@ -800,8 +801,9 @@ def create_mcp_server(
         description="Give a task you claimed back to Planned, with a note. outcome failed "
         "(default) counts a failed attempt, and the attempt that reaches maxAttempts blocks "
         "the task instead; blocked blocks it outright with the note as the reason shown on "
-        "the card; released counts nothing. A blocked task is skipped by claims until someone "
-        "moves it to Planned again.",
+        "the card; needs_input blocks it with the note as a question that waits for an "
+        "answer; released counts nothing. A blocked task is skipped by claims until someone "
+        "moves it to Planned again or answers its question.",
     )
     def release_task(
         id: CardId,
@@ -834,7 +836,8 @@ def create_mcp_server(
     @mcp.tool(
         title="List Task History",
         description="What happened to a task under automation, newest first: claims, "
-        "hand-overs, failed attempts, blocks and expired claims.",
+        "hand-overs, failed attempts, blocks, expired claims, and the questions, answers and "
+        "review feedback of the needs-input and rework loop.",
         annotations=READ_ONLY,
     )
     def list_task_history(id: TaskId) -> dict[str, Any]:
@@ -990,7 +993,8 @@ def create_mcp_server(
     @mcp.tool(
         title="Add Run Report",
         description="Add the report of an automated run to its task: outcome (done, failed, "
-        "timed_out, cancelled, usage_limit), the agent's summary, the commits made, the verify "
+        "timed_out, cancelled, usage_limit, needs_input), the agent's summary, the commits "
+        "made, the verify "
         "command with its exit code and output, the duration and the failure reason. Long "
         "verify output is cut down to its head and tail. Reports accumulate as the task's "
         "history of attempts.",
@@ -1043,6 +1047,30 @@ def create_mcp_server(
     )
     def list_run_reports(id: TaskId) -> dict[str, Any]:
         return run(lambda s, a: {"items": runs.list_run_reports(s, a, id)})
+
+    @mcp.tool(
+        title="Answer Task Question",
+        description="Answer the question a task waits on after its automated run asked for "
+        "input; the task goes back to Planned and the next run gets the answer.",
+    )
+    def answer_task_question(
+        id: CardId,
+        answer: Annotated[str, Field(min_length=1)],
+        view: ViewArg = None,
+    ) -> dict[str, Any]:
+        return run(lambda s, a: echo_card(s, conversation.answer_question(s, a, id, answer), view))
+
+    @mcp.tool(
+        title="Request Task Rework",
+        description="Send a task from Review back to Planned with feedback. It keeps its "
+        "branch, and the next automated run continues there with the feedback in its prompt.",
+    )
+    def request_task_rework(
+        id: CardId,
+        feedback: Annotated[str, Field(min_length=1)],
+        view: ViewArg = None,
+    ) -> dict[str, Any]:
+        return run(lambda s, a: echo_card(s, conversation.request_rework(s, a, id, feedback), view))
 
     @mcp.tool(
         title="Set Card Readiness",

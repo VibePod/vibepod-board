@@ -4,6 +4,7 @@ from fastapi import APIRouter, Query
 
 from vibepod_board.api.deps import SettingsDep
 from vibepod_board.api.models import (
+    AnswerRequest,
     ArchiveDoneRequest,
     BoardCardBatch,
     BoardCardUpdate,
@@ -13,6 +14,7 @@ from vibepod_board.api.models import (
     ReadinessRequest,
     ReleaseRequest,
     RenewClaimRequest,
+    ReworkRequest,
 )
 from vibepod_board.api.queries import (
     Assignee,
@@ -35,7 +37,7 @@ from vibepod_board.schemas import (
     EntityRef,
     KeyedBoardCard,
 )
-from vibepod_board.services import board, claims, readiness
+from vibepod_board.services import board, claims, conversation, readiness
 from vibepod_board.services.views import View, project_cards
 
 router = APIRouter(prefix="/api/board", tags=["board"])
@@ -211,6 +213,22 @@ def cancel_run(
             body.expected_updated_at if body else None,
         )
     )
+
+
+@router.post("/{card_id}/answer")
+def answer_question(
+    card_id: str, body: AnswerRequest, session: SessionDep, access: AccessDep
+) -> Item[BoardCard]:
+    """Answers the question the task waits on and puts it back in Planned."""
+    return Item(item=conversation.answer_question(session, access, card_id, body.answer))
+
+
+@router.post("/{card_id}/rework")
+def request_rework(
+    card_id: str, body: ReworkRequest, session: SessionDep, access: AccessDep
+) -> Item[BoardCard]:
+    """Sends a task from Review back to Planned with feedback; it keeps its branch."""
+    return Item(item=conversation.request_rework(session, access, card_id, body.feedback))
 
 
 @router.post("/{card_id}/readiness")

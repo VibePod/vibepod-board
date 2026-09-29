@@ -48,6 +48,7 @@ AUTOMATION_CARD_FIELDS = {
     "attempts",
     "blocked_at",
     "blocked_reason",
+    "question",
 }
 
 

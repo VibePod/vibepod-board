@@ -358,7 +358,8 @@ def release_task(
 ) -> BoardCard:
     """Gives a claimed task back to Planned. A failed run counts an attempt, and the attempt
     that reaches `max_attempts` blocks the task instead; `blocked` blocks it outright, with the
-    note as the reason shown on the card; `released` counts nothing."""
+    note as the reason shown on the card; `needs_input` blocks it with the note as a question
+    that waits for an answer; `released` counts nothing."""
     card = apply_release(
         session,
         access,
@@ -387,6 +388,8 @@ def apply_release(
     note = (note or "").strip()
     if outcome == ReleaseOutcome.BLOCKED and not note:
         raise BadRequest("A note is required to block a task: it is the reason shown on the card")
+    if outcome == ReleaseOutcome.NEEDS_INPUT and not note:
+        raise BadRequest("A note is required to ask for input: it is the question on the card")
     if max_attempts < 1:
         raise BadRequest("maxAttempts must be at least 1")
     idea, card = _held(session, access, reference, holder)
@@ -410,6 +413,10 @@ def apply_release(
     elif outcome == ReleaseOutcome.BLOCKED:
         _block(card, note, timestamp)
         kind, message = TaskEventKind.BLOCKED, f"Blocked: {note}"
+    elif outcome == ReleaseOutcome.NEEDS_INPUT:
+        _block(card, f"Needs input: {note}", timestamp)
+        card.question = note
+        kind, message = TaskEventKind.QUESTION, note
     else:
         kind, message = TaskEventKind.RELEASED, f"Released{suffix}"
     add_task_event(session, idea.id, kind, message, holder, timestamp)

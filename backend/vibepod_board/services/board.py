@@ -270,9 +270,11 @@ def _apply_manual_move(
         card.attempts = 0
         card.blocked_at = None
         card.blocked_reason = None
+        card.question = None
     elif moved:
         card.blocked_at = None
         card.blocked_reason = None
+        card.question = None
 
 
 ARCHIVED_MESSAGE = "Board card is archived; unarchive it first"
