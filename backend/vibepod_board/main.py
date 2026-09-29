@@ -17,7 +17,16 @@ from sqlmodel import Session
 from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from vibepod_board.api import board, documents, github, ideas, projects, system, tokens
+from vibepod_board.api import (
+    board,
+    documents,
+    github,
+    ideas,
+    projects,
+    system,
+    tokens,
+    workers,
+)
 from vibepod_board.auth import AdminSessionManager
 from vibepod_board.config import Settings, get_settings
 from vibepod_board.db import create_db_engine, get_engine, migrate, set_engine
@@ -194,7 +203,7 @@ def create_app(
     )
     _install_error_handlers(app)
 
-    for module in (system, projects, ideas, github, board, documents, tokens):
+    for module in (system, projects, ideas, github, board, documents, tokens, workers):
         app.include_router(module.router)
     # FastMCP ships a Starlette app whose middleware verifies the bearer token. Routing
     # /mcp to the whole app keeps that middleware, and unlike a mount it does not turn the

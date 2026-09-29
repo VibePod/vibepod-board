@@ -333,22 +333,43 @@ def release_task(
     """Gives a claimed task back to Planned. A failed run counts an attempt, and the attempt
     that reaches `max_attempts` blocks the task instead; `blocked` blocks it outright, with the
     note as the reason shown on the card; `released` counts nothing."""
-    holder = _holder(assignee)
-    outcome = ReleaseOutcome(outcome)
+    card = apply_release(
+        session,
+        access,
+        reference,
+        _holder(assignee),
+        ReleaseOutcome(outcome),
+        note,
+        max_attempts or default_max_attempts,
+        now(),
+    )
+    return decorate_card(session, card_from_row(card))
+
+
+def apply_release(
+    session: Session,
+    access: AccessContext,
+    reference: str,
+    holder: str,
+    outcome: ReleaseOutcome,
+    note: str | None,
+    max_attempts: int,
+    timestamp: datetime,
+) -> BoardCardRow:
+    """The release inside the caller's transaction, so signing a worker off can release the
+    claims it still holds in the same write."""
     note = (note or "").strip()
     if outcome == ReleaseOutcome.BLOCKED and not note:
         raise BadRequest("A note is required to block a task: it is the reason shown on the card")
-    limit = max_attempts or default_max_attempts
-    if limit < 1:
+    if max_attempts < 1:
         raise BadRequest("maxAttempts must be at least 1")
     idea, card = _held(session, access, reference, holder)
-    timestamp = now()
     _end_claim(card, idea, timestamp)
     card.column_name = BoardColumn.PLANNED
     suffix = f": {note}" if note else ""
     if outcome == ReleaseOutcome.FAILED:
         card.attempts += 1
-        if card.attempts >= limit:
+        if card.attempts >= max_attempts:
             _block(card, f"Failed {_count(card.attempts, 'attempt')}{suffix}", timestamp)
             kind, message = (
                 TaskEventKind.BLOCKED,
@@ -358,7 +379,7 @@ def release_task(
         else:
             kind, message = (
                 TaskEventKind.FAILED,
-                f"Attempt {card.attempts} of {limit} failed{suffix}",
+                f"Attempt {card.attempts} of {max_attempts} failed{suffix}",
             )
     elif outcome == ReleaseOutcome.BLOCKED:
         _block(card, note, timestamp)
@@ -368,7 +389,7 @@ def release_task(
     add_task_event(session, idea.id, kind, message, holder, timestamp)
     add_activity(session, f"board.{kind.value}", f"{_key(session, idea)}: {message}", timestamp)
     session.flush()
-    return decorate_card(session, card_from_row(card))
+    return card
 
 
 def _locked_or_none[T: IdeaRow | BoardCardRow](

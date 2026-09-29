@@ -29,6 +29,10 @@ class Settings:
     claim_lease_seconds: int = 15 * 60
     claim_max_attempts: int = 3
     claim_sweep_seconds: int = 15
+    # Workers: how often they should send a heartbeat, and after how long without one they
+    # are shown as offline.
+    worker_heartbeat_seconds: int = 15
+    worker_offline_seconds: int = 60
 
     @property
     def sqlalchemy_url(self) -> str:
@@ -57,6 +61,8 @@ def get_settings() -> Settings:
         claim_lease_seconds=_lease_seconds("CLAIM_LEASE_SECONDS", 15 * 60),
         claim_max_attempts=_positive_int("CLAIM_MAX_ATTEMPTS", 3),
         claim_sweep_seconds=_positive_int("CLAIM_SWEEP_SECONDS", 15, allow_zero=True),
+        worker_heartbeat_seconds=_positive_int("WORKER_HEARTBEAT_SECONDS", 15),
+        worker_offline_seconds=_positive_int("WORKER_OFFLINE_SECONDS", 60),
     )
 
 

@@ -90,6 +90,11 @@ GITHUB_REPOSITORY=owner/repo    # optional default; a task's GitHub remote URL w
 - `POST /api/board/:id/handover`
 - `POST /api/board/:id/release`
 - `GET /api/ideas/:id/history`
+- `GET /api/workers`
+- `POST /api/workers`
+- `GET /api/workers/:id`
+- `POST /api/workers/:id/heartbeat`
+- `POST /api/workers/:id/sign-off`
 - `POST /api/ideas/:id/readiness`
 - `GET /api/ideas/:id/readiness`
 - `GET /api/readiness`
@@ -162,6 +167,10 @@ Tools:
 - `hand_over_task`
 - `release_task`
 - `list_task_history`
+- `list_workers`
+- `register_worker`
+- `worker_heartbeat`
+- `sign_off_worker`
 - `list_idea_readiness`
 - `list_readiness`
 - `push_github_issue`
@@ -288,12 +297,42 @@ by *claiming* it. Claims are available over REST and MCP, limited to the caller'
   in the task history, shown in the task view and listed by `GET /api/ideas/:id/history`
   (`list_task_history`).
 
+### Workers
+
+A runner that works through a project connects to it as a *worker*, so the board shows who is
+automating what:
+
+- **Register** with `POST /api/workers` (`register_worker`), naming the project, the worker's
+  `name`, its `agent` and its `machine`. The worker appears in the board at once. Its name is
+  the holder of the claims it takes: claim with `assignee` set to it. Registering a name that
+  is already connected to the project replaces that registration, so a restarted worker picks
+  its claims back up.
+- **Heartbeat** every `heartbeatSeconds` with `POST /api/workers/:id/heartbeat`
+  (`worker_heartbeat`): `status` is `idle`, `working` (naming its `task` and `step`:
+  `preparing_workspace`, `agent_running`, `verifying` or `handing_over`) or `paused` with a
+  `statusReason`, such as a reached usage limit. Every heartbeat renews the claims the worker
+  holds, so a running worker never loses its task to claim expiry. The reply carries
+  `instructions` for the worker.
+- **Sign off** with `POST /api/workers/:id/sign-off` (`sign_off_worker`) when stopping: the
+  worker shows as offline right away, and claims it still holds go back to Planned without
+  counting an attempt. A worker whose heartbeats stop is shown as offline after
+  `WORKER_OFFLINE_SECONDS`.
+- `GET /api/workers?projectId=...` (`list_workers`) lists the workers seen in the last day with
+  their status, task, step, `taskStartedAt` (how long they have been on the task) and
+  `lastSeenAt`, limited to the caller's projects.
+
+In the UI, a workers indicator in the project header opens the list, and a card being worked
+on shows the worker, its current step and the elapsed time. The indicator on the card goes
+away when the task moves on or the worker goes offline.
+
 Server settings:
 
 ```bash
-CLAIM_LEASE_SECONDS=900   # default lease when a claim names none
-CLAIM_MAX_ATTEMPTS=3      # failed attempts before a task is blocked; a release may pass maxAttempts
-CLAIM_SWEEP_SECONDS=15    # how often expired claims are swept; 0 turns the sweep off
+CLAIM_LEASE_SECONDS=900        # default lease when a claim or heartbeat names none
+CLAIM_MAX_ATTEMPTS=3           # failed attempts before a task is blocked; a release may pass maxAttempts
+CLAIM_SWEEP_SECONDS=15         # how often expired claims are swept; 0 turns the sweep off
+WORKER_HEARTBEAT_SECONDS=15    # how often workers are asked to send a heartbeat
+WORKER_OFFLINE_SECONDS=60      # silence after which a worker is shown as offline
 ```
 
 ## Deleting Tasks
