@@ -1247,3 +1247,8 @@ body {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* Run summaries read at the size of the rest of the report. */
+.task-run-summary {
+  font-size: var(--mantine-font-size-sm);
+}
