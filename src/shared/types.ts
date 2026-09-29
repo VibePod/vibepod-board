@@ -83,8 +83,42 @@ export type BoardCard = {
   readinessEvaluatedAt?: string;
   /** Set once a done card is archived: it leaves the board but keeps its task. */
   archivedAt?: string;
+  /**
+   * An automated claim: the assignee took the task at `claimedAt` and holds it
+   * until `claimExpiresAt` unless the claim is renewed.
+   */
+  claimedAt?: string;
+  claimExpiresAt?: string;
+  /** Failed automated attempts since the card was last put in Planned by hand. */
+  attempts?: number;
+  /** A blocked card stays in Planned and is skipped by automated claims. */
+  blockedAt?: string;
+  blockedReason?: string;
   createdAt: string;
   updatedAt: string;
+};
+
+export const taskEventKinds = [
+  "claimed",
+  "handed_over",
+  "failed",
+  "blocked",
+  "released",
+  "expired",
+  "claim_ended",
+  "unblocked",
+] as const;
+
+export type TaskEventKind = (typeof taskEventKinds)[number];
+
+/** One entry of a task's automation history. */
+export type TaskEvent = {
+  id: string;
+  ideaId: string;
+  kind: TaskEventKind;
+  actor?: string;
+  message: string;
+  createdAt: string;
 };
 
 export type ReadinessEvent = {
