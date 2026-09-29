@@ -195,6 +195,18 @@ def test_a_worker_on_its_own_claim_gets_no_cancel(session: Session, vp) -> None:
     assert reply.instructions == []
 
 
+def test_a_runner_can_pass_over_the_task_it_saw_cancelled(session: Session, vp) -> None:
+    worker, task = working(session, vp)
+    planned(session, vp, "Next in line")
+    claims.cancel_run(session, ADMIN, task.id)
+
+    # Without the exclusion the cancelled task would come straight back first.
+    again = claims.claim_task(session, ADMIN, "VP", NAME, exclude=["VP-1", "gone"])
+
+    assert again.item.task.key == "VP-2"
+    assert claims.claim_task(session, ADMIN, "VP", "other", exclude=[]).item.task.key == "VP-1"
+
+
 def test_cancelling_needs_a_running_task(session: Session, vp) -> None:
     task = planned(session, vp, "Idle")
     with pytest.raises(Conflict, match="VP-1 has no run to cancel: it is not claimed"):
@@ -372,6 +384,10 @@ async def test_mcp_steers_workers_and_reports_runs(server_url: str, session: Ses
 
     cancelled = await call(server_url, token, "cancel_task_run", id="VP-1", reason="Stop")
     assert cancelled["item"]["column"] == "planned"
+    passed_over = await call(
+        server_url, token, "claim_next_task", projectId="VP", assignee=NAME, exclude=["VP-1"]
+    )
+    assert passed_over["claimed"] is False
     with pytest.raises(ToolError, match="has no run to cancel"):
         await call(server_url, token, "cancel_task_run", id="VP-1")
 

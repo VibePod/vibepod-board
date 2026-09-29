@@ -23,7 +23,7 @@ from sqlmodel import Session, col, select
 
 from vibepod_board.access import AccessContext, assert_can_access_project
 from vibepod_board.enums import BoardColumn, IdeaStatus, ReleaseOutcome, TaskEventKind
-from vibepod_board.errors import BadRequest, Conflict
+from vibepod_board.errors import BadRequest, Conflict, NotFound
 from vibepod_board.schemas import BoardCard, Claim, ClaimResult, now
 from vibepod_board.services.common import (
     add_activity,
@@ -135,10 +135,13 @@ def _next_claimable(
     project_id: str,
     labels: Sequence[str],
     min_readiness: int | None,
+    exclude: set[str],
 ) -> tuple[IdeaRow, BoardCardRow] | None:
     """The first task in the work order that can be claimed, with both rows locked."""
     for item in work_order(session, access, project_id).items:
         if item.column != BoardColumn.PLANNED or item.card_id is None or item.is_blocked:
+            continue
+        if item.id in exclude:
             continue
         idea = session.get(IdeaRow, item.id)
         card = session.get(BoardCardRow, item.card_id)
@@ -151,6 +154,14 @@ def _next_claimable(
         if _obstacle(card, idea, [], labels, min_readiness) is None:
             return idea, card
     return None
+
+
+def _excluded_id(session: Session, access: AccessContext, reference: str) -> str:
+    """A task to pass over; one that no longer resolves is passed over by name."""
+    try:
+        return require_idea_ref(session, access, reference).id
+    except NotFound:
+        return reference.strip()
 
 
 def _end_claim(card: BoardCardRow, idea: IdeaRow | None, timestamp: datetime) -> None:
@@ -193,13 +204,15 @@ def claim_task(
     task: str | None = None,
     labels: Sequence[str] | None = None,
     min_readiness: int | None = None,
+    exclude: Sequence[str] | None = None,
     lease_seconds: int | None = None,
     default_lease_seconds: int = DEFAULT_LEASE_SECONDS,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
 ) -> ClaimResult:
     """Claims the next planned task of a project in the board's work order, or the named
     task. Asking again for a task the caller already holds renews the claim, so a runner
-    that restarts under the same name picks its work back up."""
+    that restarts under the same name picks its work back up. `exclude` names tasks the next
+    claim passes over, such as a run the runner just saw cancelled from the board."""
     holder = _holder(assignee)
     project_id = resolve_project_id(session, project)
     assert_can_access_project(access, project_id)
@@ -234,7 +247,8 @@ def claim_task(
     else:
         if paused:
             return _paused(project_row)
-        chosen = _next_claimable(session, access, project_id, wanted, min_readiness)
+        skipped = {_excluded_id(session, access, reference) for reference in exclude or []}
+        chosen = _next_claimable(session, access, project_id, wanted, min_readiness, skipped)
         if chosen is None:
             return ClaimResult(claimed=False, reason=NOTHING_TO_CLAIM)
         idea, card = chosen

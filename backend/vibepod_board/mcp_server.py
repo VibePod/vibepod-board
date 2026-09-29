@@ -718,6 +718,14 @@ def create_mcp_server(
             int | None,
             Field(ge=1, le=10, description="Only tasks whose readiness score is at least this."),
         ] = None,
+        exclude: Annotated[
+            list[Annotated[str, Field(min_length=1)]] | None,
+            Field(
+                max_length=BATCH_LIMIT,
+                description="Tasks (ids or keys) to pass over, such as one whose run was "
+                "just cancelled.",
+            ),
+        ] = None,
         leaseSeconds: LeaseSeconds = None,  # noqa: N803
     ) -> dict[str, Any]:
         return run(
@@ -729,6 +737,7 @@ def create_mcp_server(
                 task=task,
                 labels=labels,
                 min_readiness=minReadiness,
+                exclude=exclude,
                 lease_seconds=leaseSeconds,
                 default_lease_seconds=settings.claim_lease_seconds,
                 max_attempts=settings.claim_max_attempts,

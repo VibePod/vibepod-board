@@ -165,6 +165,10 @@ class ClaimRequest(ApiModel):
     labels: list[RequiredText] = Field(default_factory=list)
     # Only tasks whose latest readiness score is at least this.
     min_readiness: Annotated[StrictInt, Field(ge=1, le=10)] | None = None
+    # Tasks to pass over, such as a run the runner just saw cancelled.
+    exclude: Annotated[list[RequiredText], Field(max_length=BATCH_LIMIT)] = Field(
+        default_factory=list
+    )
     # How long the claim lasts unless renewed; the server default applies when omitted.
     lease_seconds: LeaseSeconds | None = None
 
