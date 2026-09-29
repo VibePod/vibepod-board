@@ -3,11 +3,20 @@ from typing import Annotated
 from fastapi import APIRouter, Query, status
 
 from vibepod_board.api.models import DocumentCreate, DocumentUpdate
+from vibepod_board.api.queries import (
+    ProjectFilter,
+    UpdatedSince,
+    ViewParam,
+    enum_list,
+    project_filter,
+)
 from vibepod_board.api.responses import Item, Items
 from vibepod_board.auth import AccessDep, AdminDep
 from vibepod_board.db import SessionDep
-from vibepod_board.schemas import ActivityEvent, PlanDocument
+from vibepod_board.enums import DocumentKind
+from vibepod_board.schemas import ActivityEvent, CompactDocument, PlanDocument
 from vibepod_board.services import activity, documents
+from vibepod_board.services.views import View, project_documents
 
 router = APIRouter(prefix="/api", tags=["documents"])
 
@@ -16,10 +25,19 @@ router = APIRouter(prefix="/api", tags=["documents"])
 def list_documents(
     session: SessionDep,
     access: AccessDep,
-    project_id: Annotated[str | None, Query(alias="projectId")] = None,
-) -> Items[PlanDocument]:
-    project_id = project_id.strip() or None if project_id else None
-    return Items(items=documents.list_documents(session, access, project_id))
+    project_id: ProjectFilter = None,
+    kind: Annotated[list[str] | None, Query()] = None,
+    updated_since: UpdatedSince = None,
+    view: ViewParam = View.FULL,
+) -> Items[PlanDocument | CompactDocument]:
+    filters = documents.DocumentFilter(
+        project=project_filter(project_id),
+        kind=enum_list(DocumentKind, kind, "kind"),
+        updated_since=updated_since,
+    )
+    return Items(
+        items=project_documents(documents.list_documents(session, access, filters=filters), view)
+    )
 
 
 @router.post("/documents", status_code=status.HTTP_201_CREATED)

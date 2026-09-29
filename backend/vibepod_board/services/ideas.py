@@ -1,35 +1,58 @@
 """Ideas (tasks): refinement, readiness for the board, and the dependency-resolved work order."""
 
 from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
 
 from sqlalchemy import delete, func
 from sqlmodel import Session, col, select
 
 from vibepod_board.access import (
     AccessContext,
-    AdminAccess,
     assert_can_access_project,
     default_project_id_for_create,
 )
 from vibepod_board.enums import IdeaStatus
-from vibepod_board.errors import Conflict
+from vibepod_board.errors import BoardError, Conflict
 from vibepod_board.graph import build_work_order, format_task_key
 from vibepod_board.schemas import DeletedIdea, Idea, TaskWorkOrder, now
-from vibepod_board.services.board import ensure_card, list_cards, sync_card_from_idea
+from vibepod_board.services.board import (
+    CardFilter,
+    batch_error,
+    check_batch_size,
+    ensure_card,
+    list_cards,
+    sync_card_from_idea,
+)
 from vibepod_board.services.common import (
     add_activity,
     assert_title,
+    assert_unchanged,
     idea_from_row,
+    lock,
     new_id,
     normalize_list,
     normalize_optional_text,
-    require_idea,
     require_project,
     transactional,
 )
 from vibepod_board.services.dependencies import decorate_idea, decorate_ideas, replace_dependencies
 from vibepod_board.services.github_link import link_url
+from vibepod_board.services.listing import (
+    ListFilter,
+    Page,
+    list_scope,
+    page_query,
+    scoped,
+    with_cursor,
+)
 from vibepod_board.services.projects import list_projects, resolve_project_id_for_create
+from vibepod_board.services.readiness import apply_idea_readiness
+from vibepod_board.services.references import (
+    require_idea_ref,
+    resolve_project_id,
+)
 from vibepod_board.tables import (
     BoardCardRow,
     DocumentRow,
@@ -39,20 +62,44 @@ from vibepod_board.tables import (
 )
 
 
+@dataclass(frozen=True)
+class IdeaFilter(ListFilter):
+    status: Sequence[IdeaStatus] = ()
+
+
+def list_ideas_page(session: Session, access: AccessContext, filters: IdeaFilter) -> Page[Idea]:
+    scope = list_scope(session, access, filters.project)
+    if scope == []:
+        return Page([])
+    query = scoped(select(IdeaRow), IdeaRow.project_id, scope)
+    if filters.status:
+        query = query.where(col(IdeaRow.status).in_(list(filters.status)))
+    rows = list(session.exec(page_query(query, IdeaRow, filters)).all())
+    items = decorate_ideas(session, [idea_from_row(row) for row in rows])
+    return with_cursor(rows, items, filters.limit)
+
+
 def list_ideas(
-    session: Session, access: AccessContext, project_id: str | None = None
+    session: Session,
+    access: AccessContext,
+    project_id: str | None = None,
+    filters: IdeaFilter | None = None,
 ) -> list[Idea]:
-    query = select(IdeaRow)
-    if project_id:
-        project = require_project(session, project_id)
-        assert_can_access_project(access, project.id)
-        query = query.where(IdeaRow.project_id == project.id)
-    elif not isinstance(access, AdminAccess):
-        if not access.project_ids:
-            return []
-        query = query.where(col(IdeaRow.project_id).in_(access.project_ids))
-    rows = session.exec(query.order_by(col(IdeaRow.updated_at).desc(), col(IdeaRow.title))).all()
-    return decorate_ideas(session, [idea_from_row(row) for row in rows])
+    return list_ideas_page(session, access, filters or IdeaFilter(project=project_id)).items
+
+
+def get_idea(session: Session, access: AccessContext, reference: str) -> Idea:
+    """One task by id, key such as `VP-236`, or bare number when one project is in scope."""
+    return decorate_idea(session, require_idea_ref(session, access, reference))
+
+
+def _project_for_create(session: Session, access: AccessContext, reference: str | None) -> str:
+    requested = resolve_project_id(session, reference) if reference else None
+    project_id = resolve_project_id_for_create(
+        session, default_project_id_for_create(access, requested)
+    )
+    assert_can_access_project(access, project_id)
+    return project_id
 
 
 def next_task_number(session: Session, project_id: str) -> int:
@@ -84,12 +131,10 @@ def create_idea(
     repository_local_path: str | None = None,
     repository_remote_url: str | None = None,
     github_issue_url: str | None = None,
+    assignee: str | None = None,
 ) -> Idea:
     assert_title(title, "Idea")
-    resolved_project_id = resolve_project_id_for_create(
-        session, default_project_id_for_create(access, project_id)
-    )
-    assert_can_access_project(access, resolved_project_id)
+    resolved_project_id = _project_for_create(session, access, project_id)
     timestamp = now()
     idea = IdeaRow(
         id=new_id(),
@@ -103,6 +148,7 @@ def create_idea(
         acceptance_criteria=normalize_list(acceptance_criteria),
         repository_local_path=normalize_optional_text(repository_local_path),
         repository_remote_url=normalize_optional_text(repository_remote_url),
+        assignee=normalize_optional_text(assignee),
         created_at=timestamp,
         updated_at=timestamp,
     )
@@ -111,16 +157,32 @@ def create_idea(
     session.add(idea)
     session.flush()
     if depends_on:
-        replace_dependencies(session, idea, depends_on, timestamp)
+        replace_dependencies(session, access, idea, depends_on, timestamp)
     add_activity(session, "idea.created", f"Created idea: {idea.title}", timestamp)
     return decorate_idea(session, idea)
 
 
-@transactional
-def update_idea(
+def _label(session: Session, idea: IdeaRow) -> str:
+    project = session.get(ProjectRow, idea.project_id)
+    return f"Task {format_task_key(project.key, idea.task_number)}" if project else "Task"
+
+
+def _take_off_board(session: Session, idea: IdeaRow) -> None:
+    archived = session.exec(
+        select(BoardCardRow.id).where(
+            BoardCardRow.idea_id == idea.id, col(BoardCardRow.archived_at).is_not(None)
+        )
+    ).first()
+    if archived:
+        raise Conflict("Task is archived; unarchive its card before taking it off the board")
+    session.execute(delete(BoardCardRow).where(col(BoardCardRow.idea_id) == idea.id))
+
+
+def _apply_idea_update(
     session: Session,
     access: AccessContext,
-    idea_id: str,
+    reference: str,
+    timestamp: datetime,
     title: str | None = None,
     summary: str | None = None,
     details: str | None = None,
@@ -131,9 +193,18 @@ def update_idea(
     repository_local_path: str | None = None,
     repository_remote_url: str | None = None,
     github_issue_url: str | None = None,
-) -> Idea:
-    idea = require_idea(session, idea_id)
-    assert_can_access_project(access, idea.project_id)
+    assignee: str | None = None,
+    on_board: bool | None = None,
+    readiness: Any = None,
+    expected_updated_at: Any = None,
+) -> tuple[IdeaRow, bool]:
+    """One task write without its own transaction or activity row, so a batch can apply
+    many of them atomically. Also says whether the task joined the board."""
+    resolved = require_idea_ref(session, access, reference)
+    assert_can_access_project(access, resolved.project_id)
+    idea = lock(session, IdeaRow, resolved.id)
+    assert_unchanged(_label(session, idea), expected_updated_at, idea.updated_at)
+    previous_status = idea.status
     if title is not None:
         assert_title(title, "Idea")
         idea.title = title.strip()
@@ -149,6 +220,8 @@ def update_idea(
         idea.repository_local_path = normalize_optional_text(repository_local_path)
     if repository_remote_url is not None:
         idea.repository_remote_url = normalize_optional_text(repository_remote_url)
+    if assignee is not None:
+        idea.assignee = normalize_optional_text(assignee)
     if github_issue_url is not None:
         link_url(session, idea, github_issue_url)
 
@@ -159,22 +232,84 @@ def update_idea(
         next_status = IdeaStatus.REFINING
     idea.status = next_status
 
-    timestamp = now()
     idea.updated_at = timestamp
     session.flush()
     if depends_on is not None:
-        replace_dependencies(session, idea, depends_on, timestamp)
+        replace_dependencies(session, access, idea, depends_on, timestamp)
     sync_card_from_idea(session, idea, timestamp)
-    add_activity(session, "idea.updated", f"Updated idea: {idea.title}", timestamp)
+
+    # Status says what the task is; on_board says whether it has a card. Reaching "ready"
+    # ensures one, but leaving "ready" never destroys one: that loses the card's id, column
+    # and branch, so it needs on_board=False.
+    became_ready = next_status == IdeaStatus.READY and previous_status != IdeaStatus.READY
+    joins_board = on_board is True or became_ready
+    if joins_board:
+        ensure_card(session, idea, timestamp)
+    elif on_board is False:
+        _take_off_board(session, idea)
+
+    if readiness is not None:
+        # One timestamp for content and score, so the score reads as "evaluated as of this
+        # edit" rather than instantly stale.
+        score, reason = _readiness_fields(readiness)
+        apply_idea_readiness(session, idea, score, reason, timestamp)
+    return idea, joins_board
+
+
+def _readiness_fields(readiness: Any) -> tuple[Any, str | None]:
+    if isinstance(readiness, dict):
+        return readiness.get("score"), readiness.get("reason")
+    return readiness.score, readiness.reason
+
+
+@transactional
+def update_idea(session: Session, access: AccessContext, idea_id: str, **changes: Any) -> Idea:
+    timestamp = now()
+    idea, joins_board = _apply_idea_update(session, access, idea_id, timestamp, **changes)
+    if joins_board:
+        add_activity(session, "idea.ready", f"Marked idea ready: {idea.title}", timestamp)
+    else:
+        add_activity(session, "idea.updated", f"Updated idea: {idea.title}", timestamp)
     return decorate_idea(session, idea)
 
 
 @transactional
+def update_ideas(
+    session: Session, access: AccessContext, items: Sequence[dict[str, Any]]
+) -> list[Idea]:
+    """Applies many task writes in one transaction. All-or-nothing: agents run several
+    sessions against one board, and a half-applied batch is worse than a refused one."""
+    check_batch_size(items)
+    if not items:
+        return []
+    timestamp = now()
+    written: list[IdeaRow] = []
+    for index, item in enumerate(items):
+        changes = dict(item)
+        reference = changes.pop("id")
+        try:
+            idea, _joins_board = _apply_idea_update(
+                session, access, reference, timestamp, **changes
+            )
+        except BoardError as error:
+            raise batch_error(index, reference, error) from error
+        written.append(idea)
+    # One activity row, because every insert also prunes the activity table.
+    add_activity(session, "idea.updated", f"Updated {len(written)} tasks", timestamp)
+    return decorate_ideas(session, [idea_from_row(idea) for idea in written])
+
+
+@transactional
 def set_board_availability(
-    session: Session, access: AccessContext, idea_id: str, available: bool
+    session: Session,
+    access: AccessContext,
+    idea_id: str,
+    available: bool,
+    readiness: Any = None,
 ) -> Idea:
-    """Ready ideas get a board card; taking an idea off the board deletes its card."""
-    idea = require_idea(session, idea_id)
+    """Ready ideas get a board card; taking an idea off the board deletes its card. A
+    readiness score given along is recorded in the same write."""
+    idea = require_idea_ref(session, access, idea_id)
     assert_can_access_project(access, idea.project_id)
     timestamp = now()
 
@@ -182,18 +317,14 @@ def set_board_availability(
         idea.status = IdeaStatus.READY
         idea.updated_at = timestamp
         session.flush()
+        if readiness is not None:
+            score, reason = _readiness_fields(readiness)
+            apply_idea_readiness(session, idea, score, reason, timestamp)
         ensure_card(session, idea, timestamp)
         add_activity(session, "idea.ready", f"Marked idea ready: {idea.title}", timestamp)
         return decorate_idea(session, idea)
 
-    archived = session.exec(
-        select(BoardCardRow.id).where(
-            BoardCardRow.idea_id == idea.id, col(BoardCardRow.archived_at).is_not(None)
-        )
-    ).first()
-    if archived:
-        raise Conflict("Task is archived; unarchive its card before taking it off the board")
-    session.execute(delete(BoardCardRow).where(col(BoardCardRow.idea_id) == idea.id))
+    _take_off_board(session, idea)
     refined = bool(idea.details or idea.acceptance_criteria)
     idea.status = IdeaStatus.REFINING if refined else IdeaStatus.IDEA
     idea.updated_at = timestamp
@@ -202,15 +333,17 @@ def set_board_availability(
     return decorate_idea(session, idea)
 
 
-def mark_ready(session: Session, access: AccessContext, idea_id: str) -> Idea:
-    return set_board_availability(session, access, idea_id, True)
+def mark_ready(
+    session: Session, access: AccessContext, idea_id: str, readiness: Any = None
+) -> Idea:
+    return set_board_availability(session, access, idea_id, True, readiness)
 
 
 def work_order(
     session: Session, access: AccessContext, project_id: str | None = None
 ) -> TaskWorkOrder:
     tasks = list_ideas(session, access, project_id)
-    cards = list_cards(session, access, project_id)
+    cards = list_cards(session, access, filters=CardFilter(project=project_id))
     keys = {project.id: project.key for project in list_projects(session, access)}
     return build_work_order(tasks, cards, keys)
 
@@ -219,7 +352,7 @@ def work_order(
 def delete_idea(session: Session, access: AccessContext, idea_id: str) -> DeletedIdea:
     """Deletes a task for good: its board card, dependency edges and readiness history go
     with it, and documents stop linking to it. A linked GitHub issue is left alone."""
-    idea = require_idea(session, idea_id)
+    idea = require_idea_ref(session, access, idea_id)
     assert_can_access_project(access, idea.project_id)
     project = require_project(session, idea.project_id)
     task_id = format_task_key(project.key, idea.task_number)
@@ -243,7 +376,8 @@ def delete_idea(session: Session, access: AccessContext, idea_id: str) -> Delete
 
     session.execute(delete(BoardCardRow).where(col(BoardCardRow.idea_id) == idea.id))
     title = idea.title
+    deleted_id = idea.id
     session.delete(idea)
     session.flush()
     add_activity(session, "idea.deleted", f"Deleted task {task_id}: {title}")
-    return DeletedIdea(id=idea_id, task_id=task_id, dependents=dependents)
+    return DeletedIdea(id=deleted_id, task_id=task_id, dependents=dependents)

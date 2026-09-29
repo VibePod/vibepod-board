@@ -13,23 +13,39 @@ from vibepod_board.auth import (
 
 router = APIRouter(prefix="/api", tags=["system"])
 
-# The advertised list is kept as the TS server published it; the MCP server itself lists
-# every tool through `tools/list`.
+# Every tool the MCP server registers; a test keeps this in step with `tools/list`.
 MCP_INFO_TOOLS = (
-    "list_projects",
-    "create_project",
-    "list_ideas",
-    "create_idea",
-    "mark_idea_ready",
     "add_idea_dependency",
-    "remove_idea_dependency",
-    "set_idea_dependencies",
-    "list_work_order",
-    "list_board",
-    "move_board_card",
-    "update_board_card",
+    "archive_board_card",
     "create_document",
+    "create_idea",
+    "create_project",
+    "delete_idea",
+    "get_board_card",
+    "get_idea",
+    "list_archived_cards",
+    "list_board",
     "list_documents",
+    "list_idea_readiness",
+    "list_ideas",
+    "list_projects",
+    "list_readiness",
+    "list_work_order",
+    "mark_idea_ready",
+    "move_board_card",
+    "pull_github_issue",
+    "push_github_issue",
+    "remove_idea_dependency",
+    "set_card_readiness",
+    "set_idea_dependencies",
+    "set_idea_readiness",
+    "unarchive_board_card",
+    "update_board_card",
+    "update_board_cards",
+    "update_document",
+    "update_idea",
+    "update_ideas",
+    "upsert_github_issue",
 )
 
 AdminSessionDep = Annotated[AdminSession | None, Depends(current_admin_session)]

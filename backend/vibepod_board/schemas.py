@@ -80,6 +80,7 @@ class Idea(ApiModel):
     github_synced_at: Timestamp | None = None
     repository_local_path: str | None = None
     repository_remote_url: str | None = None
+    assignee: str | None = None
     readiness_score: int | None = None
     readiness_reason: str | None = None
     readiness_evaluated_at: Timestamp | None = None
@@ -99,6 +100,7 @@ class BoardCard(ApiModel):
     github_issue_number: int | None = None
     repository_local_path: str | None = None
     repository_remote_url: str | None = None
+    assignee: str | None = None
     labels: list[str]
     depends_on: list[str] = Field(default_factory=list)
     blocked_by: list[str] = Field(default_factory=list)
@@ -107,6 +109,70 @@ class BoardCard(ApiModel):
     readiness_evaluated_at: Timestamp | None = None
     archived_at: Timestamp | None = None
     created_at: Timestamp
+    updated_at: Timestamp
+
+
+class KeyedIdea(Idea):
+    """A task on its way out, carrying its human key. The key is never stored: the project
+    bundle rejects unknown properties on a task."""
+
+    key: str | None = None
+
+
+class KeyedBoardCard(BoardCard):
+    key: str | None = None
+
+
+class EntityRef(ApiModel):
+    id: str
+    key: str | None = None
+    updated_at: Timestamp
+
+
+class CompactIdea(ApiModel):
+    """Identity, state and relationships. Dependencies are named by key, and the free text
+    is reduced to its size."""
+
+    id: str
+    key: str | None = None
+    project_id: str
+    task_number: int
+    title: str
+    status: IdeaStatus
+    labels: list[str]
+    column: BoardColumn | None = None
+    assignee: str | None = None
+    readiness_score: int | None = None
+    depends_on: list[str]
+    blocked_by: list[str]
+    details_length: int
+    acceptance_criteria_count: int
+    updated_at: Timestamp
+
+
+class CompactBoardCard(ApiModel):
+    id: str
+    key: str | None = None
+    idea_id: str | None = None
+    project_id: str
+    title: str
+    column: BoardColumn
+    branch_name: str | None = None
+    labels: list[str]
+    blocked_by: list[str]
+    assignee: str | None = None
+    readiness_score: int | None = None
+    details_length: int
+    updated_at: Timestamp
+
+
+class CompactDocument(ApiModel):
+    id: str
+    project_id: str
+    title: str
+    kind: DocumentKind
+    linked_idea_ids: list[str]
+    content_length: int
     updated_at: Timestamp
 
 

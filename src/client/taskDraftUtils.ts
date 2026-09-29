@@ -13,6 +13,7 @@ export type TaskDraft = {
   repositoryLocalPath: string;
   repositoryRemoteUrl: string;
   githubIssueUrl: string;
+  assignee: string;
   status: IdeaStatus;
 };
 
@@ -25,6 +26,7 @@ export const emptyTaskDraft = (): TaskDraft => ({
   repositoryLocalPath: "",
   repositoryRemoteUrl: "",
   githubIssueUrl: "",
+  assignee: "",
   status: "idea",
 });
 
@@ -41,6 +43,7 @@ export const taskToDraft = (idea: Idea, projectKey?: string): TaskDraft => ({
   repositoryLocalPath: idea.repositoryLocalPath ?? "",
   repositoryRemoteUrl: idea.repositoryRemoteUrl ?? "",
   githubIssueUrl: idea.githubIssueUrl ?? "",
+  assignee: idea.assignee ?? "",
   status: idea.status,
 });
 
@@ -54,4 +57,5 @@ export const taskDraftToIdeaPayload = (draft: TaskDraft) => ({
   repositoryLocalPath: draft.repositoryLocalPath,
   repositoryRemoteUrl: draft.repositoryRemoteUrl,
   githubIssueUrl: draft.githubIssueUrl.trim(),
+  assignee: draft.assignee,
 });

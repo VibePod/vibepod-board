@@ -58,6 +58,7 @@ import {
   Sun,
   Trash2,
   Upload,
+  UserRound,
 } from "lucide-react";
 import {
   type FormEvent,
@@ -102,6 +103,11 @@ import {
 import { ArchiveView } from "./ArchiveView.js";
 import { type ArchivedTaskRow, archivedTaskRows } from "./archiveUtils.js";
 import vibepodIconUrl from "./assets/icon.png";
+import {
+  assigneeFilterOptions,
+  filterColumnsByAssignee,
+  resolveAssigneeFilter,
+} from "./assigneeFilterUtils.js";
 import { CopyableCode } from "./CopyableCode.js";
 import { DeleteTaskDialog, type DeleteTaskTarget } from "./DeleteTaskDialog.js";
 import { GitHubIssueBadge, GitHubSyncPanel } from "./GitHubIssue.js";
@@ -391,6 +397,9 @@ const App = () => {
   const [taskSort, setTaskSort] = useState<TaskSortOption>("created_desc");
   const [taskStatusFilter, setTaskStatusFilter] = useState<IdeaStatus | "">("");
   const [taskLabelFilter, setTaskLabelFilter] = useState("");
+  // One holder lens for both views: picking a holder on the board and switching
+  // to the task list keeps answering the same question, "what is theirs?".
+  const [assigneeFilter, setAssigneeFilter] = useState("");
   const [taskSearch, setTaskSearch] = useState("");
   const [boardSearch, setBoardSearch] = useState(initialBoardSearch);
   const [draggingCardId, setDraggingCardId] = useState("");
@@ -707,8 +716,20 @@ const App = () => {
         : emptyColumns,
     [state.columns, selectedProject],
   );
-  const visibleProjectColumns = useMemo(
+  const assigneeOptions = useMemo(
     () =>
+      assigneeFilterOptions(
+        projectIdeas,
+        boardColumns.flatMap((column) => projectColumns[column] ?? []),
+      ),
+    [projectIdeas, projectColumns],
+  );
+  const activeAssigneeFilter = resolveAssigneeFilter(
+    assigneeFilter,
+    assigneeOptions,
+  );
+  const visibleProjectColumns = useMemo(() => {
+    const searched =
       selectedProject && boardSearch.trim()
         ? filterColumnsBySearch(
             projectColumns,
@@ -716,9 +737,17 @@ const App = () => {
             selectedProject.key,
             new Map(state.ideas.map((idea) => [idea.id, idea])),
           )
-        : projectColumns,
-    [projectColumns, boardSearch, selectedProject, state.ideas],
-  );
+        : projectColumns;
+    return activeAssigneeFilter
+      ? filterColumnsByAssignee(searched, activeAssigneeFilter)
+      : searched;
+  }, [
+    projectColumns,
+    boardSearch,
+    selectedProject,
+    state.ideas,
+    activeAssigneeFilter,
+  ]);
   const isBoardFiltered = visibleProjectColumns !== projectColumns;
   const projectDocuments = selectedProject
     ? state.documents.filter(
@@ -845,6 +874,7 @@ const App = () => {
         sort: taskSort,
         status: taskStatusFilter,
         label: taskLabelFilter,
+        assignee: activeAssigneeFilter,
         search: taskSearch,
         projectKey: selectedProject?.key,
         workOrder: workOrderPositions,
@@ -854,6 +884,7 @@ const App = () => {
       taskSort,
       taskStatusFilter,
       taskLabelFilter,
+      activeAssigneeFilter,
       taskSearch,
       selectedProject?.key,
       workOrderPositions,
@@ -1234,7 +1265,8 @@ const App = () => {
       JSON.stringify(draft.dependsOn) !== JSON.stringify(baseline.dependsOn) ||
       draft.repositoryLocalPath !== baseline.repositoryLocalPath ||
       draft.repositoryRemoteUrl !== baseline.repositoryRemoteUrl ||
-      draft.githubIssueUrl !== baseline.githubIssueUrl
+      draft.githubIssueUrl !== baseline.githubIssueUrl ||
+      draft.assignee !== baseline.assignee
     );
   };
 
@@ -1911,7 +1943,7 @@ const App = () => {
                   aria-label="Task view mode"
                 />
               </Group>
-              <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm">
+              <SimpleGrid cols={{ base: 1, sm: 2, lg: 5 }} spacing="sm">
                 <TextInput
                   label="Search"
                   placeholder="Search ID, title, details, labels"
@@ -1958,6 +1990,13 @@ const App = () => {
                       label,
                     })),
                   ]}
+                />
+                <Select
+                  className="task-assignee-filter"
+                  label="Assignee"
+                  value={activeAssigneeFilter}
+                  onChange={(value) => setAssigneeFilter(value ?? "")}
+                  data={assigneeOptions}
                 />
               </SimpleGrid>
             </Paper>
@@ -2040,6 +2079,18 @@ const App = () => {
                             {githubIssueBadge(idea)}
                           </Group>
                           {labelBadges(taskCard.labels)}
+                          {idea.assignee && (
+                            <Badge
+                              className="task-card-assignee"
+                              leftSection={<UserRound size={12} aria-hidden />}
+                              variant="light"
+                              color="grape"
+                              size="sm"
+                              mt="xs"
+                            >
+                              {idea.assignee}
+                            </Badge>
+                          )}
                           {idea.readinessScore !== undefined && (
                             <Badge
                               variant="light"
@@ -2116,11 +2167,21 @@ const App = () => {
                     Kanban board
                   </Text>
                 </Box>
-                <Badge variant="light" color="blue">
-                  {isBoardFiltered
-                    ? `${countCards(visibleProjectColumns)} of ${countCards(projectColumns)} cards`
-                    : `${countCards(projectColumns)} cards`}
-                </Badge>
+                <Group align="flex-end" gap="sm" wrap="nowrap">
+                  <Select
+                    className="board-assignee-filter"
+                    label="Assignee"
+                    size="sm"
+                    value={activeAssigneeFilter}
+                    onChange={(value) => setAssigneeFilter(value ?? "")}
+                    data={assigneeOptions}
+                  />
+                  <Badge variant="light" color="blue">
+                    {isBoardFiltered
+                      ? `${countCards(visibleProjectColumns)} of ${countCards(projectColumns)} cards`
+                      : `${countCards(projectColumns)} cards`}
+                  </Badge>
+                </Group>
               </Group>
               <TextInput
                 className="board-search"
@@ -2306,6 +2367,23 @@ const App = () => {
                                   {isCardReadinessStale(card, ideaById)
                                     ? " · stale"
                                     : ""}
+                                </Badge>
+                              </Group>
+                            )}
+                            {card.assignee && (
+                              <Group
+                                className="board-card-assignee"
+                                justify="flex-start"
+                              >
+                                <Badge
+                                  leftSection={
+                                    <UserRound size={12} aria-hidden />
+                                  }
+                                  variant="light"
+                                  color="grape"
+                                  size="sm"
+                                >
+                                  {card.assignee}
                                 </Badge>
                               </Group>
                             )}
@@ -3022,6 +3100,15 @@ const App = () => {
                     updateTaskDraft({ repositoryRemoteUrl: event.target.value })
                   }
                   placeholder="git@github.com:owner/repo.git"
+                />
+                <TextInput
+                  label="Assignee"
+                  description="Who holds this task; agents name themselves here."
+                  value={taskModal.draft.assignee}
+                  onChange={(event) =>
+                    updateTaskDraft({ assignee: event.target.value })
+                  }
+                  placeholder="Claude::Subagent101::Worktree12"
                 />
               </SimpleGrid>
               <TextInput

@@ -12,6 +12,7 @@ from vibepod_board.services.common import (
     require_project,
     transactional,
 )
+from vibepod_board.services.references import resolve_project_id
 from vibepod_board.tables import ProjectRow
 
 DEFAULT_PROJECT_KEY = "GEN"
@@ -104,7 +105,7 @@ def _keys_of_length(alphabet: str, length: int):
 def resolve_project_id_for_create(session: Session, requested: str | None) -> str:
     """The requested project, else the oldest one, else a new "General" project."""
     if requested is not None:
-        return require_project(session, requested).id
+        return resolve_project_id(session, requested)
 
     oldest = session.exec(
         select(ProjectRow).order_by(col(ProjectRow.created_at), col(ProjectRow.id)).limit(1)

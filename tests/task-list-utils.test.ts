@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { unassignedFilterValue } from "../src/client/assigneeFilterUtils.js";
 import {
   filterAndSortTasks,
   filterColumnsBySearch,
@@ -124,6 +125,41 @@ describe("task list utilities", () => {
     expect(
       filterAndSortTasks(tasks, { sort: "rating_desc" }).map((item) => item.id),
     ).toEqual(["high", "mid-new", "mid-old", "low", "unrated"]);
+  });
+
+  it("filters by holder and by free work", () => {
+    const holder = "Claude::Subagent101::Worktree12";
+    const tasks = [
+      task({
+        id: "held",
+        title: "Held task",
+        assignee: holder,
+        createdAt: "2026-02-01T00:00:00.000Z",
+      }),
+      task({
+        id: "theirs",
+        title: "Someone else's task",
+        assignee: "Claude::Subagent202::Worktree7",
+        createdAt: "2026-03-01T00:00:00.000Z",
+      }),
+      task({
+        id: "free",
+        title: "Free task",
+        createdAt: "2026-04-01T00:00:00.000Z",
+      }),
+    ];
+
+    expect(
+      filterAndSortTasks(tasks, { assignee: holder }).map((item) => item.id),
+    ).toEqual(["held"]);
+    expect(
+      filterAndSortTasks(tasks, { assignee: unassignedFilterValue }).map(
+        (item) => item.id,
+      ),
+    ).toEqual(["free"]);
+    expect(
+      filterAndSortTasks(tasks, { assignee: "" }).map((item) => item.id),
+    ).toEqual(["free", "theirs", "held"]);
   });
 });
 

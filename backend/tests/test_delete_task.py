@@ -5,7 +5,7 @@ from sqlmodel import Session, select
 
 from vibepod_board.access import admin_access, token_access
 from vibepod_board.enums import DocumentKind
-from vibepod_board.errors import Forbidden, NotFound
+from vibepod_board.errors import NotFound
 from vibepod_board.services import (
     activity,
     board,
@@ -90,9 +90,10 @@ def test_deletes_stay_inside_the_token_scope(session: Session, project) -> None:
     other = projects.create_project(session, "OTH", "Other")
     theirs = ideas.create_idea(session, ADMIN, title="Off limits", project_id=other.id)
 
-    with pytest.raises(Forbidden, match="Token is not allowed to access project"):
+    # A task outside the token's projects reads as missing, so scope cannot be probed.
+    with pytest.raises(NotFound, match=f"Task not found: {theirs.id}"):
         ideas.delete_idea(session, token_access("token-1", [project.id]), theirs.id)
-    with pytest.raises(NotFound, match="Idea not found: missing"):
+    with pytest.raises(NotFound, match="Task not found: missing"):
         ideas.delete_idea(session, ADMIN, "missing")
     assert len(ideas.list_ideas(session, ADMIN, other.id)) == 1
 

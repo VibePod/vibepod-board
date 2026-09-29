@@ -55,6 +55,7 @@ const ideaSchema = z
     githubSyncedAt: timestampSchema.optional(),
     repositoryLocalPath: optionalTextSchema,
     repositoryRemoteUrl: optionalTextSchema,
+    assignee: optionalTextSchema,
     readinessScore: optionalReadinessScoreSchema,
     readinessReason: optionalTextSchema,
     readinessEvaluatedAt: timestampSchema.optional(),
@@ -76,6 +77,7 @@ const boardCardSchema = z
     githubIssueNumber: optionalIntegerSchema,
     repositoryLocalPath: optionalTextSchema,
     repositoryRemoteUrl: optionalTextSchema,
+    assignee: optionalTextSchema,
     labels: z.array(z.string()),
     // A card mirrors the dependency state of its task, so both fields are derived.
     dependsOn: z.array(z.string().min(1)).default([]),

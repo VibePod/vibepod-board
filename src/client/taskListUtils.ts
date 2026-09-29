@@ -4,6 +4,7 @@ import {
   type Idea,
   type IdeaStatus,
 } from "../shared/types.js";
+import { matchesAssigneeFilter } from "./assigneeFilterUtils.js";
 
 export const taskSortOptions = [
   "created_desc",
@@ -20,6 +21,8 @@ export type TaskListFilters = {
   sort?: TaskSortOption;
   status?: IdeaStatus | "";
   label?: string;
+  /** A holder's name, `unassignedFilterValue` for free work, or "" for all. */
+  assignee?: string;
   search?: string;
   /** Project key used to match full task ID queries such as "VP-85". */
   projectKey?: string;
@@ -33,6 +36,7 @@ export const filterAndSortTasks = (
 ): Idea[] => {
   const label = filters.label?.trim() ?? "";
   const status = filters.status ?? "";
+  const assignee = filters.assignee ?? "";
   const sort = filters.sort ?? "created_desc";
 
   return tasks
@@ -41,6 +45,9 @@ export const filterAndSortTasks = (
         return false;
       }
       if (label && !task.labels.includes(label)) {
+        return false;
+      }
+      if (!matchesAssigneeFilter(task.assignee, assignee)) {
         return false;
       }
       return matchesTaskSearch(

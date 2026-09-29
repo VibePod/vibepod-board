@@ -1,10 +1,10 @@
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from sqlmodel import Session, col, select
 
 from vibepod_board.access import (
     AccessContext,
-    AdminAccess,
     assert_can_access_project,
     default_project_id_for_create,
 )
@@ -17,28 +17,33 @@ from vibepod_board.services.common import (
     new_id,
     normalize_list,
     require_document,
-    require_project,
     transactional,
 )
+from vibepod_board.services.listing import ListFilter, list_scope, page_query, scoped
 from vibepod_board.services.projects import resolve_project_id_for_create
+from vibepod_board.services.references import resolve_project_id
 from vibepod_board.tables import DocumentRow
 
 
+@dataclass(frozen=True)
+class DocumentFilter(ListFilter):
+    kind: Sequence[DocumentKind] = ()
+
+
 def list_documents(
-    session: Session, access: AccessContext, project_id: str | None = None
+    session: Session,
+    access: AccessContext,
+    project_id: str | None = None,
+    filters: DocumentFilter | None = None,
 ) -> list[PlanDocument]:
-    query = select(DocumentRow)
-    if project_id:
-        project = require_project(session, project_id)
-        assert_can_access_project(access, project.id)
-        query = query.where(DocumentRow.project_id == project.id)
-    elif not isinstance(access, AdminAccess):
-        if not access.project_ids:
-            return []
-        query = query.where(col(DocumentRow.project_id).in_(access.project_ids))
-    rows = session.exec(
-        query.order_by(col(DocumentRow.updated_at).desc(), col(DocumentRow.title))
-    ).all()
+    filters = filters or DocumentFilter(project=project_id)
+    scope = list_scope(session, access, filters.project)
+    if scope == []:
+        return []
+    query = scoped(select(DocumentRow), DocumentRow.project_id, scope)
+    if filters.kind:
+        query = query.where(col(DocumentRow.kind).in_(list(filters.kind)))
+    rows = session.exec(page_query(query, DocumentRow, filters)).all()
     return [document_from_row(row) for row in rows]
 
 
@@ -54,8 +59,9 @@ def create_document(
     linked_card_ids: Sequence[str] | None = None,
 ) -> PlanDocument:
     assert_title(title, "Document")
+    requested = resolve_project_id(session, project_id) if project_id else None
     resolved_project_id = resolve_project_id_for_create(
-        session, default_project_id_for_create(access, project_id)
+        session, default_project_id_for_create(access, requested)
     )
     assert_can_access_project(access, resolved_project_id)
     timestamp = now()

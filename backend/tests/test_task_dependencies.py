@@ -5,7 +5,7 @@ from sqlmodel import Session
 
 from vibepod_board.access import admin_access, token_access
 from vibepod_board.enums import BoardColumn, IdeaStatus
-from vibepod_board.errors import BadRequest, Conflict, Forbidden, NotFound
+from vibepod_board.errors import BadRequest, Conflict, NotFound
 from vibepod_board.schemas import BoardCard, Idea, Project
 from vibepod_board.services import board, dependencies, ideas, projects
 
@@ -134,8 +134,10 @@ def test_keeps_dependency_writes_inside_the_token_project_scope(session: Session
     _, outside_tasks = project_with_tasks(session, ["Outside"], "OPS")
     scoped = token_access("token-1", [project.id])
 
-    with pytest.raises(Forbidden, match="Token is not allowed to access project"):
+    with pytest.raises(NotFound, match=f"Task not found: {outside_tasks[0].id}"):
         dependencies.add_dependency(session, scoped, outside_tasks[0].id, tasks[0].id)
+    with pytest.raises(NotFound, match=f"Task not found: {outside_tasks[0].id}"):
+        dependencies.add_dependency(session, scoped, tasks[0].id, outside_tasks[0].id)
 
     linked = dependencies.add_dependency(session, scoped, tasks[1].id, tasks[0].id)
     assert linked.depends_on == [tasks[0].id]

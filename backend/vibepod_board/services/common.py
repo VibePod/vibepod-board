@@ -5,13 +5,14 @@ import functools
 import re
 import uuid
 from collections.abc import Callable, Iterable
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import delete
 from sqlalchemy import select as sa_select
 from sqlmodel import Session, col, select
 
-from vibepod_board.errors import BadRequest, NotFound
+from vibepod_board.errors import BadRequest, Conflict, NotFound
 from vibepod_board.schemas import (
     ActivityEvent,
     BoardCard,
@@ -19,6 +20,7 @@ from vibepod_board.schemas import (
     PlanDocument,
     Project,
     ReadinessEvent,
+    format_timestamp,
     now,
 )
 from vibepod_board.tables import (
@@ -140,7 +142,7 @@ def require_project(session: Session, project_id: str) -> ProjectRow:
 def require_idea(session: Session, idea_id: str) -> IdeaRow:
     row = session.get(IdeaRow, idea_id)
     if row is None:
-        raise NotFound(f"Idea not found: {idea_id}")
+        raise NotFound(f"Task not found: {idea_id}")
     return row
 
 
@@ -164,6 +166,39 @@ def require_projects(session: Session, project_ids: Iterable[str]) -> None:
     for project_id in unique_ids:
         if project_id not in found:
             raise NotFound(f"Project not found: {project_id}")
+
+
+def lock[T: IdeaRow | BoardCardRow](session: Session, table: type[T], row_id: str) -> T:
+    """Loads a row and holds it for the rest of the transaction. Locking before a
+    concurrency guard closes the window between reading `updated_at` and writing."""
+    return session.exec(
+        select(table)
+        .where(table.id == row_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one()
+
+
+def assert_unchanged(label: str, expected: Any, current: datetime) -> None:
+    """Refuses a write when the record moved since the caller read it. The message carries
+    the current value because an MCP tool error is prose and nothing else, so an agent has
+    to be able to retry from the sentence."""
+    if expected is None:
+        return
+    if isinstance(expected, str):
+        try:
+            expected_at = datetime.fromisoformat(expected.strip())
+        except ValueError as error:
+            raise BadRequest(f"expectedUpdatedAt must be an ISO timestamp: {expected}") from error
+    else:
+        expected_at = expected
+    if expected_at.tzinfo is None:
+        expected_at = expected_at.replace(tzinfo=UTC)
+    if format_timestamp(expected_at) != format_timestamp(current):
+        shown = expected if isinstance(expected, str) else format_timestamp(expected)
+        raise Conflict(
+            f"{label} changed since {shown} (current updatedAt {format_timestamp(current)})"
+        )
 
 
 # --- activity log --------------------------------------------------------------------

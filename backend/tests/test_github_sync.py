@@ -185,9 +185,9 @@ def test_push_and_pull_stay_inside_the_token_scope(
     theirs = task(session, other, title="Off limits")
     scoped = token_access("token-1", [project.id])
 
-    with pytest.raises(Forbidden):
+    with pytest.raises(NotFound, match="Task not found"):
         github_sync.push(session, scoped, theirs.id, github, default_repository=REPO)
-    with pytest.raises(Forbidden):
+    with pytest.raises(NotFound, match="Task not found"):
         github_sync.pull(session, scoped, theirs.id, github)
 
 
