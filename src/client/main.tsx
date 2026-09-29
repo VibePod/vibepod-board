@@ -49,6 +49,8 @@ import {
   ListChecks,
   Lock,
   LogOut,
+  MessageCircleQuestion,
+  MessageSquareReply,
   Moon,
   Network,
   Pencil,
@@ -113,6 +115,7 @@ import {
   resolveAssigneeFilter,
 } from "./assigneeFilterUtils.js";
 import { failedAttemptsLabel, formatClaimedSince } from "./automationUtils.js";
+import { AnswerDialog, ReworkDialog } from "./ConversationDialogs.js";
 import { CopyableCode } from "./CopyableCode.js";
 import { DeleteTaskDialog, type DeleteTaskTarget } from "./DeleteTaskDialog.js";
 import { GitHubIssueBadge, GitHubSyncPanel } from "./GitHubIssue.js";
@@ -421,6 +424,9 @@ const App = () => {
     emptyTokenDraft(),
   );
   const [workers, setWorkers] = useState<Worker[]>([]);
+  // The card whose question is being answered, and the reviewed card being sent back.
+  const [answerTarget, setAnswerTarget] = useState<BoardCard | null>(null);
+  const [reworkTarget, setReworkTarget] = useState<BoardCard | null>(null);
   const [automation, setAutomation] = useState<
     WorkerListResponse["automation"] | null
   >(null);
@@ -1603,6 +1609,28 @@ const App = () => {
     }
   };
 
+  /** Answers the agent's question; the task goes back to Planned. Throws for the dialog. */
+  const answerQuestion = async (card: BoardCard, answer: string) => {
+    await api(`/api/board/${card.id}/answer`, {
+      method: "POST",
+      body: JSON.stringify({ answer }),
+    });
+    setAnswerTarget(null);
+    setNotice(`Answered ${card.title}; it is planned again.`);
+    await loadState();
+  };
+
+  /** Sends a reviewed task back to Planned with feedback. Throws for the dialog. */
+  const requestRework = async (card: BoardCard, feedback: string) => {
+    await api(`/api/board/${card.id}/rework`, {
+      method: "POST",
+      body: JSON.stringify({ feedback }),
+    });
+    setReworkTarget(null);
+    setNotice(`Sent ${card.title} back for rework.`);
+    await loadState();
+  };
+
   const dropCard = async (column: BoardColumn) => {
     const card = boardColumns
       .flatMap((boardColumn) => projectColumns[boardColumn] ?? [])
@@ -1610,6 +1638,11 @@ const App = () => {
     setDraggingCardId("");
     setDragOverColumn(null);
     if (!card || card.column === column) {
+      return;
+    }
+    // A reviewed task goes back with feedback, so the next run knows what to change.
+    if (card.column === "review" && column === "planned") {
+      setReworkTarget(card);
       return;
     }
     await moveCard(card, column);
@@ -2498,7 +2531,48 @@ const App = () => {
                               </Group>
                             )}
                             {labelBadges(card.labels, "xs")}
-                            {card.blockedAt ? (
+                            {card.question ? (
+                              <Stack className="board-card-needs-input" gap={4}>
+                                <Group gap={6} justify="space-between">
+                                  <Badge
+                                    variant="light"
+                                    color="violet"
+                                    size="sm"
+                                    leftSection={
+                                      <MessageCircleQuestion
+                                        size={12}
+                                        aria-hidden
+                                      />
+                                    }
+                                  >
+                                    Needs input
+                                  </Badge>
+                                  <Button
+                                    type="button"
+                                    variant="subtle"
+                                    color="violet"
+                                    size="compact-xs"
+                                    aria-label={`Answer ${card.title}`}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setAnswerTarget(card);
+                                    }}
+                                    onKeyDown={(event) =>
+                                      event.stopPropagation()
+                                    }
+                                  >
+                                    Answer
+                                  </Button>
+                                </Group>
+                                <Text
+                                  className="board-card-question"
+                                  size="xs"
+                                  lineClamp={4}
+                                >
+                                  {card.question}
+                                </Text>
+                              </Stack>
+                            ) : card.blockedAt ? (
                               <Stack
                                 className="board-card-blocked-state"
                                 gap={4}
@@ -2704,11 +2778,35 @@ const App = () => {
                                   ))}
                               </Stack>
                             )}
-                            {(cardTaskId || column === "done") && (
+                            {(cardTaskId ||
+                              column === "done" ||
+                              column === "review") && (
                               <Group
                                 className="board-card-task-id"
                                 justify="flex-end"
                               >
+                                {column === "review" && (
+                                  <Button
+                                    type="button"
+                                    variant="subtle"
+                                    color="orange"
+                                    size="compact-xs"
+                                    mr="auto"
+                                    leftSection={
+                                      <MessageSquareReply size={12} />
+                                    }
+                                    aria-label={`Request changes to ${card.title}`}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setReworkTarget(card);
+                                    }}
+                                    onKeyDown={(event) =>
+                                      event.stopPropagation()
+                                    }
+                                  >
+                                    Request changes
+                                  </Button>
+                                )}
                                 {column === "done" && (
                                   <Button
                                     type="button"
@@ -3012,7 +3110,31 @@ const App = () => {
               )}
             </Stack>
 
-            {taskViewCard?.blockedAt && (
+            {taskViewCard?.question && (
+              <Alert
+                className="overview-needs-input"
+                color="violet"
+                variant="light"
+                title="Needs input"
+                icon={<MessageCircleQuestion size={18} />}
+              >
+                <Stack gap="xs" align="flex-start">
+                  <Text size="sm">{taskViewCard.question}</Text>
+                  {!isTaskViewArchived && (
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="light"
+                      color="violet"
+                      onClick={() => setAnswerTarget(taskViewCard)}
+                    >
+                      Answer
+                    </Button>
+                  )}
+                </Stack>
+              </Alert>
+            )}
+            {taskViewCard?.blockedAt && !taskViewCard.question && (
               <Alert
                 className="overview-blocked"
                 color="red"
@@ -3199,6 +3321,17 @@ const App = () => {
                 >
                   Close
                 </Button>
+                {taskViewCard?.column === "review" && (
+                  <Button
+                    type="button"
+                    variant="light"
+                    color="orange"
+                    leftSection={<MessageSquareReply size={16} />}
+                    onClick={() => setReworkTarget(taskViewCard)}
+                  >
+                    Request changes
+                  </Button>
+                )}
                 <Button
                   type="button"
                   variant="light"
@@ -3215,6 +3348,17 @@ const App = () => {
           </Stack>
         )}
       </Modal>
+
+      <AnswerDialog
+        card={answerTarget}
+        onClose={() => setAnswerTarget(null)}
+        onSubmit={answerQuestion}
+      />
+      <ReworkDialog
+        card={reworkTarget}
+        onClose={() => setReworkTarget(null)}
+        onSubmit={requestRework}
+      />
 
       <Modal
         opened={!!readinessModal}

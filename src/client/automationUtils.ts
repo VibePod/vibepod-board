@@ -46,6 +46,9 @@ export const taskEventLabels: Record<TaskEventKind, string> = {
   claim_ended: "Claim ended",
   unblocked: "Unblocked",
   cancelled: "Cancelled",
+  question: "Question",
+  answer: "Answer",
+  feedback: "Review feedback",
 };
 
 export const taskEventColors: Record<TaskEventKind, string> = {
@@ -58,6 +61,9 @@ export const taskEventColors: Record<TaskEventKind, string> = {
   claim_ended: "gray",
   unblocked: "blue",
   cancelled: "gray",
+  question: "violet",
+  answer: "blue",
+  feedback: "orange",
 };
 
 export const runOutcomeLabels: Record<RunOutcome, string> = {
@@ -66,6 +72,7 @@ export const runOutcomeLabels: Record<RunOutcome, string> = {
   timed_out: "Timed out",
   cancelled: "Cancelled",
   usage_limit: "Usage limit",
+  needs_input: "Needs input",
 };
 
 export const runOutcomeColors: Record<RunOutcome, string> = {
@@ -74,6 +81,7 @@ export const runOutcomeColors: Record<RunOutcome, string> = {
   timed_out: "orange",
   cancelled: "gray",
   usage_limit: "yellow",
+  needs_input: "violet",
 };
 
 /** "45 s", "12 min 5 s", "2 h 3 min". */
