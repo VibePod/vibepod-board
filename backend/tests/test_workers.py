@@ -333,3 +333,61 @@ async def test_mcp_runs_a_worker_session(server_url: str, session: Session, vp) 
     assert signed_off["item"]["status"] == "offline"
     with pytest.raises(ToolError, match="is signed off"):
         await call(server_url, token, "worker_heartbeat", id=worker_id, status="idle")
+
+
+# --- races and edges found in review -------------------------------------------------
+
+
+def test_a_late_sign_off_of_a_replaced_registration_leaves_the_claims_alone(
+    session: Session, vp
+) -> None:
+    planned(session, vp, "Held across a restart")
+    old = register(session).item
+    new = register(session).item
+    claims.claim_task(session, ADMIN, "VP", NAME)
+
+    # The old process's shutdown hook runs after the new one registered.
+    workers.sign_off(session, ADMIN, old.id)
+
+    card = board.get_card(session, ADMIN, "VP-1")
+    assert (card.column, card.assignee) == (BoardColumn.IN_PROGRESS, NAME)
+    assert card.claimed_at is not None
+    assert workers.get_worker(session, ADMIN, new.id).status == WorkerState.IDLE
+
+
+def test_signing_off_skips_a_claim_that_ended_meanwhile(monkeypatch, session: Session, vp) -> None:
+    from vibepod_board.services import workers as workers_module
+    from vibepod_board.tables import BoardCardRow
+
+    first = planned(session, vp, "Cancelled meanwhile")
+    second = planned(session, vp, "Still held")
+    worker = register(session).item
+    claims.claim_task(session, ADMIN, "VP", NAME, task=first.id)
+    claims.claim_task(session, ADMIN, "VP", NAME, task=second.id)
+    real_release = workers_module.apply_release
+    first_card = board.get_card(session, ADMIN, first.id).id
+
+    def release_after_a_cancel(session_, access, card_id, *args):
+        if card_id == first_card:
+            session_.get(BoardCardRow, card_id).claimed_at = None
+            session_.flush()
+        return real_release(session_, access, card_id, *args)
+
+    monkeypatch.setattr(workers_module, "apply_release", release_after_a_cancel)
+
+    signed_off = workers.sign_off(session, ADMIN, worker.id)
+
+    assert signed_off.status == WorkerState.OFFLINE
+    assert board.get_card(session, ADMIN, second.id).column == BoardColumn.PLANNED
+
+
+def test_a_heartbeat_for_a_deleted_task_records_the_worker_idle(session: Session, vp) -> None:
+    task = planned(session, vp, "Deleted while worked on")
+    worker = register(session).item
+    claims.claim_task(session, ADMIN, "VP", NAME)
+    workers.heartbeat(session, ADMIN, worker.id, WorkerStatus.WORKING, task=task.id)
+    ideas.delete_idea(session, ADMIN, task.id)
+
+    reply = workers.heartbeat(session, ADMIN, worker.id, WorkerStatus.WORKING, task=task.id)
+
+    assert (reply.item.status, reply.item.task_id) == (WorkerState.IDLE, None)
