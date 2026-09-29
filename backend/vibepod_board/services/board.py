@@ -124,14 +124,12 @@ def ensure_card(session: Session, idea: IdeaRow, timestamp: datetime | None = No
     timestamp = timestamp or now()
     existing = session.exec(select(BoardCardRow).where(BoardCardRow.idea_id == idea.id)).first()
     if existing:
-        if existing.assignee != idea.assignee:
-            end_claim_on_holder_change(session, existing, idea.assignee, timestamp, None)
+        _mirror_holder(session, existing, idea, timestamp, None, holder_changed=False)
         existing.title = idea.title
         existing.details = card_details_for_idea(idea)
         existing.labels = list(idea.labels)
         existing.repository_local_path = idea.repository_local_path
         existing.repository_remote_url = idea.repository_remote_url
-        existing.assignee = idea.assignee
         existing.github_issue_url = idea.github_issue_url
         existing.github_issue_number = idea.github_issue_number
         existing.updated_at = timestamp
@@ -164,22 +162,43 @@ def ensure_card(session: Session, idea: IdeaRow, timestamp: datetime | None = No
 
 
 def sync_card_from_idea(
-    session: Session, idea: IdeaRow, timestamp: datetime, actor: str | None = None
+    session: Session,
+    idea: IdeaRow,
+    timestamp: datetime,
+    actor: str | None = None,
+    holder_changed: bool = False,
 ) -> None:
-    """Mirrors the idea onto its card; the card's column and archive state are left alone."""
+    """Mirrors the idea onto its card; the card's column and archive state are left alone.
+    `holder_changed` says the write named the task's assignee."""
     for card in session.exec(select(BoardCardRow).where(BoardCardRow.idea_id == idea.id)):
-        if card.assignee != idea.assignee:
-            end_claim_on_holder_change(session, card, idea.assignee, timestamp, actor)
+        _mirror_holder(session, card, idea, timestamp, actor, holder_changed)
         card.title = idea.title
         card.details = card_details_for_idea(idea)
         card.labels = list(idea.labels)
         card.repository_local_path = idea.repository_local_path
         card.repository_remote_url = idea.repository_remote_url
-        card.assignee = idea.assignee
         card.github_issue_url = idea.github_issue_url
         card.github_issue_number = idea.github_issue_number
         card.updated_at = timestamp
     session.flush()
+
+
+def _mirror_holder(
+    session: Session,
+    card: BoardCardRow,
+    idea: IdeaRow,
+    timestamp: datetime,
+    actor: str | None,
+    holder_changed: bool,
+) -> None:
+    """Copies the task's holder onto its card. A claimed card keeps its holder unless this
+    write named another one: a sync that did not, such as a GitHub pull, may carry a copy of
+    the task read before the claim, and must neither end the claim nor clear its holder."""
+    if card.claimed_at is not None and card.assignee != idea.assignee:
+        if not holder_changed:
+            return
+        end_claim_on_holder_change(session, card, idea.assignee, timestamp, actor)
+    card.assignee = idea.assignee
 
 
 def end_claim_on_holder_change(
@@ -282,7 +301,11 @@ def _apply_card_update(
 ) -> tuple[BoardCardRow, bool]:
     """One card write without its own transaction or activity row, so a batch can apply
     many of them atomically. Also says whether the column actually changed."""
-    card = lock(session, BoardCardRow, _require_active_card(session, access, reference).id)
+    found = _require_active_card(session, access, reference)
+    # Task before card, the order every write takes, so two writes never wait on each other.
+    if found.idea_id:
+        lock(session, IdeaRow, found.idea_id)
+    card = lock(session, BoardCardRow, found.id)
     assert_unchanged("Board card", expected_updated_at, card.updated_at)
     moved = column is not None and column != card.column_name
     if column is not None:

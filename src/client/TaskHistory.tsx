@@ -21,8 +21,14 @@ const formatEventTime = (value: string) =>
  * touched have no history, and the section stays hidden.
  */
 export const TaskHistory = ({ ideaId, reloadKey }: TaskHistoryProps) => {
-  const [events, setEvents] = useState<TaskEvent[] | null>(null);
+  // Kept with the task they belong to, so switching tasks never shows the last
+  // task's history while the new one loads.
+  const [loaded, setLoaded] = useState<{
+    ideaId: string;
+    events: TaskEvent[];
+  } | null>(null);
   const [error, setError] = useState("");
+  const events = loaded?.ideaId === ideaId ? loaded.events : null;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reloadKey only triggers a refetch
   useEffect(() => {
@@ -30,7 +36,7 @@ export const TaskHistory = ({ ideaId, reloadKey }: TaskHistoryProps) => {
     setError("");
     api<{ items: TaskEvent[] }>(`/api/ideas/${ideaId}/history`)
       .then((response) => {
-        if (!cancelled) setEvents(response.items);
+        if (!cancelled) setLoaded({ ideaId, events: response.items });
       })
       .catch((requestError: Error) => {
         if (!cancelled) setError(requestError.message);

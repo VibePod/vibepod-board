@@ -54,10 +54,23 @@ def get_settings() -> Settings:
         github_token=os.environ.get("GITHUB_TOKEN") or None,
         github_repository=os.environ.get("GITHUB_REPOSITORY") or None,
         pool_size=int(os.environ.get("DATABASE_POOL_MAX", "10")),
-        claim_lease_seconds=_positive_int("CLAIM_LEASE_SECONDS", 15 * 60),
+        claim_lease_seconds=_lease_seconds("CLAIM_LEASE_SECONDS", 15 * 60),
         claim_max_attempts=_positive_int("CLAIM_MAX_ATTEMPTS", 3),
         claim_sweep_seconds=_positive_int("CLAIM_SWEEP_SECONDS", 15, allow_zero=True),
     )
+
+
+def _lease_seconds(name: str, default: int) -> int:
+    """A lease inside the range claims accept, so a bad value fails at startup rather than
+    on every claim."""
+    from vibepod_board.services.claims import MAX_LEASE_SECONDS, MIN_LEASE_SECONDS
+
+    value = _positive_int(name, default)
+    if not MIN_LEASE_SECONDS <= value <= MAX_LEASE_SECONDS:
+        raise RuntimeError(
+            f"{name} must be between {MIN_LEASE_SECONDS} and {MAX_LEASE_SECONDS}: {value}"
+        )
+    return value
 
 
 def _positive_int(name: str, default: int, allow_zero: bool = False) -> int:

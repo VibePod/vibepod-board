@@ -219,7 +219,12 @@ describe("claimed and blocked cards", () => {
         String(input),
         JSON.parse(String((init as RequestInit).body)),
       ]);
-    expect(patches).toEqual([["/api/board/card-2", { column: "planned" }]]);
+    expect(patches).toEqual([
+      [
+        "/api/board/card-2",
+        { column: "planned", expectedUpdatedAt: "2026-09-29T08:00:00.000Z" },
+      ],
+    ]);
     await waitFor(() =>
       expect(within(cardFor("Stuck work")).queryByText("Blocked")).toBeNull(),
     );

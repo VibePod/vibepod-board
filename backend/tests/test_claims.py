@@ -703,3 +703,92 @@ async def test_mcp_hands_over(server_url: str, token: str) -> None:
     )
     assert handed["item"]["column"] == "review"
     assert handed["item"]["branchName"] == "vp-1"
+
+
+# --- races and edges found in review -------------------------------------------------
+
+
+def test_a_sync_from_a_copy_read_before_the_claim_keeps_it(
+    db: Engine, session: Session, vp
+) -> None:
+    from vibepod_board.tables import IdeaRow
+
+    task = planned(session, vp, "Pulled from GitHub meanwhile")
+    with Session(db, expire_on_commit=False) as stale:
+        # Read before the claim, like a GitHub pull waiting on the network.
+        copy = stale.get(IdeaRow, task.id)
+        claim(session)
+        board.sync_card_from_idea(stale, copy, now())
+        stale.commit()
+
+    card = board.get_card(session, ADMIN, task.id)
+    assert (card.assignee, card.claimed_at is not None) == (RUNNER, True)
+    assert ideas.get_idea(session, ADMIN, task.id).assignee == RUNNER
+    assert claims.hand_over_task(session, ADMIN, task.id, RUNNER).column == BoardColumn.REVIEW
+
+
+def _race(db: Engine, *writes) -> list[BaseException]:
+    """Runs the writes at the same time, each in its own session; a refused write (409) is
+    fine, anything else is returned."""
+    barrier = threading.Barrier(len(writes))
+    errors: list[BaseException] = []
+
+    def run(write) -> None:
+        with Session(db, expire_on_commit=False) as own:
+            barrier.wait(timeout=10)
+            try:
+                write(own)
+            except Conflict:
+                pass
+            except BaseException as error:  # noqa: BLE001 - returned to the test
+                errors.append(error)
+
+    threads = [threading.Thread(target=run, args=(write,)) for write in writes]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+    return errors
+
+
+def test_moving_a_claimed_card_while_it_is_handed_over_never_deadlocks(
+    db: Engine, session: Session, vp
+) -> None:
+    for round_number in range(8):
+        task = planned(session, vp, f"Contended {round_number}")
+        claim(session, task=task.id)
+        errors = _race(
+            db,
+            lambda own, key=task.id: board.update_card(own, ADMIN, key, column=BoardColumn.DONE),
+            lambda own, key=task.id: claims.hand_over_task(own, ADMIN, key, RUNNER),
+        )
+        assert errors == []
+
+
+def test_taking_a_claimed_task_off_the_board_frees_its_holder(session: Session, vp) -> None:
+    task = planned(session, vp, "Taken off")
+    claim(session)
+
+    ideas.set_board_availability(session, ADMIN, task.id, False)
+
+    assert ideas.get_idea(session, ADMIN, task.id).assignee is None
+    assert kinds(session, task)[0] == "claim_ended"
+    ideas.mark_ready(session, ADMIN, task.id)
+    board.update_card(session, ADMIN, task.id, column=BoardColumn.PLANNED)
+    assert claimed_key(claim(session, OTHER)) == "VP-1"
+
+
+def test_a_lease_setting_out_of_range_fails_at_startup(monkeypatch) -> None:
+    from vibepod_board.config import get_settings
+
+    monkeypatch.setenv("DATABASE_URL", "postgres://x@localhost/x")
+    monkeypatch.setenv("CLAIM_LEASE_SECONDS", "5")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="CLAIM_LEASE_SECONDS must be between 30"):
+            get_settings()
+        monkeypatch.setenv("CLAIM_LEASE_SECONDS", "120")
+        get_settings.cache_clear()
+        assert get_settings().claim_lease_seconds == 120
+    finally:
+        get_settings.cache_clear()

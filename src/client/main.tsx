@@ -1426,19 +1426,31 @@ const App = () => {
     await loadState();
   };
 
-  /** Putting a blocked card in Planned by hand unblocks it and resets its failed attempts. */
+  /**
+   * Putting a blocked card in Planned by hand unblocks it and resets its failed
+   * attempts. Guarded by the card this board shows, so a stale board never pulls
+   * a card a runner claimed meanwhile out of its run.
+   */
   const unblockCard = async (card: BoardCard) => {
     setError("");
     setNotice("");
     try {
       await api(`/api/board/${card.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ column: "planned" }),
+        body: JSON.stringify({
+          column: "planned",
+          expectedUpdatedAt: card.updatedAt,
+        }),
       });
       await loadState();
       setNotice(`Unblocked ${card.title}.`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to unblock card");
+      setError(
+        err instanceof Error
+          ? `${err.message}. The board was reloaded; check the card again.`
+          : "Failed to unblock card",
+      );
+      await loadState().catch(() => undefined);
     }
   };
 
