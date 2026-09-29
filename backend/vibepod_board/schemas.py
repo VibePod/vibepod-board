@@ -14,7 +14,7 @@ from pydantic import (
 )
 from pydantic.alias_generators import to_camel
 
-from vibepod_board.enums import BoardColumn, DocumentKind, IdeaStatus
+from vibepod_board.enums import BoardColumn, DocumentKind, IdeaStatus, TaskEventKind
 
 
 def format_timestamp(value: datetime) -> str:
@@ -108,6 +108,14 @@ class BoardCard(ApiModel):
     readiness_reason: str | None = None
     readiness_evaluated_at: Timestamp | None = None
     archived_at: Timestamp | None = None
+    # An automated claim, held by the assignee until it expires or is handed back.
+    claimed_at: Timestamp | None = None
+    claim_expires_at: Timestamp | None = None
+    # Failed automated attempts since the card was last put in Planned by hand.
+    attempts: int = 0
+    # A blocked card stays in Planned and is skipped by claims.
+    blocked_at: Timestamp | None = None
+    blocked_reason: str | None = None
     created_at: Timestamp
     updated_at: Timestamp
 
@@ -161,6 +169,10 @@ class CompactBoardCard(ApiModel):
     labels: list[str]
     blocked_by: list[str]
     assignee: str | None = None
+    claimed_at: Timestamp | None = None
+    # Left out while zero.
+    attempts: int | None = None
+    blocked_reason: str | None = None
     readiness_score: int | None = None
     details_length: int
     updated_at: Timestamp
@@ -208,6 +220,29 @@ class ActivityEvent(ApiModel):
     type: str
     message: str
     created_at: Timestamp
+
+
+class TaskEvent(ApiModel):
+    id: str
+    idea_id: str
+    kind: TaskEventKind
+    # Who did it: the claim holder for runner calls, else the admin or the token's name.
+    actor: str | None = None
+    message: str
+    created_at: Timestamp
+
+
+class Claim(ApiModel):
+    task: KeyedIdea
+    card: KeyedBoardCard
+
+
+class ClaimResult(ApiModel):
+    claimed: bool
+    # The claimed task and its card; left out when nothing was claimed.
+    item: Claim | None = None
+    # Why nothing was claimed.
+    reason: str | None = None
 
 
 class ApiTokenSummary(ApiModel):

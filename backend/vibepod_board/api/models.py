@@ -6,8 +6,9 @@ from typing import Annotated, Any
 
 from pydantic import AfterValidator, BeforeValidator, Field, StrictBool, StrictInt, StrictStr
 
-from vibepod_board.enums import BoardColumn, DocumentKind, IdeaStatus
+from vibepod_board.enums import BoardColumn, DocumentKind, IdeaStatus, ReleaseOutcome
 from vibepod_board.schemas import ApiModel
+from vibepod_board.services.claims import MAX_LEASE_SECONDS, MIN_LEASE_SECONDS
 from vibepod_board.services.listing import BATCH_LIMIT
 
 
@@ -133,6 +134,44 @@ class BoardCardBatch(ApiModel):
 
 class ArchiveDoneRequest(ApiModel):
     project_id: RequiredText
+
+
+LeaseSeconds = Annotated[StrictInt, Field(ge=MIN_LEASE_SECONDS, le=MAX_LEASE_SECONDS)]
+
+
+class ClaimRequest(ApiModel):
+    project_id: RequiredText
+    # Who claims: becomes the task's assignee, and must be named again to report back.
+    assignee: RequiredText
+    # Claim this task rather than the next one in the work order.
+    task: RequiredText | None = None
+    # Only tasks carrying every one of these labels (case-insensitive).
+    labels: list[RequiredText] = Field(default_factory=list)
+    # Only tasks whose latest readiness score is at least this.
+    min_readiness: Annotated[StrictInt, Field(ge=1, le=10)] | None = None
+    # How long the claim lasts unless renewed; the server default applies when omitted.
+    lease_seconds: LeaseSeconds | None = None
+
+
+class RenewClaimRequest(ApiModel):
+    assignee: RequiredText
+    lease_seconds: LeaseSeconds | None = None
+
+
+class HandoverRequest(ApiModel):
+    assignee: RequiredText
+    branch_name: RequiredText | None = None
+    note: StrictStr | None = None
+    expected_updated_at: RequiredText | None = None
+
+
+class ReleaseRequest(ApiModel):
+    assignee: RequiredText
+    outcome: ReleaseOutcome = ReleaseOutcome.FAILED
+    # Why; required to block, since it is the reason shown on the card.
+    note: StrictStr | None = None
+    # Failed attempts before the task is blocked; the server default applies when omitted.
+    max_attempts: Annotated[StrictInt, Field(ge=1, le=100)] | None = None
 
 
 class DocumentCreate(ApiModel):

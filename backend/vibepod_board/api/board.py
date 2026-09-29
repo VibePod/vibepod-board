@@ -2,11 +2,16 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query
 
+from vibepod_board.api.deps import SettingsDep
 from vibepod_board.api.models import (
     ArchiveDoneRequest,
     BoardCardBatch,
     BoardCardUpdate,
+    ClaimRequest,
+    HandoverRequest,
     ReadinessRequest,
+    ReleaseRequest,
+    RenewClaimRequest,
 )
 from vibepod_board.api.queries import (
     Assignee,
@@ -22,8 +27,14 @@ from vibepod_board.api.responses import Columns, Item, Items
 from vibepod_board.auth import AccessDep
 from vibepod_board.db import SessionDep
 from vibepod_board.enums import BoardColumn
-from vibepod_board.schemas import BoardCard, CompactBoardCard, EntityRef, KeyedBoardCard
-from vibepod_board.services import board, readiness
+from vibepod_board.schemas import (
+    BoardCard,
+    ClaimResult,
+    CompactBoardCard,
+    EntityRef,
+    KeyedBoardCard,
+)
+from vibepod_board.services import board, claims, readiness
 from vibepod_board.services.views import View, project_cards
 
 router = APIRouter(prefix="/api/board", tags=["board"])
@@ -65,6 +76,27 @@ def archive_done(
     return Items(items=board.archive_done_cards(session, access, body.project_id))
 
 
+@router.post("/claim")
+def claim_task(
+    body: ClaimRequest, session: SessionDep, access: AccessDep, settings: SettingsDep
+) -> ClaimResult:
+    """Claims the next planned task of a project in the work order, or the named task: its
+    card moves to In progress and `assignee` becomes its holder. `claimed` is false when
+    nothing can be claimed."""
+    return claims.claim_task(
+        session,
+        access,
+        body.project_id,
+        body.assignee,
+        task=body.task,
+        labels=body.labels,
+        min_readiness=body.min_readiness,
+        lease_seconds=body.lease_seconds,
+        default_lease_seconds=settings.claim_lease_seconds,
+        max_attempts=settings.claim_max_attempts,
+    )
+
+
 @router.post("/batch")
 def update_cards(
     body: BoardCardBatch, session: SessionDep, access: AccessDep, view: ViewParam = View.FULL
@@ -98,6 +130,65 @@ def update_card(
 ) -> Item[BoardCard]:
     changes = body.model_dump(exclude_unset=True, by_alias=False)
     return Item(item=board.update_card(session, access, card_id, **changes))
+
+
+@router.post("/{card_id}/renew")
+def renew_claim(
+    card_id: str,
+    body: RenewClaimRequest,
+    session: SessionDep,
+    access: AccessDep,
+    settings: SettingsDep,
+) -> Item[BoardCard]:
+    return Item(
+        item=claims.renew_claim(
+            session,
+            access,
+            card_id,
+            body.assignee,
+            body.lease_seconds,
+            settings.claim_lease_seconds,
+        )
+    )
+
+
+@router.post("/{card_id}/handover")
+def hand_over_task(
+    card_id: str, body: HandoverRequest, session: SessionDep, access: AccessDep
+) -> Item[BoardCard]:
+    return Item(
+        item=claims.hand_over_task(
+            session,
+            access,
+            card_id,
+            body.assignee,
+            branch_name=body.branch_name,
+            note=body.note,
+            expected_updated_at=body.expected_updated_at,
+        )
+    )
+
+
+@router.post("/{card_id}/release")
+def release_task(
+    card_id: str,
+    body: ReleaseRequest,
+    session: SessionDep,
+    access: AccessDep,
+    settings: SettingsDep,
+) -> Item[BoardCard]:
+    return Item(
+        item=claims.release_task(
+            session,
+            access,
+            card_id,
+            body.assignee,
+            outcome=body.outcome,
+            note=body.note,
+            max_attempts=body.max_attempts,
+            default_max_attempts=settings.claim_max_attempts,
+        )
+    )
 
 
 @router.post("/{card_id}/readiness")

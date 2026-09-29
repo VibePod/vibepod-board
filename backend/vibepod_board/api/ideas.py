@@ -34,9 +34,10 @@ from vibepod_board.schemas import (
     Idea,
     KeyedIdea,
     ReadinessEvent,
+    TaskEvent,
     TaskWorkOrder,
 )
-from vibepod_board.services import board, dependencies, ideas, readiness
+from vibepod_board.services import board, dependencies, history, ideas, readiness
 from vibepod_board.services.views import View, project_ideas
 
 router = APIRouter(prefix="/api", tags=["ideas"])
@@ -168,6 +169,12 @@ def list_idea_readiness(
     idea_id: str, session: SessionDep, access: AccessDep
 ) -> Items[ReadinessEvent]:
     return Items(items=readiness.list_idea_readiness(session, access, idea_id))
+
+
+@router.get("/ideas/{idea_id}/history")
+def task_history(idea_id: str, session: SessionDep, access: AccessDep) -> Items[TaskEvent]:
+    """What happened to the task under automation, newest first."""
+    return Items(items=history.list_task_history(session, access, idea_id))
 
 
 @router.get("/readiness")

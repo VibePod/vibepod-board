@@ -24,6 +24,11 @@ class Settings:
     github_token: str | None
     github_repository: str | None
     pool_size: int
+    # Automated claims: the default lease, the failed attempts before a task is blocked, and
+    # how often lapsed claims are swept (0 turns the sweep off).
+    claim_lease_seconds: int = 15 * 60
+    claim_max_attempts: int = 3
+    claim_sweep_seconds: int = 15
 
     @property
     def sqlalchemy_url(self) -> str:
@@ -49,4 +54,20 @@ def get_settings() -> Settings:
         github_token=os.environ.get("GITHUB_TOKEN") or None,
         github_repository=os.environ.get("GITHUB_REPOSITORY") or None,
         pool_size=int(os.environ.get("DATABASE_POOL_MAX", "10")),
+        claim_lease_seconds=_positive_int("CLAIM_LEASE_SECONDS", 15 * 60),
+        claim_max_attempts=_positive_int("CLAIM_MAX_ATTEMPTS", 3),
+        claim_sweep_seconds=_positive_int("CLAIM_SWEEP_SECONDS", 15, allow_zero=True),
     )
+
+
+def _positive_int(name: str, default: int, allow_zero: bool = False) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise RuntimeError(f"{name} must be an integer: {raw}") from error
+    if value < 0 or (value == 0 and not allow_zero):
+        raise RuntimeError(f"{name} must be {'zero or ' if allow_zero else ''}positive: {raw}")
+    return value

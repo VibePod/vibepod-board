@@ -1,15 +1,19 @@
 """Application factory: REST routers, the FastMCP server at /mcp, and the built client."""
 
+import asyncio
+import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
+import anyio
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlmodel import Session
 from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -19,11 +23,30 @@ from vibepod_board.config import Settings, get_settings
 from vibepod_board.db import create_db_engine, get_engine, migrate, set_engine
 from vibepod_board.errors import BoardError, NotFound
 from vibepod_board.mcp_server import create_mcp_server
+from vibepod_board.services import claims
 
 MiB = 1024 * 1024
 BODY_LIMIT = 2 * MiB
 IMPORT_BODY_LIMIT = 10 * MiB
 IMPORT_PATH = "/api/projects/import"
+
+logger = logging.getLogger(__name__)
+
+
+def _expire_claims(settings: Settings) -> int:
+    with Session(get_engine(), expire_on_commit=False) as session:
+        return claims.expire_claims(session, settings.claim_max_attempts)
+
+
+async def _sweep_claims(settings: Settings) -> None:
+    """Puts tasks whose claim lapsed back in Planned, so a runner that vanished never holds
+    its task forever. A failed sweep is logged and retried on the next tick."""
+    while True:
+        await anyio.sleep(settings.claim_sweep_seconds)
+        try:
+            await anyio.to_thread.run_sync(_expire_claims, settings)
+        except Exception:
+            logger.exception("Expiring task claims failed")
 
 
 class BodyTooLarge(Exception):
@@ -138,8 +161,19 @@ def create_app(
             set_engine(create_db_engine(settings.sqlalchemy_url, settings.pool_size))
         if settings.auto_migrate if run_migrations is None else run_migrations:
             migrate(get_engine())
-        async with mcp_app.lifespan(app):
-            yield
+        sweeper = (
+            asyncio.create_task(_sweep_claims(settings))
+            if settings.claim_sweep_seconds > 0
+            else None
+        )
+        try:
+            async with mcp_app.lifespan(app):
+                yield
+        finally:
+            if sweeper is not None:
+                sweeper.cancel()
+                with suppress(asyncio.CancelledError):
+                    await sweeper
 
     app = FastAPI(
         title="vibepod-board",

@@ -131,6 +131,11 @@ class BoardCardRow(SQLModel, table=True):
             text("id DESC"),
         ),
         Index("board_cards_project_assignee_idx", "project_id", "assignee"),
+        Index(
+            "board_cards_claim_expires_idx",
+            "claim_expires_at",
+            postgresql_where=text("claim_expires_at IS NOT NULL"),
+        ),
     )
 
     id: str = Field(sa_column=Column(Text, primary_key=True))
@@ -151,8 +156,34 @@ class BoardCardRow(SQLModel, table=True):
     readiness_evaluated_at: datetime | None = _timestamp(nullable=True)
     # Set when a done card leaves the board; the card and its task are kept.
     archived_at: datetime | None = _timestamp(nullable=True)
+    # An automated claim: a lease the holder (the assignee) keeps renewing. It lapses at
+    # `claim_expires_at`, and the task returns to Planned.
+    claimed_at: datetime | None = _timestamp(nullable=True)
+    claim_expires_at: datetime | None = _timestamp(nullable=True)
+    # Failed automated attempts since the card was last put in Planned by hand.
+    attempts: int = Field(
+        default=0, sa_column=Column(Integer, nullable=False, server_default=text("0"))
+    )
+    # A blocked card stays in Planned but is skipped by claims until it is moved to Planned
+    # again.
+    blocked_at: datetime | None = _timestamp(nullable=True)
+    blocked_reason: str | None = _text()
     created_at: datetime = _timestamp()
     updated_at: datetime = _timestamp()
+
+
+class TaskEventRow(SQLModel, table=True):
+    """What happened to a task under automation: claims, hand-overs, failures, blocks."""
+
+    __tablename__ = "task_events"
+    __table_args__ = (Index("task_events_idea_idx", "idea_id", text("created_at DESC")),)
+
+    id: str = Field(sa_column=Column(Text, primary_key=True))
+    idea_id: str = _foreign_key("ideas.id", "CASCADE")
+    kind: str = Field(sa_column=Column(Text, nullable=False))
+    actor: str | None = _text()
+    message: str = _text("")
+    created_at: datetime = _timestamp()
 
 
 class DocumentRow(SQLModel, table=True):

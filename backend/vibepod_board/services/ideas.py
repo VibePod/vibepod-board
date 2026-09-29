@@ -39,6 +39,7 @@ from vibepod_board.services.common import (
 )
 from vibepod_board.services.dependencies import decorate_idea, decorate_ideas, replace_dependencies
 from vibepod_board.services.github_link import link_url
+from vibepod_board.services.history import actor_for
 from vibepod_board.services.listing import (
     ListFilter,
     Page,
@@ -236,7 +237,7 @@ def _apply_idea_update(
     session.flush()
     if depends_on is not None:
         replace_dependencies(session, access, idea, depends_on, timestamp)
-    sync_card_from_idea(session, idea, timestamp)
+    sync_card_from_idea(session, idea, timestamp, actor_for(session, access))
 
     # Status says what the task is; on_board says whether it has a card. Reaching "ready"
     # ensures one, but leaving "ready" never destroys one: that loses the card's id, column

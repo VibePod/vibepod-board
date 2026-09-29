@@ -85,6 +85,11 @@ GITHUB_REPOSITORY=owner/repo    # optional default; a task's GitHub remote URL w
 - `POST /api/board/:id/archive`
 - `POST /api/board/:id/unarchive`
 - `POST /api/board/:id/readiness`
+- `POST /api/board/claim`
+- `POST /api/board/:id/renew`
+- `POST /api/board/:id/handover`
+- `POST /api/board/:id/release`
+- `GET /api/ideas/:id/history`
 - `POST /api/ideas/:id/readiness`
 - `GET /api/ideas/:id/readiness`
 - `GET /api/readiness`
@@ -107,7 +112,9 @@ Browser/full REST access uses the admin session cookie. Project-scoped API clien
 Admins can download a project's data with **Export** on its project card and
 upload a project bundle with **Import Project** on the Projects screen. Bundles
 include the project, tasks and dependencies, board cards, readiness history,
-and documents. API tokens and global activity history are not copied.
+and documents. API tokens and global activity history are not copied, and neither is
+automation state: claims, failed attempts, blocks and the task history stay on the board they
+happened on, so imported cards start unclaimed and unblocked.
 
 Imports match projects by their 1–3 letter project key. A new key creates a new
 project. An existing key requires explicit confirmation and replaces that
@@ -150,6 +157,11 @@ Tools:
 - `list_archived_cards`
 - `set_card_readiness`
 - `set_idea_readiness`
+- `claim_next_task`
+- `renew_task_claim`
+- `hand_over_task`
+- `release_task`
+- `list_task_history`
 - `list_idea_readiness`
 - `list_readiness`
 - `push_github_issue`
@@ -242,6 +254,47 @@ if the record changed since that timestamp, and the error names the current one
 so a caller can retry in one step (REST: `409`). Readiness writes deliberately
 do not move `updatedAt`, because the staleness badge compares content time
 against evaluation time; dependency writes do.
+
+## Automated Runners
+
+An automated runner, such as `vp board work` from vibepod-cli, takes planned work off the board
+by *claiming* it. Claims are available over REST and MCP, limited to the caller's projects.
+
+- **Claim** with `POST /api/board/claim` (`claim_next_task`), naming the project and the
+  `assignee` that claims. The board picks the first task in the work order whose card is in
+  **Planned** and that nobody holds, that is not blocked, and whose dependencies are done, and
+  moves its card to **In Progress** in the same step. The claimed-by value is the task's
+  assignee, so the card shows who took it, and `claimedAt` says since when. Narrow the choice
+  with `labels` (the task must carry all of them, case-insensitive) or `minReadiness` (its
+  latest readiness score must be at least this), or name one `task`. When nothing can be
+  claimed the answer is `{"claimed": false, "reason": ...}`. Claims in one project are
+  serialised, so two runners claiming at the same time never get the same task.
+- **Lease.** A claim expires at `claimExpiresAt`, `leaseSeconds` after it was taken or last
+  renewed (`POST /api/board/:id/renew`, `renew_task_claim`). An expired claim puts the task
+  back in Planned and counts a failed attempt. Renewing does not change `updatedAt`.
+- **Hand over** with `POST /api/board/:id/handover` (`hand_over_task`): the card moves to
+  **Review** with its `branchName`, the claim ends and the failed attempts are cleared.
+- **Release** with `POST /api/board/:id/release` (`release_task`) and a `note`, by `outcome`:
+  `failed` (the default) returns the task to Planned and counts an attempt; `blocked` blocks
+  it with the note as its reason; `released` returns it without counting anything.
+- **Blocked tasks.** The attempt that reaches the limit blocks the task instead of returning
+  it. A blocked card stays in **Planned** with its reason shown on the card and is skipped by
+  claims. Putting it in Planned again by hand — **Unblock** on the card, or any column write of
+  `planned` — unblocks it and resets the attempt count.
+- **Holders.** Renew, hand over and release name the `assignee` that holds the claim; anyone
+  else is refused (`409`). Moving a claimed card by hand, or naming another assignee, ends the
+  claim.
+- **History.** Every claim, hand-over, failed attempt, block, expiry and unblock is recorded
+  in the task history, shown in the task view and listed by `GET /api/ideas/:id/history`
+  (`list_task_history`).
+
+Server settings:
+
+```bash
+CLAIM_LEASE_SECONDS=900   # default lease when a claim names none
+CLAIM_MAX_ATTEMPTS=3      # failed attempts before a task is blocked; a release may pass maxAttempts
+CLAIM_SWEEP_SECONDS=15    # how often expired claims are swept; 0 turns the sweep off
+```
 
 ## Deleting Tasks
 
