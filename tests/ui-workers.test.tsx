@@ -279,6 +279,39 @@ describe("connected workers", () => {
     }
   });
 
+  it("keeps an error on screen when the board reloads in the background", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const columns = inProgress();
+      columns.done.push(
+        card({
+          id: "card-9",
+          ideaId: "idea-2",
+          title: "Shipped",
+          column: "done",
+        }),
+      );
+      const scenario: Scenario = {
+        workers: [worker({ status: "working", taskId: "idea-1" })],
+        columns,
+      };
+      await renderBoard(scenario);
+      await screen.findByRole("button", { name: /1 working/ });
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Archive Shipped" }),
+      );
+      expect(await screen.findByText("Not found")).toBeTruthy();
+
+      scenario.workers = [worker({ status: "idle" })];
+      await vi.advanceTimersByTimeAsync(5000);
+      await screen.findByRole("button", { name: "1 worker" });
+      expect(screen.getByText("Not found")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("hides the header indicator when no worker was seen", async () => {
     const fetchMock = await renderBoard({ workers: [], columns: inProgress() });
 

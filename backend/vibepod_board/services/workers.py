@@ -245,10 +245,16 @@ def heartbeat(
     if row.stopped_at is not None:
         raise Conflict(f"Worker {row.name} is signed off; register again to reconnect")
     timestamp = now()
+    idea = None
     if status == WorkerStatus.WORKING:
         if not task:
             raise BadRequest("A working worker must name its task")
-        idea = require_idea_ref(session, access, task)
+        try:
+            idea = require_idea_ref(session, access, task)
+        except NotFound:
+            # Deleted while the worker was on it: the worker is not working on anything.
+            status = WorkerStatus.IDLE
+    if idea is not None:
         if idea.project_id != row.project_id:
             raise BadRequest(f"Task {task} is not in the worker's project")
         if row.idea_id != idea.id or row.status != WorkerStatus.WORKING:
@@ -275,17 +281,22 @@ def sign_off(
     timing: WorkerTiming | None = None,
 ) -> Worker:
     """Marks the worker offline right away. Claims it still holds go back to Planned without
-    counting an attempt."""
+    counting an attempt. A registration that was already replaced or signed off releases
+    nothing: the claims under its name belong to whoever registered it since."""
     timing = timing or WorkerTiming()
     row = require_worker(session, access, worker_id, for_update=True)
     timestamp = now()
-    if row.stopped_at is None:
+    live = row.stopped_at is None
+    if live:
         row.stopped_at = timestamp
         row.last_seen_at = timestamp
     row.status = WorkerStatus.IDLE
     row.idea_id = None
     row.step = None
     row.task_started_at = None
+    if not live:
+        session.flush()
+        return workers_from_rows(session, [row], timing, timestamp)[0]
     held = session.exec(
         select(BoardCardRow.id).where(
             BoardCardRow.project_id == row.project_id,
@@ -294,15 +305,19 @@ def sign_off(
         )
     ).all()
     for card_id in held:
-        apply_release(
-            session,
-            access,
-            card_id,
-            row.name,
-            ReleaseOutcome.RELEASED,
-            f"Worker {row.name} signed off",
-            max_attempts,
-            timestamp,
-        )
+        try:
+            apply_release(
+                session,
+                access,
+                card_id,
+                row.name,
+                ReleaseOutcome.RELEASED,
+                f"Worker {row.name} signed off",
+                max_attempts,
+                timestamp,
+            )
+        except Conflict:
+            # The claim ended since it was listed, such as by a cancel from the board.
+            continue
     session.flush()
     return workers_from_rows(session, [row], timing, timestamp)[0]

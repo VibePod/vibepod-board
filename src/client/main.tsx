@@ -420,8 +420,9 @@ const App = () => {
   );
   const [workers, setWorkers] = useState<Worker[]>([]);
 
-  const loadState = async () => {
-    setError("");
+  /** A background reload keeps the error banner: the user has not read it yet. */
+  const loadState = async ({ background = false } = {}) => {
+    if (!background) setError("");
     const [projects, ideas, board, archived, documents, github] =
       await Promise.all([
         api<{ items: Project[] }>("/api/projects"),
@@ -671,7 +672,9 @@ const App = () => {
         setWorkers(response.items);
         const next = workerActivitySignature(response.items);
         if (signature !== null && next !== signature) {
-          void loadStateRef.current().catch(() => undefined);
+          void loadStateRef
+            .current({ background: true })
+            .catch(() => undefined);
         }
         signature = next;
       } catch {
