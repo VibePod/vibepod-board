@@ -1,4 +1,4 @@
-import { Badge, Group, Paper, Stack, Text } from "@mantine/core";
+import { Badge, Paper, Stack, Text } from "@mantine/core";
 import { useEffect, useState } from "react";
 import type { TaskEvent } from "../shared/types.js";
 import { api } from "./api.js";
@@ -60,20 +60,13 @@ export const TaskHistory = ({ ideaId, reloadKey }: TaskHistoryProps) => {
       <Text size="xs" fw={700} tt="uppercase" c="dimmed" mb="xs">
         History
       </Text>
-      <Stack gap="xs">
+      <div className="task-history-list">
         {events.map((event) => (
-          <Group
-            key={event.id}
-            className="task-history-event"
-            gap="xs"
-            wrap="nowrap"
-            align="flex-start"
-          >
+          <div key={event.id} className="task-history-event">
             <Badge
               variant="light"
               size="sm"
               color={taskEventColors[event.kind] ?? "gray"}
-              style={{ flexShrink: 0 }}
             >
               {taskEventLabels[event.kind] ?? event.kind}
             </Badge>
@@ -87,9 +80,9 @@ export const TaskHistory = ({ ideaId, reloadKey }: TaskHistoryProps) => {
                   .join(" · ")}
               </Text>
             </Stack>
-          </Group>
+          </div>
         ))}
-      </Stack>
+      </div>
     </Paper>
   );
 };
