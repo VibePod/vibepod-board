@@ -287,7 +287,12 @@ describe("worker controls", () => {
     expect(
       await screen.findByText("Cancelled the run of Automated login."),
     ).toBeTruthy();
-    expect(posts(fetchMock)).toEqual([["/api/board/card-1/cancel", null]]);
+    expect(posts(fetchMock)).toEqual([
+      [
+        "/api/board/card-1/cancel",
+        { expectedUpdatedAt: "2026-09-29T08:00:00.000Z" },
+      ],
+    ]);
     await waitFor(() =>
       expect(
         screen.queryByRole("button", { name: "Cancel run of Automated login" }),

@@ -318,6 +318,32 @@ describe("connected workers", () => {
     }
   });
 
+  it("offers Stop for a silent worker that never signed off", async () => {
+    await renderBoard({
+      workers: [
+        worker({ id: "silent", name: "silent@box", status: "offline" }),
+        worker({
+          id: "gone",
+          name: "gone@box",
+          status: "offline",
+          stoppedAt: timestamp,
+        }),
+      ],
+      columns: inProgress(),
+    });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Workers offline" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Workers" });
+    expect(
+      within(dialog).getByRole("button", { name: "Stop silent@box" }),
+    ).toBeTruthy();
+    expect(
+      within(dialog).queryByRole("button", { name: "Stop gone@box" }),
+    ).toBeNull();
+  });
+
   it("hides the header indicator when no worker was seen", async () => {
     const fetchMock = await renderBoard({ workers: [], columns: inProgress() });
 

@@ -246,6 +246,8 @@ class PauseRequest(ApiModel):
 
 class CancelRunRequest(ApiModel):
     reason: StrictStr | None = None
+    # Refuses the cancel (409) when the card changed since this updatedAt.
+    expected_updated_at: RequiredText | None = None
 
 
 class RunCommitInput(ApiModel):

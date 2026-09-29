@@ -108,8 +108,14 @@ const RunReport = ({ run }: { run: TaskRun }) => (
  * Hidden while the task has none.
  */
 export const TaskRuns = ({ ideaId, reloadKey }: TaskRunsProps) => {
-  const [runs, setRuns] = useState<TaskRun[] | null>(null);
+  // Kept with the task they belong to, so switching tasks never shows the last
+  // task's runs while the new ones load.
+  const [loaded, setLoaded] = useState<{
+    ideaId: string;
+    runs: TaskRun[];
+  } | null>(null);
   const [error, setError] = useState("");
+  const runs = loaded?.ideaId === ideaId ? loaded.runs : null;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reloadKey only triggers a refetch
   useEffect(() => {
@@ -117,7 +123,7 @@ export const TaskRuns = ({ ideaId, reloadKey }: TaskRunsProps) => {
     setError("");
     api<{ items: TaskRun[] }>(`/api/ideas/${ideaId}/runs`)
       .then((response) => {
-        if (!cancelled) setRuns(response.items);
+        if (!cancelled) setLoaded({ ideaId, runs: response.items });
       })
       .catch((requestError: Error) => {
         if (!cancelled) setError(requestError.message);

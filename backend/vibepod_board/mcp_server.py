@@ -978,9 +978,14 @@ def create_mcp_server(
         "reply.",
     )
     def cancel_task_run(
-        id: CardId, reason: str | None = None, view: ViewArg = None
+        id: CardId,
+        reason: str | None = None,
+        expectedUpdatedAt: ExpectedUpdatedAt = None,  # noqa: N803
+        view: ViewArg = None,
     ) -> dict[str, Any]:
-        return run(lambda s, a: echo_card(s, claims.cancel_run(s, a, id, reason), view))
+        return run(
+            lambda s, a: echo_card(s, claims.cancel_run(s, a, id, reason, expectedUpdatedAt), view)
+        )
 
     @mcp.tool(
         title="Add Run Report",

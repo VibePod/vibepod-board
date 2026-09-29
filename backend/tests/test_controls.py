@@ -407,3 +407,38 @@ async def test_mcp_steers_workers_and_reports_runs(server_url: str, session: Ses
     assert report["item"]["workerName"] == NAME
     reports = await call(server_url, token, "list_run_reports", id=task.id)
     assert [item["outcome"] for item in reports["items"]] == ["cancelled"]
+
+
+# --- races and edges found in review -------------------------------------------------
+
+
+def test_a_worker_on_a_deleted_task_is_told_to_cancel(session: Session, vp) -> None:
+    worker, task = working(session, vp)
+    ideas.delete_idea(session, ADMIN, task.id)
+
+    reply = workers.heartbeat(session, ADMIN, worker.id, WorkerStatus.WORKING, task=task.id)
+
+    assert reply.item.status == WorkerState.IDLE
+    [instruction] = reply.instructions
+    assert (instruction.type, instruction.task_id, instruction.reason) == (
+        "cancel",
+        task.id,
+        "The task was deleted",
+    )
+
+
+def test_a_cancel_for_a_run_the_caller_did_not_see_is_refused(session: Session, vp) -> None:
+    worker, task = working(session, vp)
+    seen = board.get_card(session, ADMIN, task.id)
+    # The run the caller saw ended and another one started since.
+    claims.release_task(session, ADMIN, task.id, NAME, "released")
+    import time
+
+    time.sleep(0.002)
+    claims.claim_task(session, ADMIN, "VP", "codex@desktop")
+
+    with pytest.raises(Conflict, match="Board card changed since"):
+        claims.cancel_run(session, ADMIN, task.id, expected_updated_at=seen.updated_at)
+    current = board.get_card(session, ADMIN, task.id)
+    cancelled = claims.cancel_run(session, ADMIN, task.id, expected_updated_at=current.updated_at)
+    assert cancelled.column == BoardColumn.PLANNED

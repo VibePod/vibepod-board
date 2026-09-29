@@ -18,6 +18,7 @@ in progress.
 
 from collections.abc import Sequence
 from datetime import datetime, timedelta
+from typing import Any
 
 from sqlmodel import Session, col, select
 
@@ -435,16 +436,23 @@ def apply_release(
 
 @transactional
 def cancel_run(
-    session: Session, access: AccessContext, reference: str, reason: str | None = None
+    session: Session,
+    access: AccessContext,
+    reference: str,
+    reason: str | None = None,
+    expected_updated_at: Any = None,
 ) -> BoardCard:
     """Stops a running task from the board: the claim ends and the task returns to Planned
-    without counting an attempt. The worker learns it with its next heartbeat reply."""
+    without counting an attempt. The worker learns it with its next heartbeat reply.
+    `expected_updated_at` refuses the cancel when the card moved on, such as to a newer run
+    than the one the caller saw."""
     found = require_card_ref(session, access, reference)
     assert_can_access_project(access, found.project_id)
     if not found.idea_id:
         raise Conflict("Board card has no task, so it has no run to cancel")
     idea = lock(session, IdeaRow, found.idea_id)
     card = lock(session, BoardCardRow, found.id)
+    assert_unchanged("Board card", expected_updated_at, card.updated_at)
     if card.claimed_at is None:
         raise Conflict(f"Task {_key(session, idea)} has no run to cancel: it is not claimed")
     holder = card.assignee

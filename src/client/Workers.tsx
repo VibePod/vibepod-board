@@ -111,21 +111,21 @@ export const WorkersList = ({
                     {workerStateLabels[worker.status]}
                   </Badge>
                 )}
-                {onStop &&
-                  worker.status !== "offline" &&
-                  !worker.stopRequestedAt && (
-                    <Button
-                      type="button"
-                      size="compact-xs"
-                      variant="subtle"
-                      color="red"
-                      leftSection={<Square size={10} aria-hidden />}
-                      aria-label={`Stop ${worker.name}`}
-                      onClick={() => void onStop(worker)}
-                    >
-                      Stop
-                    </Button>
-                  )}
+                {/* A silent worker that never signed off still holds its claims; stopping
+                    it signs it off and gives them back. */}
+                {onStop && !worker.stoppedAt && !worker.stopRequestedAt && (
+                  <Button
+                    type="button"
+                    size="compact-xs"
+                    variant="subtle"
+                    color="red"
+                    leftSection={<Square size={10} aria-hidden />}
+                    aria-label={`Stop ${worker.name}`}
+                    onClick={() => void onStop(worker)}
+                  >
+                    Stop
+                  </Button>
+                )}
               </Group>
             </Group>
             {worker.status === "paused" && worker.statusReason && (
