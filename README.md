@@ -288,8 +288,9 @@ by *claiming* it. Claims are available over REST and MCP, limited to the caller'
   moves its card to **In Progress** in the same step. The claimed-by value is the task's
   assignee, so the card shows who took it, and `claimedAt` says since when. Narrow the choice
   with `labels` (the task must carry all of them, case-insensitive) or `minReadiness` (its
-  latest readiness score must be at least this), or name one `task`. When nothing can be
-  claimed the answer is `{"claimed": false, "reason": ...}`. Claims in one project are
+  latest readiness score must be at least this), pass over tasks named in `exclude`, or
+  name one `task`. When nothing can be claimed the answer is
+  `{"claimed": false, "reason": ...}`. Claims in one project are
   serialised, so two runners claiming at the same time never get the same task.
 - **Lease.** A claim expires at `claimExpiresAt`, `leaseSeconds` after it was taken or last
   renewed (`POST /api/board/:id/renew`, `renew_task_claim`). An expired claim puts the task
@@ -357,7 +358,9 @@ heartbeat, without another connection:
   `POST /api/board/:id/cancel` (`cancel_task_run`): the task returns to Planned at once without
   counting a failed attempt, and the worker holding it is told
   `{"type": "cancel", "taskId": ..., "reason": ...}`. A worker also gets `cancel` when its task
-  was taken from it any other way, such as a card moved by hand.
+  was taken from it any other way, such as a card moved by hand. Since the task is planned
+  again, a worker passes it over in its next claims (`exclude`) so it does not restart the run
+  it was just told to stop; pause automation first to keep every worker away from it.
 
 Every automated run adds a report to its task with `POST /api/ideas/:id/runs`
 (`add_run_report`): the `outcome` (`done`, `failed`, `timed_out`, `cancelled` or

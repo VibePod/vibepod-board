@@ -92,6 +92,7 @@ def claim_task(
         task=body.task,
         labels=body.labels,
         min_readiness=body.min_readiness,
+        exclude=body.exclude,
         lease_seconds=body.lease_seconds,
         default_lease_seconds=settings.claim_lease_seconds,
         max_attempts=settings.claim_max_attempts,
