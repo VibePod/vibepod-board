@@ -94,6 +94,8 @@ export type BoardCard = {
   /** A blocked card stays in Planned and is skipped by automated claims. */
   blockedAt?: string;
   blockedReason?: string;
+  /** The agent's question while the task waits for an answer; it is blocked meanwhile. */
+  question?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -108,6 +110,9 @@ export const taskEventKinds = [
   "claim_ended",
   "unblocked",
   "cancelled",
+  "question",
+  "answer",
+  "feedback",
 ] as const;
 
 export type TaskEventKind = (typeof taskEventKinds)[number];
@@ -176,6 +181,7 @@ export const runOutcomes = [
   "timed_out",
   "cancelled",
   "usage_limit",
+  "needs_input",
 ] as const;
 
 export type RunOutcome = (typeof runOutcomes)[number];
