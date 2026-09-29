@@ -1,4 +1,4 @@
-import type { BoardCard, TaskEventKind } from "../shared/types.js";
+import type { BoardCard, RunOutcome, TaskEventKind } from "../shared/types.js";
 
 export const pluralize = (
   count: number,
@@ -45,6 +45,7 @@ export const taskEventLabels: Record<TaskEventKind, string> = {
   expired: "Expired",
   claim_ended: "Claim ended",
   unblocked: "Unblocked",
+  cancelled: "Cancelled",
 };
 
 export const taskEventColors: Record<TaskEventKind, string> = {
@@ -56,4 +57,34 @@ export const taskEventColors: Record<TaskEventKind, string> = {
   expired: "orange",
   claim_ended: "gray",
   unblocked: "blue",
+  cancelled: "gray",
+};
+
+export const runOutcomeLabels: Record<RunOutcome, string> = {
+  done: "Done",
+  failed: "Failed",
+  timed_out: "Timed out",
+  cancelled: "Cancelled",
+  usage_limit: "Usage limit",
+};
+
+export const runOutcomeColors: Record<RunOutcome, string> = {
+  done: "teal",
+  failed: "red",
+  timed_out: "orange",
+  cancelled: "gray",
+  usage_limit: "yellow",
+};
+
+/** "45 s", "12 min 5 s", "2 h 3 min". */
+export const formatDuration = (seconds: number): string => {
+  const total = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const rest = total % 60;
+  if (hours > 0)
+    return minutes > 0 ? `${hours} h ${minutes} min` : `${hours} h`;
+  if (minutes > 0)
+    return rest > 0 ? `${minutes} min ${rest} s` : `${minutes} min`;
+  return `${rest} s`;
 };

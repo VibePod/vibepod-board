@@ -107,6 +107,7 @@ export const taskEventKinds = [
   "expired",
   "claim_ended",
   "unblocked",
+  "cancelled",
 ] as const;
 
 export type TaskEventKind = (typeof taskEventKinds)[number];
@@ -151,6 +152,56 @@ export type Worker = {
   startedAt: string;
   lastSeenAt: string;
   stoppedAt?: string;
+  /** Asked from the board to stop; cleared once the worker signed off. */
+  stopRequestedAt?: string;
+};
+
+/** Whether automation of a project is paused from the board. */
+export type AutomationState = {
+  projectId: string;
+  paused: boolean;
+  pausedAt?: string;
+  reason?: string;
+};
+
+export type WorkerListResponse = {
+  items: Worker[];
+  /** Present when the list is for one project. */
+  automation?: AutomationState;
+};
+
+export const runOutcomes = [
+  "done",
+  "failed",
+  "timed_out",
+  "cancelled",
+  "usage_limit",
+] as const;
+
+export type RunOutcome = (typeof runOutcomes)[number];
+
+export type RunCommit = { sha: string; subject: string };
+
+/** The report of one automated run of a task. */
+export type TaskRun = {
+  id: string;
+  ideaId: string;
+  workerId?: string;
+  workerName?: string;
+  agent?: string;
+  outcome: RunOutcome;
+  summary: string;
+  commits: RunCommit[];
+  branchName?: string;
+  verifyCommand?: string;
+  verifyExitCode?: number;
+  verifyOutput?: string;
+  verifyOutputTruncated: boolean;
+  durationSeconds?: number;
+  failureReason?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  createdAt: string;
 };
 
 export type ReadinessEvent = {
