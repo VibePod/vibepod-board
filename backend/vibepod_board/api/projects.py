@@ -2,13 +2,13 @@ import json
 
 from fastapi import APIRouter, Response, status
 
-from vibepod_board.api.models import ProjectCreate, ProjectUpdate
+from vibepod_board.api.models import PauseRequest, ProjectCreate, ProjectUpdate
 from vibepod_board.api.responses import Item, Items
 from vibepod_board.auth import AccessDep, AdminDep
 from vibepod_board.bundle import ImportProjectRequest
 from vibepod_board.db import SessionDep
-from vibepod_board.schemas import ImportProjectResult, Project
-from vibepod_board.services import projects, transfer
+from vibepod_board.schemas import AutomationState, ImportProjectResult, Project
+from vibepod_board.services import automation, projects, transfer
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -50,3 +50,22 @@ def export_project(project_id: str, session: SessionDep, _admin: AdminDep) -> Re
             "Content-Disposition": f'attachment; filename="{bundle.project.key}-project.json"'
         },
     )
+
+
+@router.get("/{project_id}/automation")
+def get_automation(project_id: str, session: SessionDep, access: AccessDep) -> AutomationState:
+    return automation.get_automation(session, access, project_id)
+
+
+@router.post("/{project_id}/automation/pause")
+def pause_automation(
+    project_id: str, session: SessionDep, access: AccessDep, body: PauseRequest | None = None
+) -> AutomationState:
+    """Refuses new claims in the project and tells its workers to pause; runs in progress
+    finish."""
+    return automation.pause_automation(session, access, project_id, body.reason if body else None)
+
+
+@router.post("/{project_id}/automation/resume")
+def resume_automation(project_id: str, session: SessionDep, access: AccessDep) -> AutomationState:
+    return automation.resume_automation(session, access, project_id)

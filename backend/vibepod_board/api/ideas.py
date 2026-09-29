@@ -10,6 +10,7 @@ from vibepod_board.api.models import (
     IdeaUpdate,
     ReadinessRequest,
     ReadyRequest,
+    RunReportRequest,
 )
 from vibepod_board.api.queries import (
     Assignee,
@@ -35,9 +36,10 @@ from vibepod_board.schemas import (
     KeyedIdea,
     ReadinessEvent,
     TaskEvent,
+    TaskRun,
     TaskWorkOrder,
 )
-from vibepod_board.services import board, dependencies, history, ideas, readiness
+from vibepod_board.services import board, dependencies, history, ideas, readiness, runs
 from vibepod_board.services.views import View, project_ideas
 
 router = APIRouter(prefix="/api", tags=["ideas"])
@@ -175,6 +177,23 @@ def list_idea_readiness(
 def task_history(idea_id: str, session: SessionDep, access: AccessDep) -> Items[TaskEvent]:
     """What happened to the task under automation, newest first."""
     return Items(items=history.list_task_history(session, access, idea_id))
+
+
+@router.post("/ideas/{idea_id}/runs", status_code=status.HTTP_201_CREATED)
+def add_run_report(
+    idea_id: str, body: RunReportRequest, session: SessionDep, access: AccessDep
+) -> Item[TaskRun]:
+    """Adds the report of an automated run to the task. Long verify output is cut down to
+    its head and tail."""
+    return Item(
+        item=runs.add_run_report(session, access, idea_id, **body.model_dump(by_alias=False))
+    )
+
+
+@router.get("/ideas/{idea_id}/runs")
+def list_run_reports(idea_id: str, session: SessionDep, access: AccessDep) -> Items[TaskRun]:
+    """Every automated run of the task, newest first."""
+    return Items(items=runs.list_run_reports(session, access, idea_id))
 
 
 @router.get("/readiness")

@@ -43,6 +43,8 @@ class TaskEventKind(StrEnum):
     # A claim ended because someone moved the card or changed its holder.
     CLAIM_ENDED = "claim_ended"
     UNBLOCKED = "unblocked"
+    # A run stopped from the board; the task went back to Planned.
+    CANCELLED = "cancelled"
 
 
 BOARD_COLUMNS: tuple[BoardColumn, ...] = tuple(BoardColumn)
@@ -71,3 +73,27 @@ class WorkerStep(StrEnum):
     AGENT_RUNNING = "agent_running"
     VERIFYING = "verifying"
     HANDING_OVER = "handing_over"
+
+
+class RunOutcome(StrEnum):
+    """How an automated run ended."""
+
+    # The work was handed over to Review.
+    DONE = "done"
+    FAILED = "failed"
+    TIMED_OUT = "timed_out"
+    # Stopped from the board, or by the worker shutting down.
+    CANCELLED = "cancelled"
+    # The agent's usage limit was reached; the task went back without counting an attempt.
+    USAGE_LIMIT = "usage_limit"
+
+
+class InstructionType(StrEnum):
+    """What a heartbeat reply asks a worker to do."""
+
+    # Automation of the project is paused: take no new task until the instruction is gone.
+    PAUSE = "pause"
+    # Stop the run in progress, give its task back and sign off.
+    STOP = "stop"
+    # Stop the run of the named task; it is no longer claimed by the worker.
+    CANCEL = "cancel"

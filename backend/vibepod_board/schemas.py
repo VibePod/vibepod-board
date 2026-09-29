@@ -18,6 +18,8 @@ from vibepod_board.enums import (
     BoardColumn,
     DocumentKind,
     IdeaStatus,
+    InstructionType,
+    RunOutcome,
     TaskEventKind,
     WorkerState,
     WorkerStep,
@@ -250,6 +252,8 @@ class ClaimResult(ApiModel):
     item: Claim | None = None
     # Why nothing was claimed.
     reason: str | None = None
+    # True when nothing was claimed because automation of the project is paused.
+    paused: bool | None = None
 
 
 class ApiTokenSummary(ApiModel):
@@ -332,12 +336,14 @@ class Worker(ApiModel):
     started_at: Timestamp
     last_seen_at: Timestamp
     stopped_at: Timestamp | None = None
+    # Asked from the board to stop; cleared once the worker signed off.
+    stop_requested_at: Timestamp | None = None
 
 
 class WorkerInstruction(ApiModel):
     """Something the board asks a worker to do, delivered with the heartbeat reply."""
 
-    type: str
+    type: InstructionType
     reason: str | None = None
     task_id: str | None = None
     task_key: str | None = None
@@ -350,3 +356,45 @@ class WorkerSession(ApiModel):
     instructions: list[WorkerInstruction] = Field(default_factory=list)
     # How often the board expects a heartbeat.
     heartbeat_seconds: int
+
+
+class AutomationState(ApiModel):
+    project_id: str
+    paused: bool
+    paused_at: Timestamp | None = None
+    reason: str | None = None
+
+
+class WorkerList(ApiModel):
+    items: list[Worker]
+    # The automation state when the list is for one project.
+    automation: AutomationState | None = None
+
+
+class RunCommit(ApiModel):
+    sha: str
+    subject: str = ""
+
+
+class TaskRun(ApiModel):
+    """The report of one automated run of a task."""
+
+    id: str
+    idea_id: str
+    worker_id: str | None = None
+    worker_name: str | None = None
+    agent: str | None = None
+    outcome: RunOutcome
+    summary: str
+    commits: list[RunCommit]
+    branch_name: str | None = None
+    verify_command: str | None = None
+    verify_exit_code: int | None = None
+    verify_output: str | None = None
+    # True when the verify output was cut down to fit the report.
+    verify_output_truncated: bool = False
+    duration_seconds: int | None = None
+    failure_reason: str | None = None
+    started_at: Timestamp | None = None
+    finished_at: Timestamp | None = None
+    created_at: Timestamp
