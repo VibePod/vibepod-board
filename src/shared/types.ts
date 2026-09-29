@@ -121,6 +121,38 @@ export type TaskEvent = {
   createdAt: string;
 };
 
+export const workerStates = ["idle", "working", "paused", "offline"] as const;
+export const workerSteps = [
+  "preparing_workspace",
+  "agent_running",
+  "verifying",
+  "handing_over",
+] as const;
+
+/** idle, working or paused as reported; offline once the heartbeats stopped. */
+export type WorkerState = (typeof workerStates)[number];
+export type WorkerStep = (typeof workerSteps)[number];
+
+/** An automated runner connected to a project. */
+export type Worker = {
+  id: string;
+  projectId: string;
+  name: string;
+  agent: string;
+  machine: string;
+  status: WorkerState;
+  statusReason?: string;
+  /** The task being worked on, and since when. */
+  taskId?: string;
+  taskKey?: string;
+  taskTitle?: string;
+  step?: WorkerStep;
+  taskStartedAt?: string;
+  startedAt: string;
+  lastSeenAt: string;
+  stoppedAt?: string;
+};
+
 export type ReadinessEvent = {
   id: string;
   ideaId: string;
