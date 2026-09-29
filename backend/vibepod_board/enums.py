@@ -31,6 +31,9 @@ class ReleaseOutcome(StrEnum):
     BLOCKED = "blocked"
     # The runner stops without judging the task, e.g. on shutdown; no attempt is counted.
     RELEASED = "released"
+    # The agent asks a question it cannot go on without; the note is the question. The task
+    # is blocked until someone answers.
+    NEEDS_INPUT = "needs_input"
 
 
 class TaskEventKind(StrEnum):
@@ -45,6 +48,11 @@ class TaskEventKind(StrEnum):
     UNBLOCKED = "unblocked"
     # A run stopped from the board; the task went back to Planned.
     CANCELLED = "cancelled"
+    # The needs-input loop: the agent's question, someone's answer, and a reviewer's feedback
+    # when sending a task back from Review.
+    QUESTION = "question"
+    ANSWER = "answer"
+    FEEDBACK = "feedback"
 
 
 BOARD_COLUMNS: tuple[BoardColumn, ...] = tuple(BoardColumn)
@@ -86,6 +94,8 @@ class RunOutcome(StrEnum):
     CANCELLED = "cancelled"
     # The agent's usage limit was reached; the task went back without counting an attempt.
     USAGE_LIMIT = "usage_limit"
+    # The agent asked a question and the task waits for an answer.
+    NEEDS_INPUT = "needs_input"
 
 
 class InstructionType(StrEnum):

@@ -125,6 +125,8 @@ class BoardCard(ApiModel):
     # A blocked card stays in Planned and is skipped by claims.
     blocked_at: Timestamp | None = None
     blocked_reason: str | None = None
+    # The agent's question while the task waits for an answer.
+    question: str | None = None
     created_at: Timestamp
     updated_at: Timestamp
 
@@ -182,6 +184,7 @@ class CompactBoardCard(ApiModel):
     # Left out while zero.
     attempts: int | None = None
     blocked_reason: str | None = None
+    question: str | None = None
     readiness_score: int | None = None
     details_length: int
     updated_at: Timestamp
