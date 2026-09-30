@@ -16,6 +16,7 @@ from sqlmodel import Session
 from vibepod_board.access import admin_access, token_access
 from vibepod_board.enums import BoardColumn, WorkerState, WorkerStatus, WorkerStep
 from vibepod_board.errors import BadRequest, Conflict, NotFound
+from vibepod_board.schemas import now
 from vibepod_board.services import board, claims, history, ideas, projects, tokens, workers
 
 ADMIN = admin_access("admin")
@@ -188,6 +189,24 @@ def test_heartbeats_keep_the_workers_claims_alive(session: Session, vp) -> None:
     assert renewed.updated_at == claimed.updated_at
     assert claims.expire_claims(session, timestamp=claimed.claim_expires_at) == 0
     assert board.get_card(session, ADMIN, task.id).column == BoardColumn.IN_PROGRESS
+
+
+def test_heartbeats_leave_a_lapsed_claim_over(session: Session, vp) -> None:
+    task = planned(session, vp, "Lapsed")
+    worker = register(session).item
+    claimed = claims.claim_task(session, ADMIN, "VP", NAME, lease_seconds=60).item.card
+    lapsed = now() - timedelta(seconds=1)
+    session.execute(
+        text("update board_cards set claim_expires_at = :at where id = :id"),
+        {"at": lapsed, "id": claimed.id},
+    )
+    session.commit()
+
+    workers.heartbeat(session, ADMIN, worker.id, WorkerStatus.WORKING, task=task.id)
+
+    assert board.get_card(session, ADMIN, task.id).claim_expires_at == lapsed
+    assert claims.expire_claims(session) == 1
+    assert board.get_card(session, ADMIN, task.id).column == BoardColumn.PLANNED
 
 
 def test_heartbeats_leave_other_holders_claims_alone(session: Session, vp) -> None:

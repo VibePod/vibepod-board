@@ -213,13 +213,15 @@ def register_worker(
 
 def _renew_claims(session: Session, row: WorkerRow, expires_at: datetime) -> None:
     """Keeps the claims the worker holds alive. `updated_at` is left alone, like any
-    renewal."""
+    renewal. A claim whose lease already ran out stays over: the sweep ends it and counts the
+    attempt, as it does for a report from its holder (see `claims._held`)."""
     session.execute(
         update(BoardCardRow)
         .where(
             col(BoardCardRow.project_id) == row.project_id,
             col(BoardCardRow.assignee) == row.name,
             col(BoardCardRow.claimed_at).is_not(None),
+            col(BoardCardRow.claim_expires_at) > now(),
         )
         .values(claim_expires_at=expires_at)
     )
