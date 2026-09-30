@@ -492,3 +492,21 @@ def test_a_sign_off_waiting_behind_an_edit_stamps_its_releases_after_it(
     released = board.get_card(session, ADMIN, task.id)
     assert released.claimed_at is None
     assert released.updated_at > edited_at
+
+
+def test_a_lease_shorter_than_two_heartbeats_fails_at_startup(monkeypatch) -> None:
+    from vibepod_board.config import get_settings
+
+    monkeypatch.setenv("DATABASE_URL", "postgres://x@localhost/x")
+    monkeypatch.setenv("WORKER_HEARTBEAT_SECONDS", "60")
+    monkeypatch.setenv("WORKER_OFFLINE_SECONDS", "180")
+    monkeypatch.setenv("CLAIM_LEASE_SECONDS", "90")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="CLAIM_LEASE_SECONDS must be at least twice"):
+            get_settings()
+        monkeypatch.setenv("CLAIM_LEASE_SECONDS", "120")
+        get_settings.cache_clear()
+        assert get_settings().claim_lease_seconds == 120
+    finally:
+        get_settings.cache_clear()

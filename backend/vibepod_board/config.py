@@ -58,6 +58,13 @@ def get_settings() -> Settings:
             f"WORKER_OFFLINE_SECONDS must be at least twice WORKER_HEARTBEAT_SECONDS: "
             f"{offline_seconds} < 2 × {heartbeat_seconds}"
         )
+    lease_seconds = _lease_seconds("CLAIM_LEASE_SECONDS", 15 * 60)
+    # Heartbeats renew claims for the default lease, so it has to outlast the wait between two.
+    if lease_seconds < 2 * heartbeat_seconds:
+        raise RuntimeError(
+            f"CLAIM_LEASE_SECONDS must be at least twice WORKER_HEARTBEAT_SECONDS: "
+            f"{lease_seconds} < 2 × {heartbeat_seconds}"
+        )
     return Settings(
         database_url=database_url,
         admin_username=username or "admin",
@@ -67,7 +74,7 @@ def get_settings() -> Settings:
         github_token=os.environ.get("GITHUB_TOKEN") or None,
         github_repository=os.environ.get("GITHUB_REPOSITORY") or None,
         pool_size=int(os.environ.get("DATABASE_POOL_MAX", "10")),
-        claim_lease_seconds=_lease_seconds("CLAIM_LEASE_SECONDS", 15 * 60),
+        claim_lease_seconds=lease_seconds,
         claim_max_attempts=_positive_int("CLAIM_MAX_ATTEMPTS", 3),
         claim_sweep_seconds=_positive_int("CLAIM_SWEEP_SECONDS", 15, allow_zero=True),
         worker_heartbeat_seconds=heartbeat_seconds,
