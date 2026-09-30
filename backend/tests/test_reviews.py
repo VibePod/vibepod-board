@@ -604,6 +604,23 @@ def test_a_lapsed_review_is_refused_before_the_sweep(session: Session, vp) -> No
         verdict(session, task, CLAUDE, ReviewVerdict.APPROVE)
 
 
+def test_a_lapsed_review_no_longer_counts_as_open(session: Session, vp) -> None:
+    require(session, 2)
+    task = in_review(session, vp, "Lapsed but not swept")
+    lapsed = review(session, CLAUDE).review
+    review(session, CODEX)
+    session.execute(
+        text("update task_reviews set lease_expires_at = :at where id = :id"),
+        {"at": now() - timedelta(seconds=1), "id": lapsed.id},
+    )
+    session.commit()
+
+    state = reviews.review_state(session, ADMIN, task.id)
+
+    assert state.open_reviews == 1
+    assert {item.reviewer: item.open for item in state.items} == {CLAUDE: False, CODEX: True}
+
+
 def test_reviews_are_renewed_by_heartbeats_and_released_on_sign_off(session: Session, vp) -> None:
     task = in_review(session, vp, "Watched")
     registered = workers.register_worker(session, ADMIN, "VP", CLAUDE, mode=ClaimMode.REVIEW)

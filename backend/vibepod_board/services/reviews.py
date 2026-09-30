@@ -139,7 +139,15 @@ def _open_review_of(session: Session, idea_id: str, reviewer: str) -> TaskReview
     ).first()
 
 
-def review_from_row(row: TaskReviewRow, key: str | None = None) -> TaskReview:
+def is_open(row: TaskReviewRow, at: datetime | None = None) -> bool:
+    """A review is open until it ends or its lease runs out: a lapsed review is over even
+    before the sweep ends it, and no verdict of it is accepted (see `_held_review`)."""
+    return row.ended_at is None and row.lease_expires_at > (at or now())
+
+
+def review_from_row(
+    row: TaskReviewRow, key: str | None = None, at: datetime | None = None
+) -> TaskReview:
     return TaskReview(
         id=row.id,
         idea_id=row.idea_id,
@@ -149,7 +157,7 @@ def review_from_row(row: TaskReviewRow, key: str | None = None) -> TaskReview:
         worker_id=row.worker_id,
         head_sha=row.head_sha,
         lease_expires_at=row.lease_expires_at,
-        open=row.ended_at is None,
+        open=is_open(row, at),
         verdict=ReviewVerdict(row.verdict) if row.verdict else None,
         feedback=row.feedback,
         ended_reason=row.ended_reason,
@@ -435,6 +443,7 @@ def _state(
         .order_by(col(TaskReviewRow.created_at).desc(), col(TaskReviewRow.id).desc())
     ).all()
     approved = approvers(session, card) if card is not None else []
+    timestamp = now()
     return ReviewState(
         task_id=idea.id,
         task_key=key,
@@ -443,10 +452,10 @@ def _state(
         required_approvals=project.required_approvals,
         approvals=len(approved),
         approved_by=approved,
-        open_reviews=sum(1 for row in rows if row.ended_at is None),
+        open_reviews=sum(1 for row in rows if is_open(row, timestamp)),
         review_rounds=card.review_rounds if card is not None else 0,
         max_review_rounds=project.max_review_rounds,
-        items=[review_from_row(row, key) for row in rows],
+        items=[review_from_row(row, key, timestamp) for row in rows],
     )
 
 
