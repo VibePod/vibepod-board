@@ -24,20 +24,23 @@ from vibepod_board.api.github import github_client
 from vibepod_board.api.models import BoardCardBatchItem, IdeaBatchItem
 from vibepod_board.config import Settings
 from vibepod_board.db import get_engine
-from vibepod_board.enums import BoardColumn, DocumentKind, IdeaStatus
+from vibepod_board.enums import BoardColumn, DocumentKind, IdeaStatus, ReleaseOutcome
 from vibepod_board.errors import BoardError
 from vibepod_board.github import GitHubClient
 from vibepod_board.services import (
     board,
+    claims,
     dependencies,
     documents,
     github_sync,
+    history,
     ideas,
     projects,
     readiness,
     state,
     tokens,
 )
+from vibepod_board.services.claims import MAX_LEASE_SECONDS, MIN_LEASE_SECONDS
 from vibepod_board.services.listing import BATCH_LIMIT
 from vibepod_board.services.views import View, project_cards, project_documents, project_ideas
 
@@ -90,6 +93,22 @@ ExpectedUpdatedAt = Annotated[
     Field(
         min_length=1,
         description="Refuse the write if the record changed since this updatedAt.",
+    ),
+]
+Holder = Annotated[
+    str,
+    Field(
+        min_length=1,
+        description="Who holds the claim, such as Claude::Runner::laptop. It becomes the "
+        "task's assignee and must be named again to renew, hand over or release.",
+    ),
+]
+LeaseSeconds = Annotated[
+    int | None,
+    Field(
+        ge=MIN_LEASE_SECONDS,
+        le=MAX_LEASE_SECONDS,
+        description="How long the claim lasts unless renewed; the server default when omitted.",
     ),
 ]
 MCP_LIST_LIMIT = 200
@@ -659,6 +678,146 @@ def create_mcp_server(
             },
         }
         return run(lambda s, a: echo_card(s, board.update_card(s, a, id, **changes), view))
+
+    @mcp.tool(
+        title="Claim Next Task",
+        description="Claim the next planned task of a project for an automated run, in the "
+        "board's work order: its card moves to In progress and assignee becomes its holder. "
+        "Tasks with unfinished dependencies, blocked tasks and tasks someone already holds are "
+        "skipped. Narrow by labels (all must match) or a minimum readiness score, or name one "
+        "task. The claim expires unless renewed with renew_task_claim; report back with "
+        "hand_over_task or release_task. Returns claimed false with a reason when nothing can "
+        "be claimed, and the full task and card when something was.",
+    )
+    def claim_next_task(
+        projectId: Annotated[  # noqa: N803
+            str, Field(min_length=1, description="Project id, key or title.")
+        ],
+        assignee: Holder,
+        task: Annotated[
+            str | None,
+            Field(min_length=1, description="Claim this task (id or key) instead of the next."),
+        ] = None,
+        labels: Annotated[
+            list[Annotated[str, Field(min_length=1)]] | None,
+            Field(description="Only tasks carrying every one of these labels."),
+        ] = None,
+        minReadiness: Annotated[  # noqa: N803
+            int | None,
+            Field(ge=1, le=10, description="Only tasks whose readiness score is at least this."),
+        ] = None,
+        leaseSeconds: LeaseSeconds = None,  # noqa: N803
+    ) -> dict[str, Any]:
+        return run(
+            lambda s, a: claims.claim_task(
+                s,
+                a,
+                projectId,
+                assignee,
+                task=task,
+                labels=labels,
+                min_readiness=minReadiness,
+                lease_seconds=leaseSeconds,
+                default_lease_seconds=settings.claim_lease_seconds,
+                max_attempts=settings.claim_max_attempts,
+            )
+        )
+
+    @mcp.tool(
+        title="Renew Task Claim",
+        description="Extend a claim you hold so it does not expire while you work. Does not "
+        "change updatedAt.",
+        annotations=IDEMPOTENT,
+    )
+    def renew_task_claim(
+        id: CardId,
+        assignee: Holder,
+        leaseSeconds: LeaseSeconds = None,  # noqa: N803
+        view: ViewArg = None,
+    ) -> dict[str, Any]:
+        return run(
+            lambda s, a: echo_card(
+                s,
+                claims.renew_claim(s, a, id, assignee, leaseSeconds, settings.claim_lease_seconds),
+                view,
+            )
+        )
+
+    @mcp.tool(
+        title="Hand Over Task",
+        description="Move a task you claimed to Review with the branch that holds the work, "
+        "ending the claim. A note is recorded in the task history.",
+    )
+    def hand_over_task(
+        id: CardId,
+        assignee: Holder,
+        branchName: Annotated[  # noqa: N803
+            str | None, Field(min_length=1, description="Branch with the work.")
+        ] = None,
+        note: str | None = None,
+        expectedUpdatedAt: ExpectedUpdatedAt = None,  # noqa: N803
+        view: ViewArg = None,
+    ) -> dict[str, Any]:
+        return run(
+            lambda s, a: echo_card(
+                s,
+                claims.hand_over_task(
+                    s,
+                    a,
+                    id,
+                    assignee,
+                    branch_name=branchName,
+                    note=note,
+                    expected_updated_at=expectedUpdatedAt,
+                ),
+                view,
+            )
+        )
+
+    @mcp.tool(
+        title="Release Task",
+        description="Give a task you claimed back to Planned, with a note. outcome failed "
+        "(default) counts a failed attempt, and the attempt that reaches maxAttempts blocks "
+        "the task instead; blocked blocks it outright with the note as the reason shown on "
+        "the card; released counts nothing. A blocked task is skipped by claims until someone "
+        "moves it to Planned again.",
+    )
+    def release_task(
+        id: CardId,
+        assignee: Holder,
+        outcome: ReleaseOutcome = ReleaseOutcome.FAILED,
+        note: str | None = None,
+        maxAttempts: Annotated[  # noqa: N803
+            int | None,
+            Field(ge=1, le=100, description="Failed attempts before the task is blocked."),
+        ] = None,
+        view: ViewArg = None,
+    ) -> dict[str, Any]:
+        return run(
+            lambda s, a: echo_card(
+                s,
+                claims.release_task(
+                    s,
+                    a,
+                    id,
+                    assignee,
+                    outcome=outcome,
+                    note=note,
+                    max_attempts=maxAttempts,
+                    default_max_attempts=settings.claim_max_attempts,
+                ),
+                view,
+            )
+        )
+
+    @mcp.tool(
+        title="List Task History",
+        description="What happened to a task under automation, newest first: claims, "
+        "hand-overs, failed attempts, blocks and expired claims.",
+        annotations=READ_ONLY,
+    )
+    def list_task_history(id: TaskId) -> dict[str, Any]:
+        return run(lambda s, a: {"items": history.list_task_history(s, a, id)})
 
     @mcp.tool(
         title="Set Card Readiness",

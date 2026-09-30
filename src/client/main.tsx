@@ -34,6 +34,7 @@ import "@mantine/core/styles.css";
 import {
   Archive,
   ArchiveRestore,
+  Ban,
   ChevronLeft,
   ChevronRight,
   Columns3,
@@ -101,6 +102,7 @@ import {
   type ArchiveDoneTarget,
 } from "./ArchiveDoneDialog.js";
 import { ArchiveView } from "./ArchiveView.js";
+import { api } from "./api.js";
 import { type ArchivedTaskRow, archivedTaskRows } from "./archiveUtils.js";
 import vibepodIconUrl from "./assets/icon.png";
 import {
@@ -108,6 +110,7 @@ import {
   filterColumnsByAssignee,
   resolveAssigneeFilter,
 } from "./assigneeFilterUtils.js";
+import { failedAttemptsLabel, formatClaimedSince } from "./automationUtils.js";
 import { CopyableCode } from "./CopyableCode.js";
 import { DeleteTaskDialog, type DeleteTaskTarget } from "./DeleteTaskDialog.js";
 import { GitHubIssueBadge, GitHubSyncPanel } from "./GitHubIssue.js";
@@ -140,6 +143,7 @@ import {
 } from "./projectTransfer.js";
 import { githubRemoteToHttpsUrl } from "./repositoryUtils.js";
 import { TaskGraph } from "./TaskGraph.js";
+import { TaskHistory } from "./TaskHistory.js";
 import {
   isCardReadinessStale,
   isReadinessStale,
@@ -289,24 +293,6 @@ const emptyTokenDraft = (): CreateApiTokenInput => ({
   name: "",
   projectIds: [],
 });
-
-const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
-  const response = await fetch(path, {
-    ...init,
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...init?.headers,
-    },
-  });
-  if (!response.ok) {
-    const error = (await response.json().catch(() => ({}))) as {
-      error?: string;
-    };
-    throw new Error(error.error ?? `Request failed: ${response.status}`);
-  }
-  return (await response.json()) as T;
-};
 
 const initialNavigation = parseNavigationPath(window.location.pathname);
 const initialBoardSearch =
@@ -1440,6 +1426,34 @@ const App = () => {
     await loadState();
   };
 
+  /**
+   * Putting a blocked card in Planned by hand unblocks it and resets its failed
+   * attempts. Guarded by the card this board shows, so a stale board never pulls
+   * a card a runner claimed meanwhile out of its run.
+   */
+  const unblockCard = async (card: BoardCard) => {
+    setError("");
+    setNotice("");
+    try {
+      await api(`/api/board/${card.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          column: "planned",
+          expectedUpdatedAt: card.updatedAt,
+        }),
+      });
+      await loadState();
+      setNotice(`Unblocked ${card.title}.`);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? `${err.message}. The board was reloaded; check the card again.`
+          : "Failed to unblock card",
+      );
+      await loadState().catch(() => undefined);
+    }
+  };
+
   const dropCard = async (column: BoardColumn) => {
     const card = boardColumns
       .flatMap((boardColumn) => projectColumns[boardColumn] ?? [])
@@ -2316,6 +2330,63 @@ const App = () => {
                               </Group>
                             )}
                             {labelBadges(card.labels, "xs")}
+                            {card.blockedAt ? (
+                              <Stack
+                                className="board-card-blocked-state"
+                                gap={4}
+                              >
+                                <Group gap={6} justify="space-between">
+                                  <Badge
+                                    variant="light"
+                                    color="red"
+                                    size="sm"
+                                    leftSection={<Ban size={12} aria-hidden />}
+                                  >
+                                    Blocked
+                                  </Badge>
+                                  <Button
+                                    type="button"
+                                    variant="subtle"
+                                    color="gray"
+                                    size="compact-xs"
+                                    aria-label={`Unblock ${card.title}`}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void unblockCard(card);
+                                    }}
+                                    onKeyDown={(event) =>
+                                      event.stopPropagation()
+                                    }
+                                  >
+                                    Unblock
+                                  </Button>
+                                </Group>
+                                {card.blockedReason && (
+                                  <Text
+                                    className="board-card-blocked-reason"
+                                    size="xs"
+                                    lineClamp={4}
+                                  >
+                                    {card.blockedReason}
+                                  </Text>
+                                )}
+                              </Stack>
+                            ) : (
+                              (card.attempts ?? 0) > 0 && (
+                                <Group
+                                  className="board-card-attempts"
+                                  justify="flex-start"
+                                >
+                                  <Badge
+                                    variant="light"
+                                    color="orange"
+                                    size="sm"
+                                  >
+                                    {failedAttemptsLabel(card.attempts ?? 0)}
+                                  </Badge>
+                                </Group>
+                              )
+                            )}
                             {card.readinessScore !== undefined && (
                               <Group
                                 className="board-card-readiness"
@@ -2385,6 +2456,16 @@ const App = () => {
                                 >
                                   {card.assignee}
                                 </Badge>
+                                {card.claimedAt && (
+                                  <Text
+                                    className="board-card-claimed-since"
+                                    size="xs"
+                                    c="dimmed"
+                                    title={`Claimed ${formatDateTime(card.claimedAt)}`}
+                                  >
+                                    {formatClaimedSince(card.claimedAt)}
+                                  </Text>
+                                )}
                               </Group>
                             )}
                             {card.branchName && (
@@ -2744,6 +2825,42 @@ const App = () => {
               )}
             </Stack>
 
+            {taskViewCard?.blockedAt && (
+              <Alert
+                className="overview-blocked"
+                color="red"
+                variant="light"
+                title="Blocked"
+                icon={<Ban size={18} />}
+              >
+                <Stack gap="xs" align="flex-start">
+                  {taskViewCard.blockedReason && (
+                    <Text size="sm">{taskViewCard.blockedReason}</Text>
+                  )}
+                  {!isTaskViewArchived && (
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="light"
+                      color="red"
+                      onClick={() => void unblockCard(taskViewCard)}
+                    >
+                      Unblock
+                    </Button>
+                  )}
+                </Stack>
+              </Alert>
+            )}
+            {taskViewCard?.claimedAt && taskViewCard.assignee && (
+              <Text className="overview-claim" size="sm" c="dimmed">
+                Claimed by {taskViewCard.assignee}{" "}
+                {formatClaimedSince(taskViewCard.claimedAt)}
+                {taskViewCard.claimExpiresAt
+                  ? `, held until ${formatDateTime(taskViewCard.claimExpiresAt)}`
+                  : ""}
+              </Text>
+            )}
+
             <Paper className="overview-section" withBorder radius="md" p="md">
               <Text size="xs" fw={700} tt="uppercase" c="dimmed">
                 Description
@@ -2823,6 +2940,11 @@ const App = () => {
                 </Stack>
               </Paper>
             )}
+
+            <TaskHistory
+              ideaId={taskViewIdea.id}
+              reloadKey={taskViewCard?.updatedAt}
+            />
 
             {isTaskViewArchived && taskViewCard ? (
               <Group justify="flex-end">

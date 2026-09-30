@@ -121,6 +121,8 @@ def settings(database_url: str) -> Settings:
         github_token=None,
         github_repository=None,
         pool_size=5,
+        # Tests expire claims explicitly; a background sweep would race them.
+        claim_sweep_seconds=0,
     )
 
 

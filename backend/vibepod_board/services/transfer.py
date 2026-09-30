@@ -40,6 +40,17 @@ def readiness_events_for(session: Session, idea_ids: list[str]):
     return [readiness_from_row(row) for row in rows]
 
 
+# Automation state belongs to the board it runs on: claims, attempts and blocks are not part
+# of a bundle, and an imported card starts unclaimed and unblocked.
+AUTOMATION_CARD_FIELDS = {
+    "claimed_at",
+    "claim_expires_at",
+    "attempts",
+    "blocked_at",
+    "blocked_reason",
+}
+
+
 def export_project(session: Session, project_id: str) -> ProjectBundle:
     project = project_from_row(require_project(session, project_id))
     access = token_access("project-export", [project.id])
@@ -51,7 +62,8 @@ def export_project(session: Session, project_id: str) -> ProjectBundle:
             "project": project.model_dump(mode="json"),
             "ideas": [idea.model_dump(mode="json") for idea in ideas],
             "boardCards": [
-                card.model_dump(mode="json") for card in list_cards(session, access, project.id)
+                card.model_dump(mode="json", exclude=AUTOMATION_CARD_FIELDS)
+                for card in list_cards(session, access, project.id)
             ],
             "readinessEvents": [
                 event.model_dump(mode="json")

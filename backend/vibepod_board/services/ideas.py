@@ -13,7 +13,7 @@ from vibepod_board.access import (
     assert_can_access_project,
     default_project_id_for_create,
 )
-from vibepod_board.enums import IdeaStatus
+from vibepod_board.enums import IdeaStatus, TaskEventKind
 from vibepod_board.errors import BoardError, Conflict
 from vibepod_board.graph import build_work_order, format_task_key
 from vibepod_board.schemas import DeletedIdea, Idea, TaskWorkOrder, now
@@ -39,6 +39,7 @@ from vibepod_board.services.common import (
 )
 from vibepod_board.services.dependencies import decorate_idea, decorate_ideas, replace_dependencies
 from vibepod_board.services.github_link import link_url
+from vibepod_board.services.history import actor_for, add_task_event
 from vibepod_board.services.listing import (
     ListFilter,
     Page,
@@ -167,7 +168,9 @@ def _label(session: Session, idea: IdeaRow) -> str:
     return f"Task {format_task_key(project.key, idea.task_number)}" if project else "Task"
 
 
-def _take_off_board(session: Session, idea: IdeaRow) -> None:
+def _take_off_board(
+    session: Session, idea: IdeaRow, timestamp: datetime, actor: str | None = None
+) -> None:
     archived = session.exec(
         select(BoardCardRow.id).where(
             BoardCardRow.idea_id == idea.id, col(BoardCardRow.archived_at).is_not(None)
@@ -175,6 +178,23 @@ def _take_off_board(session: Session, idea: IdeaRow) -> None:
     ).first()
     if archived:
         raise Conflict("Task is archived; unarchive its card before taking it off the board")
+    claimed = session.exec(
+        select(BoardCardRow).where(
+            BoardCardRow.idea_id == idea.id, col(BoardCardRow.claimed_at).is_not(None)
+        )
+    ).first()
+    if claimed is not None and claimed.assignee == idea.assignee:
+        # The claim goes with the card; its holder must not stay on the task, or the task
+        # would come back to the board held by a runner that no longer works on it.
+        idea.assignee = None
+        add_task_event(
+            session,
+            idea.id,
+            TaskEventKind.CLAIM_ENDED,
+            f"Claim by {claimed.assignee} ended: taken off the board",
+            actor,
+            timestamp,
+        )
     session.execute(delete(BoardCardRow).where(col(BoardCardRow.idea_id) == idea.id))
 
 
@@ -236,7 +256,9 @@ def _apply_idea_update(
     session.flush()
     if depends_on is not None:
         replace_dependencies(session, access, idea, depends_on, timestamp)
-    sync_card_from_idea(session, idea, timestamp)
+    sync_card_from_idea(
+        session, idea, timestamp, actor_for(session, access), holder_changed=assignee is not None
+    )
 
     # Status says what the task is; on_board says whether it has a card. Reaching "ready"
     # ensures one, but leaving "ready" never destroys one: that loses the card's id, column
@@ -246,7 +268,7 @@ def _apply_idea_update(
     if joins_board:
         ensure_card(session, idea, timestamp)
     elif on_board is False:
-        _take_off_board(session, idea)
+        _take_off_board(session, idea, timestamp, actor_for(session, access))
 
     if readiness is not None:
         # One timestamp for content and score, so the score reads as "evaluated as of this
@@ -311,6 +333,7 @@ def set_board_availability(
     readiness score given along is recorded in the same write."""
     idea = require_idea_ref(session, access, idea_id)
     assert_can_access_project(access, idea.project_id)
+    idea = lock(session, IdeaRow, idea.id)
     timestamp = now()
 
     if available:
@@ -324,7 +347,7 @@ def set_board_availability(
         add_activity(session, "idea.ready", f"Marked idea ready: {idea.title}", timestamp)
         return decorate_idea(session, idea)
 
-    _take_off_board(session, idea)
+    _take_off_board(session, idea, timestamp, actor_for(session, access))
     refined = bool(idea.details or idea.acceptance_criteria)
     idea.status = IdeaStatus.REFINING if refined else IdeaStatus.IDEA
     idea.updated_at = timestamp
@@ -354,6 +377,8 @@ def delete_idea(session: Session, access: AccessContext, idea_id: str) -> Delete
     with it, and documents stop linking to it. A linked GitHub issue is left alone."""
     idea = require_idea_ref(session, access, idea_id)
     assert_can_access_project(access, idea.project_id)
+    # Task before card, the order every write takes.
+    idea = lock(session, IdeaRow, idea.id)
     project = require_project(session, idea.project_id)
     task_id = format_task_key(project.key, idea.task_number)
     dependents = list(

@@ -8,7 +8,7 @@ from sqlmodel import SQLModel
 
 from vibepod_board.db import migrate
 
-HEAD = "0005"
+HEAD = "0006"
 LEGACY_SCHEMA = (Path(__file__).parent / "legacy_schema.sql").read_text()
 # The first TS schema, before repository, readiness and dependency support.
 ORIGINAL_SCHEMA = LEGACY_SCHEMA.split("alter table board_cards add column", 1)[0]
@@ -44,6 +44,7 @@ def test_creates_board_and_token_tables(db: Engine) -> None:
         "ideas",
         "projects",
         "task_dependencies",
+        "task_events",
     ]
 
 
@@ -226,4 +227,37 @@ def test_0004_adds_an_empty_archive_state_and_keeps_existing_cards(empty_db: Eng
             text("select id, column_name, archived_at from board_cards")
         ).all()
     assert [tuple(row) for row in rows] == [("c1", "done", None)]
+    assert revision(empty_db) == HEAD
+
+
+def test_0006_leaves_existing_cards_unclaimed_and_unblocked(empty_db: Engine) -> None:
+    from alembic import command
+
+    from vibepod_board.db import alembic_config
+
+    config = alembic_config()
+    with empty_db.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "0005")
+        connection.execute(
+            text(
+                "insert into projects (id, key, title, created_at, updated_at) "
+                "values ('p1', 'APP', 'App', now(), now())"
+            )
+        )
+        connection.execute(
+            text(
+                "insert into board_cards (id, project_id, title, column_name, created_at, "
+                "updated_at) values ('c1', 'p1', 'Planned work', 'planned', now(), now())"
+            )
+        )
+
+    migrate(empty_db)
+
+    with empty_db.connect() as connection:
+        rows = connection.execute(
+            text("select claimed_at, claim_expires_at, attempts, blocked_at from board_cards")
+        ).all()
+    assert [tuple(row) for row in rows] == [(None, None, 0, None)]
+    assert "task_events" in table_names(empty_db)
     assert revision(empty_db) == HEAD
