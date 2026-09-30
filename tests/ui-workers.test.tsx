@@ -108,6 +108,7 @@ const inProgress = (): BoardColumns => ({
     card({ id: "card-2", ideaId: "idea-2", title: "Manual logout" }),
   ],
   review: [],
+  pr_ready: [],
   done: [],
 });
 

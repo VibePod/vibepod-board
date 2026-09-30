@@ -363,6 +363,7 @@ describe("board search", () => {
       planned: [],
       in_progress: [],
       review: [],
+      pr_ready: [],
       done: [],
     };
     const ids = (search: string) =>

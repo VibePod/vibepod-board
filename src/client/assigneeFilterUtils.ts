@@ -72,6 +72,7 @@ export const filterColumnsByAssignee = (
     planned: [],
     in_progress: [],
     review: [],
+    pr_ready: [],
     done: [],
   };
   for (const column of boardColumns) {

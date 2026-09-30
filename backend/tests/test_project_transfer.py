@@ -15,7 +15,7 @@ from vibepod_board.db import migrate
 from vibepod_board.enums import BoardColumn
 from vibepod_board.errors import Conflict, NotFound
 from vibepod_board.services.activity import list_activity
-from vibepod_board.services.board import list_cards, move_card
+from vibepod_board.services.board import list_cards, move_card, update_card
 from vibepod_board.services.documents import create_document
 from vibepod_board.services.ideas import create_idea, list_ideas, mark_ready
 from vibepod_board.services.projects import create_project, list_projects
@@ -136,7 +136,8 @@ def test_exports_one_self_contained_project(store: Store) -> None:
         export_project(s, "missing")
 
 
-def test_imports_a_bundle_as_a_new_project(store: Store) -> None:
+@pytest.mark.parametrize("column", [BoardColumn.PLANNED, BoardColumn.PR_READY])
+def test_imports_a_bundle_as_a_new_project(store: Store, column: BoardColumn) -> None:
     s = store.session
     project = create_project(s, key="APP", title="Application", summary="Portable app project")
     foundation = create_idea(
@@ -152,7 +153,7 @@ def test_imports_a_bundle_as_a_new_project(store: Store) -> None:
     )
     mark_ready(s, admin, foundation.id)
     card = list_cards(s, admin, project.id)[0]
-    move_card(s, admin, card.id, BoardColumn("planned"))
+    update_card(s, admin, card.id, column=column, branch_name="vp-115")
     set_idea_readiness(s, admin, foundation.id, score=8, reason="Clear")
     create_document(
         s,

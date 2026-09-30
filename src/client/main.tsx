@@ -262,6 +262,7 @@ const emptyColumns: BoardColumns = {
   planned: [],
   in_progress: [],
   review: [],
+  pr_ready: [],
   done: [],
 };
 
@@ -270,6 +271,7 @@ const columnLabels: Record<BoardColumn, string> = {
   planned: "Planned",
   in_progress: "In Progress",
   review: "Review",
+  pr_ready: "PR ready",
   done: "Done",
 };
 
@@ -1641,7 +1643,10 @@ const App = () => {
       return;
     }
     // A reviewed task goes back with feedback, so the next run knows what to change.
-    if (card.column === "review" && column === "planned") {
+    if (
+      (card.column === "review" || card.column === "pr_ready") &&
+      column === "planned"
+    ) {
       setReworkTarget(card);
       return;
     }
@@ -2780,12 +2785,14 @@ const App = () => {
                             )}
                             {(cardTaskId ||
                               column === "done" ||
-                              column === "review") && (
+                              column === "review" ||
+                              column === "pr_ready") && (
                               <Group
                                 className="board-card-task-id"
                                 justify="flex-end"
                               >
-                                {column === "review" && (
+                                {(column === "review" ||
+                                  column === "pr_ready") && (
                                   <Button
                                     type="button"
                                     variant="subtle"
@@ -3321,7 +3328,8 @@ const App = () => {
                 >
                   Close
                 </Button>
-                {taskViewCard?.column === "review" && (
+                {(taskViewCard?.column === "review" ||
+                  taskViewCard?.column === "pr_ready") && (
                   <Button
                     type="button"
                     variant="light"
@@ -4025,6 +4033,7 @@ const filterColumnsByProject = (
     planned: [],
     in_progress: [],
     review: [],
+    pr_ready: [],
     done: [],
   };
   for (const column of boardColumns) {

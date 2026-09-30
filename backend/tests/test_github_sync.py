@@ -11,6 +11,7 @@ from sqlmodel import Session
 
 from vibepod_board.access import admin_access, token_access
 from vibepod_board.config import Settings
+from vibepod_board.enums import BoardColumn
 from vibepod_board.errors import BadRequest, Conflict, Forbidden, NotFound
 from vibepod_board.github import GitHubClient, parse_issue_url, repository_from_remote
 from vibepod_board.main import create_app
@@ -460,3 +461,17 @@ def test_concurrent_pushes_create_one_issue(engine: Engine, project, fake: FakeG
 
     assert [key for key in fake.issues] == [(REPO, 1)]
     assert all(isinstance(error, Conflict) for error in errors)
+
+
+def test_pr_ready_sync_keeps_the_issue_open_and_branch(
+    session: Session, project, fake: FakeGitHub, github: GitHubClient
+) -> None:
+    created = task(session, project, title="Ready for PR")
+    ideas.mark_ready(session, ADMIN, created.id)
+    board.update_card(session, ADMIN, created.id, column=BoardColumn.PR_READY, branch_name="vp-115")
+    github_sync.push(session, ADMIN, created.id, github, default_repository=REPO)
+    assert fake.issues[(REPO, 1)]["state"] == "open"
+    github_sync.pull(session, ADMIN, created.id, github)
+    card = board.get_card(session, ADMIN, created.id)
+    assert (card.column, card.branch_name) == (BoardColumn.PR_READY, "vp-115")
+    assert ideas.get_idea(session, ADMIN, created.id).github_issue_state == "open"

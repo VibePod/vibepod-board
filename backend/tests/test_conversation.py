@@ -121,10 +121,12 @@ def test_unblocking_by_hand_drops_the_question(session: Session, vp) -> None:
     assert conversation_of(session, task) == [("question", QUESTION)]
 
 
+@pytest.mark.parametrize("column", [BoardColumn.REVIEW, BoardColumn.PR_READY])
 def test_rework_sends_a_reviewed_task_back_with_feedback_and_keeps_its_branch(
-    session: Session, vp
+    session: Session, vp, column: BoardColumn
 ) -> None:
     task = in_review(session, vp)
+    board.move_card(session, ADMIN, task.id, column)
 
     sent_back = conversation.request_rework(
         session, ADMIN, task.id, "Invalidate the cache when a task is deleted."
@@ -184,7 +186,8 @@ def api(client: TestClient) -> TestClient:
     return client
 
 
-def test_rest_runs_the_loop(api: TestClient) -> None:
+@pytest.mark.parametrize("column", ["review", "pr_ready"])
+def test_rest_runs_the_loop(api: TestClient, column: str) -> None:
     api.post("/api/board/claim", json={"projectId": "VP", "assignee": RUNNER})
     released = api.post(
         "/api/board/VP-1/release",
@@ -201,6 +204,10 @@ def test_rest_runs_the_loop(api: TestClient) -> None:
 
     api.post("/api/board/claim", json={"projectId": "VP", "assignee": RUNNER})
     api.post("/api/board/VP-1/handover", json={"assignee": RUNNER, "branchName": "vp-1"})
+    moved = api.patch("/api/board/VP-1", json={"column": column})
+    assert moved.status_code == 200
+    assert moved.json()["item"]["branchName"] == "vp-1"
+    assert api.get("/api/board").json()["columns"][column][0]["column"] == column
     reworked = api.post("/api/board/VP-1/rework", json={"feedback": "Needs a test."})
     assert reworked.status_code == 200
     assert (reworked.json()["item"]["column"], reworked.json()["item"]["branchName"]) == (
@@ -218,7 +225,8 @@ def test_rest_runs_the_loop(api: TestClient) -> None:
 # --- MCP -----------------------------------------------------------------------------
 
 
-async def test_mcp_runs_the_loop(server_url: str, session: Session, vp) -> None:
+@pytest.mark.parametrize("column", ["review", "pr_ready"])
+async def test_mcp_runs_the_loop(server_url: str, session: Session, vp, column: str) -> None:
     task = planned(session, vp, "Over MCP")
     token = tokens.create_token(session, "Runner", [vp.id]).token
 
@@ -237,10 +245,23 @@ async def test_mcp_runs_the_loop(server_url: str, session: Session, vp) -> None:
     answered = await call(server_url, token, "answer_task_question", id="VP-1", answer="Redis")
     assert answered["item"]["column"] == "planned"
 
-    with pytest.raises(ToolError, match="only tasks in review are sent back"):
+    with pytest.raises(ToolError, match="only tasks in review or PR ready are sent back"):
         await call(server_url, token, "request_task_rework", id=task.id, feedback="Nope")
     await call(server_url, token, "claim_next_task", projectId="VP", assignee=RUNNER)
     await call(server_url, token, "hand_over_task", id="VP-1", assignee=RUNNER, branchName="b")
+    await call(server_url, token, "move_board_card", id="VP-1", column=column)
+    listed = await call(
+        server_url, token, "list_board", projectId="VP", column=[column], view="full"
+    )
+    assert listed["columns"][column][0]["column"] == column
+    updated = await call(
+        server_url,
+        token,
+        "update_board_cards",
+        items=[{"id": "VP-1", "column": column}],
+        view="full",
+    )
+    assert updated["items"][0]["column"] == column
     reworked = await call(
         server_url, token, "request_task_rework", id="VP-1", feedback="Try again", view="full"
     )

@@ -166,6 +166,7 @@ describe("deleting from the task view", () => {
               planned: [],
               in_progress: [],
               review: [],
+              pr_ready: [],
               done: [],
             },
           });

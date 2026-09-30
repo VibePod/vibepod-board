@@ -4,6 +4,7 @@ export const boardColumns = [
   "planned",
   "in_progress",
   "review",
+  "pr_ready",
   "done",
 ] as const;
 export const documentKinds = ["execution_plan", "design", "notes"] as const;

@@ -227,7 +227,7 @@ def answer_question(
 def request_rework(
     card_id: str, body: ReworkRequest, session: SessionDep, access: AccessDep
 ) -> Item[BoardCard]:
-    """Sends a task from Review back to Planned with feedback; it keeps its branch."""
+    """Sends a task from Review or PR ready back to Planned with feedback; it keeps its branch."""
     return Item(item=conversation.request_rework(session, access, card_id, body.feedback))
 
 
