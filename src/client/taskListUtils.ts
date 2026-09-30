@@ -67,6 +67,9 @@ export type TaskSearchTarget = {
   summary?: string;
   details?: string;
   labels: string[];
+  /** Searchable although board cards no longer display them. */
+  repositoryLocalPath?: string;
+  repositoryRemoteUrl?: string;
 };
 
 const taskIdQuery = /^([a-z]+)-(\d+)$/;
@@ -96,7 +99,14 @@ export const matchesTaskSearch = (
   if (idMatch && idMatch[1] === target.projectKey?.toLowerCase()) {
     return target.taskNumber === Number(idMatch[2]);
   }
-  return [target.title, target.summary, target.details, ...target.labels]
+  return [
+    target.title,
+    target.summary,
+    target.details,
+    ...target.labels,
+    target.repositoryLocalPath,
+    target.repositoryRemoteUrl,
+  ]
     .join(" ")
     .toLocaleLowerCase()
     .includes(trimmed.toLocaleLowerCase());
@@ -104,7 +114,7 @@ export const matchesTaskSearch = (
 
 /**
  * Filters every board column with the task search. Every card matches on its own title,
- * details and labels; cards linked to a task also match on the task's text fields and on
+ * details, labels and repository; cards linked to a task also match on the task's text fields and on
  * its task ID and number.
  */
 export const filterColumnsBySearch = (
@@ -125,6 +135,8 @@ export const filterColumnsBySearch = (
             summary: idea.summary,
             details: `${idea.details} ${card.details}`,
             labels: [...idea.labels, ...card.labels],
+            repositoryLocalPath: `${idea.repositoryLocalPath ?? ""} ${card.repositoryLocalPath ?? ""}`,
+            repositoryRemoteUrl: `${idea.repositoryRemoteUrl ?? ""} ${card.repositoryRemoteUrl ?? ""}`,
           }
         : { ...card, projectKey };
       return matchesTaskSearch(target, search);
