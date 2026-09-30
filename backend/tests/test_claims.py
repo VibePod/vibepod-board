@@ -492,6 +492,27 @@ def test_a_claim_sweeps_lapsed_claims_of_its_project_first(
     assert card(session, task).attempts == 1
 
 
+def test_a_lapsed_claim_cannot_be_used_before_the_sweep_ends_it(
+    db: Engine, session: Session, vp
+) -> None:
+    task = planned(session, vp, "Lapsed but not swept")
+    claim(session)
+    with db.begin() as connection:
+        connection.execute(
+            text("update board_cards set claim_expires_at = now() - interval '1 minute'")
+        )
+
+    for report in (
+        lambda: claims.renew_claim(session, ADMIN, task.id, RUNNER),
+        lambda: claims.hand_over_task(session, ADMIN, task.id, RUNNER, branch_name="late"),
+        lambda: claims.release_task(session, ADMIN, task.id, RUNNER, ReleaseOutcome.RELEASED),
+    ):
+        with pytest.raises(Conflict, match=f"not claimed by {RUNNER}: the claim expired"):
+            report()
+    assert card(session, task).column == BoardColumn.IN_PROGRESS
+    assert claimed_key(claim(session, OTHER)) == "VP-1"
+
+
 def test_the_app_sweeps_expired_claims_in_the_background(
     db: Engine, session: Session, vp, settings
 ) -> None:

@@ -257,6 +257,10 @@ def _held(
     if card.claimed_at is None or card.assignee != holder:
         state = f"{card.assignee} holds it" if card.claimed_at else "it is not claimed"
         raise Conflict(f"Task {_key(session, idea)} is not claimed by {holder}: {state}")
+    if card.claim_expires_at is None or card.claim_expires_at <= now():
+        # A lapsed lease is over even before the sweep ends it: the task may be handed to
+        # another runner at any moment, so its old holder can no longer act on it.
+        raise Conflict(f"Task {_key(session, idea)} is not claimed by {holder}: the claim expired")
     return idea, card
 
 
