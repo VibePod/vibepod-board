@@ -247,9 +247,14 @@ def claim_task(
 
 
 def _held(
-    session: Session, access: AccessContext, reference: str, holder: str
+    session: Session,
+    access: AccessContext,
+    reference: str,
+    holder: str,
+    allow_lapsed: bool = False,
 ) -> tuple[IdeaRow, BoardCardRow]:
-    """The task and card of a claim the caller holds, both locked."""
+    """The task and card of a claim the caller holds, both locked. `allow_lapsed` also accepts
+    a claim whose lease ran out and that the sweep has not ended yet."""
     found = require_card_ref(session, access, reference)
     assert_can_access_project(access, found.project_id)
     if not found.idea_id:
@@ -259,7 +264,8 @@ def _held(
     if card.claimed_at is None or card.assignee != holder:
         state = f"{card.assignee} holds it" if card.claimed_at else "it is not claimed"
         raise Conflict(f"Task {_key(session, idea)} is not claimed by {holder}: {state}")
-    if card.claim_expires_at is None or card.claim_expires_at <= now():
+    lapsed = card.claim_expires_at is None or card.claim_expires_at <= now()
+    if lapsed and not allow_lapsed:
         # A lapsed lease is over even before the sweep ends it: the task may be handed to
         # another runner at any moment, so its old holder can no longer act on it.
         raise Conflict(f"Task {_key(session, idea)} is not claimed by {holder}: the claim expired")
@@ -354,16 +360,19 @@ def apply_release(
     note: str | None,
     max_attempts: int,
     timestamp: datetime | None = None,
+    allow_lapsed: bool = False,
 ) -> BoardCardRow:
     """The release inside the caller's transaction, so signing a worker off can release the
     claims it still holds in the same write. Without a timestamp it is taken once the locks are
-    held, so a release that waited behind an edit is never stamped older than that edit."""
+    held, so a release that waited behind an edit is never stamped older than that edit.
+    `allow_lapsed` releases a claim whose lease ran out before the sweep ended it, as signing
+    off does: the worker gives it back, so no attempt is counted."""
     note = (note or "").strip()
     if outcome == ReleaseOutcome.BLOCKED and not note:
         raise BadRequest("A note is required to block a task: it is the reason shown on the card")
     if max_attempts < 1:
         raise BadRequest("maxAttempts must be at least 1")
-    idea, card = _held(session, access, reference, holder)
+    idea, card = _held(session, access, reference, holder, allow_lapsed)
     timestamp = timestamp or now()
     _end_claim(card, idea, timestamp)
     card.column_name = BoardColumn.PLANNED

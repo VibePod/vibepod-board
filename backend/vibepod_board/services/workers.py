@@ -327,6 +327,7 @@ def sign_off(
                 ReleaseOutcome.RELEASED,
                 f"Worker {row.name} signed off",
                 max_attempts,
+                allow_lapsed=True,
             )
         except Conflict:
             # The claim ended since it was listed, such as by a cancel from the board.

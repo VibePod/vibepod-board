@@ -229,6 +229,27 @@ def test_registering_again_renews_the_claims_under_the_name(session: Session, vp
     assert renewed.updated_at == claimed.updated_at
 
 
+def test_signing_off_releases_a_lapsed_claim_without_an_attempt(session: Session, vp) -> None:
+    task = planned(session, vp, "Lapsed before the sign-off")
+    worker = register(session).item
+    claimed = claims.claim_task(session, ADMIN, "VP", NAME, lease_seconds=60).item.card
+    session.execute(
+        text("update board_cards set claim_expires_at = :at where id = :id"),
+        {"at": now() - timedelta(seconds=1), "id": claimed.id},
+    )
+    session.commit()
+
+    workers.sign_off(session, ADMIN, worker.id)
+
+    released = board.get_card(session, ADMIN, task.id)
+    assert (released.column, released.claimed_at, released.attempts) == (
+        BoardColumn.PLANNED,
+        None,
+        0,
+    )
+    assert claims.expire_claims(session) == 0
+
+
 def test_heartbeats_leave_other_holders_claims_alone(session: Session, vp) -> None:
     planned(session, vp, "Someone else's")
     worker = register(session).item
@@ -437,11 +458,11 @@ def test_signing_off_skips_a_claim_that_ended_meanwhile(monkeypatch, session: Se
     real_release = workers_module.apply_release
     first_card = board.get_card(session, ADMIN, first.id).id
 
-    def release_after_a_cancel(session_, access, card_id, *args):
+    def release_after_a_cancel(session_, access, card_id, *args, **kwargs):
         if card_id == first_card:
             session_.get(BoardCardRow, card_id).claimed_at = None
             session_.flush()
-        return real_release(session_, access, card_id, *args)
+        return real_release(session_, access, card_id, *args, **kwargs)
 
     monkeypatch.setattr(workers_module, "apply_release", release_after_a_cancel)
 
