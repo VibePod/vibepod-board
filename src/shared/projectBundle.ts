@@ -149,6 +149,17 @@ const duplicateValues = <T>(values: T[]): Set<T> => {
 const cyclicIdeaIds = (bundle: ProjectBundle): string[] =>
   findCyclicTaskIds(dependencyMap(bundle.ideas));
 
+/** Fields added by bundle version 4: a card's linked pull request. */
+const pullRequestFields = [
+  "githubPrUrl",
+  "githubPrNumber",
+  "githubPrRepository",
+  "githubPrState",
+  "githubPrDraft",
+  "githubPrBase",
+  "githubPrSyncedAt",
+] as const;
+
 /** Fields added by bundle version 2. */
 const githubSyncFields = [
   "githubRepository",
@@ -193,7 +204,10 @@ const validateRelationships = (bundle: ProjectBundle, ctx: z.RefinementCtx) => {
     });
   }
   bundle.boardCards.forEach((card, index) => {
-    if (bundle.bundleVersion < 4 && card.githubPrUrl !== undefined) {
+    if (
+      bundle.bundleVersion < 4 &&
+      pullRequestFields.some((field) => card[field] !== undefined)
+    ) {
       addIssue(
         ctx,
         ["boardCards", index, "githubPrUrl"],

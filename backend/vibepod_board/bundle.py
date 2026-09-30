@@ -142,6 +142,16 @@ class BundleDocument(BundleModel):
     updated_at: BundleTimestamp
 
 
+# Fields added by bundle version 4: a card's linked pull request.
+PULL_REQUEST_FIELDS = (
+    "github_pr_url",
+    "github_pr_number",
+    "github_pr_repository",
+    "github_pr_state",
+    "github_pr_draft",
+    "github_pr_base",
+    "github_pr_synced_at",
+)
 GITHUB_SYNC_FIELDS = (
     "github_repository",
     "github_issue_state",
@@ -205,7 +215,7 @@ def relationship_issues(bundle: ProjectBundle) -> list[str]:
         issues += [
             "Linked pull requests require bundleVersion 4"
             for card in bundle.board_cards
-            if card.github_pr_url is not None
+            if any(getattr(card, field) is not None for field in PULL_REQUEST_FIELDS)
         ][:1]
     if bundle.bundle_version == 1:
         issues += [
