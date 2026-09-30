@@ -80,11 +80,20 @@ const RunReport = ({ run }: { run: TaskRun }) => (
           ))}
         </Stack>
       )}
-      {run.verifyCommand && (
+      {(run.verifyCommand ||
+        run.verifyExitCode !== undefined ||
+        run.verifyOutput) && (
         <details className="task-run-verify">
           <summary>
             <Text component="span" size="sm">
-              Verify <Code>{run.verifyCommand}</Code>{" "}
+              Verify{" "}
+              {run.verifyCommand ? (
+                <Code>{run.verifyCommand}</Code>
+              ) : (
+                <Text component="span" size="sm" c="dimmed">
+                  (command not reported)
+                </Text>
+              )}{" "}
               {run.verifyExitCode !== undefined && (
                 <Badge
                   size="xs"

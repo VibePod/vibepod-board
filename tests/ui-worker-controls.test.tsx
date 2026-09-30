@@ -103,6 +103,8 @@ const runs: TaskRun[] = [
     outcome: "usage_limit",
     summary: "",
     commits: [],
+    verifyExitCode: 2,
+    verifyOutput: "Quota exhausted",
     verifyOutputTruncated: false,
     createdAt: "2026-09-29T06:00:00.000Z",
   },
@@ -337,6 +339,10 @@ describe("worker controls", () => {
     expect(within(latest).getByText("FAIL tests/login.test.ts")).toBeTruthy();
     expect(within(latest).getByText(/12 min 5 s/)).toBeTruthy();
     expect(within(earlier).getByText("Usage limit")).toBeTruthy();
+    // A verify result reported without its command still shows.
+    expect(within(earlier).getByText("(command not reported)")).toBeTruthy();
+    expect(within(earlier).getByText("exit 2")).toBeTruthy();
+    expect(within(earlier).getByText("Quota exhausted")).toBeTruthy();
     expect(
       within(view).getByRole("button", { name: "Cancel run" }),
     ).toBeTruthy();
