@@ -98,13 +98,14 @@ const OpenPullRequestDialog = ({
     setDraft(null);
     setError("");
     setIsSubmitting(false);
-    api<{ item: PullRequestDraft }>(linkPath(card))
-      .then((response) => {
+    // The draft comes back as is, not wrapped in `item` like the card writes.
+    api<PullRequestDraft>(linkPath(card))
+      .then((draft) => {
         if (cancelled) return;
-        setDraft(response.item);
-        setTitle(response.item.title);
-        setBase(response.item.base);
-        setBody(response.item.body);
+        setDraft(draft);
+        setTitle(draft.title);
+        setBase(draft.base);
+        setBody(draft.body);
         setIsDraft(false);
       })
       .catch((err) => {
