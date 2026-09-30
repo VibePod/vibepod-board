@@ -153,6 +153,23 @@ def test_stopping_an_offline_worker_signs_it_off_at_once(db: Engine, session: Se
     assert (card.column, card.claimed_at, card.attempts) == (BoardColumn.PLANNED, None, 0)
 
 
+def test_stopping_a_worker_silent_past_its_lease_frees_the_task(
+    db: Engine, session: Session, vp
+) -> None:
+    worker, task = working(session, vp)
+    with db.begin() as connection:
+        connection.execute(text("update workers set last_seen_at = now() - interval '1 hour'"))
+        connection.execute(
+            text("update board_cards set claim_expires_at = now() - interval '1 minute'")
+        )
+
+    workers.stop_worker(session, ADMIN, worker.id)
+
+    card = board.get_card(session, ADMIN, task.id)
+    assert (card.column, card.claimed_at, card.attempts) == (BoardColumn.PLANNED, None, 0)
+    assert claims.expire_claims(session) == 0
+
+
 # --- cancel --------------------------------------------------------------------------
 
 
