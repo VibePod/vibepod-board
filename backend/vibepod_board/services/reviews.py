@@ -12,7 +12,8 @@ Reviews and approvals are bound to the card's `head_sha`, the commit the last ha
 A task moves to PR ready once distinct reviewers approved that commit as often as the project
 requires. Any rework verdict sends it back to Planned with the feedback and ends the other open
 reviews; after `max_review_rounds` rework verdicts in a row it is blocked in Review for a human
-instead. A hand-over on a new commit starts the approval count over, and a verdict for another
+instead. A question for a human blocks it as well and ends the other open reviews; a blocked
+task takes no verdict until someone acts on it. A hand-over on a new commit starts the approval count over, and a verdict for another
 commit is refused.
 
 Review claims are serialised on the project row like implementation claims, and every write to
@@ -339,11 +340,15 @@ def submit_review(
         )
     if review.head_sha != card.head_sha or card.column_name != BoardColumn.REVIEW:
         raise Conflict(f"Task {key} was handed over again since the review started")
+    ending = verdict in (ReviewVerdict.FAILED, ReviewVerdict.RELEASED)
+    if not ending and card.blocked_at is not None:
+        # A human decides first; a failed or released review may still end.
+        raise Conflict(f"Task {key} is blocked until a human acts: {card.blocked_reason}")
     project = require_project(session, idea.project_id)
     timestamp = now()
     commit = short_sha(review.head_sha)
 
-    if verdict in (ReviewVerdict.FAILED, ReviewVerdict.RELEASED):
+    if ending:
         reason = ("failed" if verdict == ReviewVerdict.FAILED else "released") + (
             f": {note}" if note else ""
         )
@@ -403,6 +408,11 @@ def submit_review(
             apply_rework(session, idea, card, note, holder, timestamp)
         add_activity(session, "task.rework", f"{holder} sent {key} back for rework", timestamp)
     else:
+        # The task waits for an answer: the other reviews end, as for rework, and their
+        # reviewers may look again once it is answered.
+        end_open_reviews(
+            session, idea.id, timestamp, f"{holder} asked for input", holder, keep=review.id
+        )
         card.blocked_at = timestamp
         card.blocked_reason = f"Needs input: {note}"
         card.question = note

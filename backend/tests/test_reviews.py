@@ -445,6 +445,50 @@ def test_a_reviewer_question_blocks_the_task_in_review(session: Session, vp) -> 
     assert review(session).claimed
 
 
+def test_a_question_ends_the_other_reviews_and_blocks_verdicts(session: Session, vp) -> None:
+    require(session, 3)
+    task = in_review(session, vp, "Asked mid-review")
+    review(session, CLAUDE)
+    review(session, CODEX)
+    review(session, THIRD)
+    worker = workers.register_worker(session, ADMIN, "VP", CODEX, mode=ClaimMode.REVIEW).item
+
+    state = verdict(session, task, CLAUDE, ReviewVerdict.NEEDS_INPUT, note="Which API?")
+
+    assert state.open_reviews == 0
+    with pytest.raises(Conflict, match="is not being reviewed by"):
+        verdict(session, task, CODEX, ReviewVerdict.APPROVE)
+    beat = workers.heartbeat(session, ADMIN, worker.id, WorkerStatus.WORKING, task=task.id)
+    assert [instruction.type for instruction in beat.instructions] == [InstructionType.CANCEL]
+    assert card(session, task).question == "Which API?"
+
+
+def test_a_blocked_task_takes_no_verdict(session: Session, vp) -> None:
+    require(session, 2)
+    task = in_review(session, vp, "Blocked while reviewed")
+    review(session, CLAUDE)
+    review(session, CODEX)
+    # Blocked by any path that leaves reviews open, such as a question asked before.
+    session.execute(
+        text(
+            "update board_cards set blocked_at = now(), blocked_reason = 'Hold' where idea_id = :id"
+        ),
+        {"id": task.id},
+    )
+    session.commit()
+
+    for kind, note in (
+        (ReviewVerdict.APPROVE, None),
+        (ReviewVerdict.REWORK, "More"),
+        (ReviewVerdict.NEEDS_INPUT, "Why?"),
+    ):
+        with pytest.raises(Conflict, match="is blocked until a human acts: Hold"):
+            verdict(session, task, CLAUDE, kind, note=note)
+    # Ending a review without judging the task is still allowed.
+    assert verdict(session, task, CODEX, ReviewVerdict.RELEASED, sha=None).open_reviews == 1
+    assert reviews.review_state(session, ADMIN, task.id).approvals == 0
+
+
 def test_a_failed_review_counts_no_attempt(session: Session, vp) -> None:
     task = in_review(session, vp, "Reviewer crashed")
     review(session)
