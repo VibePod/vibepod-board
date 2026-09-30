@@ -349,6 +349,8 @@ def submit_review(
     if review.head_sha != card.head_sha or card.column_name != BoardColumn.REVIEW:
         raise Conflict(f"Task {key} was handed over again since the review started")
     ending = verdict in (ReviewVerdict.FAILED, ReviewVerdict.RELEASED)
+    if not ending and idea.status == IdeaStatus.DENIED:
+        raise Conflict(f"Task {key} was denied, so it takes no verdict")
     if not ending and card.blocked_at is not None:
         # A human decides first; a failed or released review may still end.
         raise Conflict(f"Task {key} is blocked until a human acts: {card.blocked_reason}")

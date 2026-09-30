@@ -48,6 +48,7 @@ from vibepod_board.services.listing import (
     scoped,
     with_cursor,
 )
+from vibepod_board.services.open_reviews import end_open_reviews
 from vibepod_board.services.projects import list_projects, resolve_project_id_for_create
 from vibepod_board.services.readiness import apply_idea_readiness
 from vibepod_board.services.references import (
@@ -201,8 +202,10 @@ def _take_off_board(
 def _end_claim_on_denial(
     session: Session, idea: IdeaRow, timestamp: datetime, actor: str | None
 ) -> None:
-    """Denying a task ends a claim on it: the runner must not keep working on, or holding,
-    a task nobody wants done. The card goes back to Planned, where denied tasks are skipped."""
+    """Denying a task ends a claim on it and its open reviews: no runner or reviewer must keep
+    working on, or holding, a task nobody wants done. A claimed card goes back to Planned,
+    where denied tasks are skipped."""
+    end_open_reviews(session, idea.id, timestamp, "the task was denied", actor)
     claimed = session.exec(
         select(BoardCardRow.id).where(
             BoardCardRow.idea_id == idea.id, col(BoardCardRow.claimed_at).is_not(None)

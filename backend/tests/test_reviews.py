@@ -16,6 +16,7 @@ from vibepod_board.access import admin_access
 from vibepod_board.enums import (
     BoardColumn,
     ClaimMode,
+    IdeaStatus,
     InstructionType,
     ReviewVerdict,
     TaskEventKind,
@@ -704,6 +705,34 @@ def test_moving_a_card_by_hand_ends_its_reviews(session: Session, vp) -> None:
     assert kinds(session, task)[0] == TaskEventKind.REVIEW_ENDED
     with pytest.raises(Conflict):
         verdict(session, task, CLAUDE, ReviewVerdict.APPROVE)
+
+
+def test_denying_a_task_ends_its_reviews(session: Session, vp) -> None:
+    task = in_review(session, vp, "Not wanted")
+    review(session)
+    worker = workers.register_worker(session, ADMIN, "VP", CLAUDE, mode=ClaimMode.REVIEW).item
+
+    ideas.update_idea(session, ADMIN, task.id, status=IdeaStatus.DENIED)
+
+    assert reviews.review_state(session, ADMIN, task.id).open_reviews == 0
+    ended = history.list_task_history(session, ADMIN, task.id)[0]
+    assert ended.kind == TaskEventKind.REVIEW_ENDED
+    assert "the task was denied" in ended.message
+    with pytest.raises(Conflict):
+        verdict(session, task, CLAUDE, ReviewVerdict.APPROVE)
+    beat = workers.heartbeat(session, ADMIN, worker.id, WorkerStatus.WORKING, task=task.id)
+    assert [instruction.type for instruction in beat.instructions] == [InstructionType.CANCEL]
+
+
+def test_a_denied_task_takes_no_verdict(session: Session, vp) -> None:
+    task = in_review(session, vp, "Denied behind the review's back")
+    review(session)
+    session.execute(text("update ideas set status = 'denied' where id = :id"), {"id": task.id})
+    session.commit()
+
+    with pytest.raises(Conflict, match="was denied"):
+        verdict(session, task, CLAUDE, ReviewVerdict.APPROVE)
+    assert card(session, task).column == BoardColumn.REVIEW
 
 
 def test_feedback_from_the_board_ends_the_reviews(session: Session, vp) -> None:
