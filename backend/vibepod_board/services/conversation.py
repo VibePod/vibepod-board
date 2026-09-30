@@ -17,6 +17,7 @@ from vibepod_board.errors import BadRequest, Conflict
 from vibepod_board.schemas import BoardCard, now
 from vibepod_board.services.common import (
     add_activity,
+    assert_unchanged,
     card_from_row,
     lock,
     transactional,
@@ -51,14 +52,20 @@ def _replan(card: BoardCardRow, idea: IdeaRow, timestamp: datetime) -> None:
 
 @transactional
 def answer_question(
-    session: Session, access: AccessContext, reference: str, answer: str
+    session: Session,
+    access: AccessContext,
+    reference: str,
+    answer: str,
+    expected_updated_at: str | datetime | None = None,
 ) -> BoardCard:
     """Answers the question a task waits on and puts it back in Planned; the next run gets
-    the answer."""
+    the answer. `expected_updated_at` refuses an answer written against an older view, such
+    as one where a later run asked a different question."""
     answer = (answer or "").strip()
     if not answer:
         raise BadRequest("An answer is required")
     idea, card = _locked_card(session, access, reference)
+    assert_unchanged("Board card", expected_updated_at, card.updated_at)
     key = task_keys(session, [idea.id]).get(idea.id, idea.id)
     if not card.question:
         raise Conflict(f"Task {key} has no question to answer")
@@ -73,14 +80,20 @@ def answer_question(
 
 @transactional
 def request_rework(
-    session: Session, access: AccessContext, reference: str, feedback: str
+    session: Session,
+    access: AccessContext,
+    reference: str,
+    feedback: str,
+    expected_updated_at: str | datetime | None = None,
 ) -> BoardCard:
     """Sends a task from Review or PR ready back to Planned with a reviewer's feedback.
-    The card keeps its branch, so the next run continues the work there."""
+    The card keeps its branch, so the next run continues the work there.
+    `expected_updated_at` refuses feedback written against an older review cycle."""
     feedback = (feedback or "").strip()
     if not feedback:
         raise BadRequest("Feedback is required to send a task back")
     idea, card = _locked_card(session, access, reference)
+    assert_unchanged("Board card", expected_updated_at, card.updated_at)
     key = task_keys(session, [idea.id]).get(idea.id, idea.id)
     if card.column_name not in (BoardColumn.REVIEW, BoardColumn.PR_READY):
         column = card.column_name.replace("_", " ")

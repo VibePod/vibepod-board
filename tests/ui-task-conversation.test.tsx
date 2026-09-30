@@ -141,7 +141,12 @@ const boardApi = (reviewColumn: "review" | "pr_ready" = "review") => {
     if (path.endsWith("/history") || path.endsWith("/runs")) {
       return jsonResponse({ items: [] });
     }
+    if (path === "/api/board/card-1") return jsonResponse({ item: asking });
     if (path === "/api/board/card-1/answer" && method === "POST") {
+      const body = JSON.parse(String(init?.body));
+      if (body.expectedUpdatedAt !== asking.updatedAt) {
+        return jsonResponse({ error: "Board card changed" }, 409);
+      }
       asking = {
         ...asking,
         blockedAt: undefined,
@@ -149,6 +154,17 @@ const boardApi = (reviewColumn: "review" | "pr_ready" = "review") => {
         question: undefined,
       };
       return jsonResponse({ item: asking });
+    }
+    if (path === "/api/test/ask-again" && method === "POST") {
+      // A later run asked something else while the dialog was open.
+      const newer = JSON.parse(String(init?.body)).question as string;
+      asking = {
+        ...asking,
+        question: newer,
+        blockedReason: `Needs input: ${newer}`,
+        updatedAt: "2026-09-29T09:30:00.000Z",
+      };
+      return jsonResponse({});
     }
     if (path === "/api/board/card-2" && method === "PATCH") {
       reviewed = { ...reviewed, ...JSON.parse(String(init?.body)) };
@@ -164,7 +180,11 @@ const boardApi = (reviewColumn: "review" | "pr_ready" = "review") => {
 
 const posts = (fetchMock: ReturnType<typeof boardApi>) =>
   fetchMock.mock.calls
-    .filter(([, init]) => (init as RequestInit | undefined)?.method === "POST")
+    .filter(
+      ([input, init]) =>
+        (init as RequestInit | undefined)?.method === "POST" &&
+        !String(input).startsWith("/api/test/"),
+    )
     .map(([input, init]) => [
       String(input),
       JSON.parse(String((init as RequestInit).body)),
@@ -238,13 +258,64 @@ describe("the needs-input and rework loop", () => {
       await screen.findByText("Answered Add a cache; it is planned again."),
     ).toBeTruthy();
     expect(posts(fetchMock)).toEqual([
-      ["/api/board/card-1/answer", { answer: "Postgres, no new services." }],
+      [
+        "/api/board/card-1/answer",
+        { answer: "Postgres, no new services.", expectedUpdatedAt: timestamp },
+      ],
     ]);
     await waitFor(() =>
       expect(
         within(cardFor("Add a cache")).queryByText("Needs input"),
       ).toBeNull(),
     );
+  });
+
+  it("refuses an answer to a question that changed and shows the new one", async () => {
+    const fetchMock = await renderBoard();
+
+    await userEvent.click(
+      within(cardFor("Add a cache")).getByRole("button", {
+        name: "Answer Add a cache",
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Answer: Add a cache",
+    });
+    await fetch("/api/test/ask-again", {
+      method: "POST",
+      body: JSON.stringify({ question: "Which TTL?" }),
+    });
+    await userEvent.type(within(dialog).getByLabelText(/Answer/), "Postgres.");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Answer and plan again" }),
+    );
+
+    expect(
+      await within(dialog).findByText(
+        "Add a cache changed since you opened it. The board was reloaded; check the card again.",
+      ),
+    ).toBeTruthy();
+    expect(within(dialog).getByText("Which TTL?")).toBeTruthy();
+    expect(
+      (within(dialog).getByLabelText(/Answer/) as HTMLTextAreaElement).value,
+    ).toBe("Postgres.");
+
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Answer and plan again" }),
+    );
+    expect(
+      await screen.findByText("Answered Add a cache; it is planned again."),
+    ).toBeTruthy();
+    expect(posts(fetchMock)).toEqual([
+      [
+        "/api/board/card-1/answer",
+        { answer: "Postgres.", expectedUpdatedAt: timestamp },
+      ],
+      [
+        "/api/board/card-1/answer",
+        { answer: "Postgres.", expectedUpdatedAt: "2026-09-29T09:30:00.000Z" },
+      ],
+    ]);
   });
 
   it.each(["review", "pr_ready"] as const)(
@@ -275,7 +346,10 @@ describe("the needs-input and rework loop", () => {
       expect(posts(fetchMock)).toEqual([
         [
           "/api/board/card-2/rework",
-          { feedback: "Invalidate the cache on delete." },
+          {
+            feedback: "Invalidate the cache on delete.",
+            expectedUpdatedAt: timestamp,
+          },
         ],
       ]);
     },

@@ -220,7 +220,11 @@ def answer_question(
     card_id: str, body: AnswerRequest, session: SessionDep, access: AccessDep
 ) -> Item[BoardCard]:
     """Answers the question the task waits on and puts it back in Planned."""
-    return Item(item=conversation.answer_question(session, access, card_id, body.answer))
+    return Item(
+        item=conversation.answer_question(
+            session, access, card_id, body.answer, body.expected_updated_at
+        )
+    )
 
 
 @router.post("/{card_id}/rework")
@@ -228,7 +232,11 @@ def request_rework(
     card_id: str, body: ReworkRequest, session: SessionDep, access: AccessDep
 ) -> Item[BoardCard]:
     """Sends a task from Review or PR ready back to Planned with feedback; it keeps its branch."""
-    return Item(item=conversation.request_rework(session, access, card_id, body.feedback))
+    return Item(
+        item=conversation.request_rework(
+            session, access, card_id, body.feedback, body.expected_updated_at
+        )
+    )
 
 
 @router.post("/{card_id}/readiness")

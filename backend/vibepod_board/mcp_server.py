@@ -1061,27 +1061,39 @@ def create_mcp_server(
     @mcp.tool(
         title="Answer Task Question",
         description="Answer the question a task waits on after its automated run asked for "
-        "input; the task goes back to Planned and the next run gets the answer.",
+        "input; the task goes back to Planned and the next run gets the answer. Pass the "
+        "expectedUpdatedAt you read to refuse an answer to a question that has since changed.",
     )
     def answer_task_question(
         id: CardId,
         answer: Annotated[str, Field(min_length=1)],
+        expectedUpdatedAt: ExpectedUpdatedAt = None,  # noqa: N803
         view: ViewArg = None,
     ) -> dict[str, Any]:
-        return run(lambda s, a: echo_card(s, conversation.answer_question(s, a, id, answer), view))
+        return run(
+            lambda s, a: echo_card(
+                s, conversation.answer_question(s, a, id, answer, expectedUpdatedAt), view
+            )
+        )
 
     @mcp.tool(
         title="Request Task Rework",
         description="Send a task from Review or PR ready back to Planned with feedback. "
         "It keeps its branch, and the next automated run continues there "
-        "with the feedback in its prompt.",
+        "with the feedback in its prompt. "
+        "Pass the expectedUpdatedAt you read to refuse feedback on an older review cycle.",
     )
     def request_task_rework(
         id: CardId,
         feedback: Annotated[str, Field(min_length=1)],
+        expectedUpdatedAt: ExpectedUpdatedAt = None,  # noqa: N803
         view: ViewArg = None,
     ) -> dict[str, Any]:
-        return run(lambda s, a: echo_card(s, conversation.request_rework(s, a, id, feedback), view))
+        return run(
+            lambda s, a: echo_card(
+                s, conversation.request_rework(s, a, id, feedback, expectedUpdatedAt), view
+            )
+        )
 
     @mcp.tool(
         title="Set Card Readiness",

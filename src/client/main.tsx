@@ -106,7 +106,7 @@ import {
   type ArchiveDoneTarget,
 } from "./ArchiveDoneDialog.js";
 import { ArchiveView } from "./ArchiveView.js";
-import { api } from "./api.js";
+import { api, isConflict } from "./api.js";
 import { type ArchivedTaskRow, archivedTaskRows } from "./archiveUtils.js";
 import vibepodIconUrl from "./assets/icon.png";
 import {
@@ -1645,23 +1645,80 @@ const App = () => {
     }
   };
 
-  /** Answers the agent's question; the task goes back to Planned. Throws for the dialog. */
+  /**
+   * After a stale answer or feedback was refused: reloads the board and shows
+   * the dialog the current card, so the draft is checked against what changed
+   * (a newer question, a newer review) before it is sent again. Returns the
+   * message for the dialog, or null when the dialog no longer applies and was
+   * closed with the message on the board.
+   */
+  const refreshConversationTarget = async (
+    card: BoardCard,
+    setTarget: (card: BoardCard | null) => void,
+    stillApplies: (card: BoardCard) => boolean,
+  ) => {
+    await loadState().catch(() => undefined);
+    const current = await api<{ item: BoardCard }>(`/api/board/${card.id}`)
+      .then((result) => result.item)
+      .catch(() => null);
+    const message = `${card.title} changed since you opened it. The board was reloaded; check the card again.`;
+    if (current && stillApplies(current)) {
+      setTarget(current);
+      return message;
+    }
+    setTarget(null);
+    setError(message);
+    return null;
+  };
+
+  /**
+   * Answers the agent's question; the task goes back to Planned. Guarded by the
+   * card the dialog shows, so an answer never lands on a newer question. Throws
+   * for the dialog.
+   */
   const answerQuestion = async (card: BoardCard, answer: string) => {
-    await api(`/api/board/${card.id}/answer`, {
-      method: "POST",
-      body: JSON.stringify({ answer }),
-    });
+    try {
+      await api(`/api/board/${card.id}/answer`, {
+        method: "POST",
+        body: JSON.stringify({ answer, expectedUpdatedAt: card.updatedAt }),
+      });
+    } catch (err) {
+      if (!isConflict(err)) throw err;
+      const message = await refreshConversationTarget(
+        card,
+        setAnswerTarget,
+        (current) => Boolean(current.question),
+      );
+      if (message) throw new Error(message);
+      return;
+    }
     setAnswerTarget(null);
     setNotice(`Answered ${card.title}; it is planned again.`);
     await loadState();
   };
 
-  /** Sends a reviewed task back to Planned with feedback. Throws for the dialog. */
+  /**
+   * Sends a reviewed task back to Planned with feedback. Guarded by the card the
+   * dialog shows, so feedback never lands on a newer review. Throws for the
+   * dialog.
+   */
   const requestRework = async (card: BoardCard, feedback: string) => {
-    await api(`/api/board/${card.id}/rework`, {
-      method: "POST",
-      body: JSON.stringify({ feedback }),
-    });
+    try {
+      await api(`/api/board/${card.id}/rework`, {
+        method: "POST",
+        body: JSON.stringify({ feedback, expectedUpdatedAt: card.updatedAt }),
+      });
+    } catch (err) {
+      if (!isConflict(err)) throw err;
+      const message = await refreshConversationTarget(
+        card,
+        setReworkTarget,
+        (current) =>
+          current.column === "review" || current.column === "pr_ready",
+      );
+      if (message) throw new Error(message);
+      return;
+    }
     setReworkTarget(null);
     setNotice(`Sent ${card.title} back for rework.`);
     await loadState();

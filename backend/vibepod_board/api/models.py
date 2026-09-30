@@ -280,7 +280,11 @@ class RunReportRequest(ApiModel):
 
 class AnswerRequest(ApiModel):
     answer: RequiredText
+    # Refuses the answer (409) when the card changed since this updatedAt.
+    expected_updated_at: RequiredText | None = None
 
 
 class ReworkRequest(ApiModel):
     feedback: RequiredText
+    # Refuses the feedback (409) when the card changed since this updatedAt.
+    expected_updated_at: RequiredText | None = None

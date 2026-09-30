@@ -151,6 +151,49 @@ def test_rework_needs_a_task_in_review_and_feedback(session: Session, vp) -> Non
         conversation.request_rework(session, ADMIN, reviewed.id, " ")
 
 
+def test_an_answer_to_an_older_question_is_refused(session: Session, vp) -> None:
+    task = asked(session, vp)
+    seen = board.get_card(session, ADMIN, task.id).updated_at
+    # Meanwhile someone unblocks the task and a later run asks something else.
+    board.update_card(session, ADMIN, task.id, column=BoardColumn.PLANNED)
+    claims.claim_task(session, ADMIN, "VP", RUNNER, task=task.id)
+    claims.release_task(session, ADMIN, task.id, RUNNER, ReleaseOutcome.NEEDS_INPUT, "Which TTL?")
+
+    with pytest.raises(Conflict, match="Board card changed since"):
+        conversation.answer_question(session, ADMIN, task.id, "Postgres.", seen)
+
+    current = board.get_card(session, ADMIN, task.id)
+    assert current.question == "Which TTL?"
+    answered = conversation.answer_question(
+        session, ADMIN, task.id, "One hour.", current.updated_at
+    )
+    assert answered.question is None
+    assert conversation_of(session, task) == [
+        ("question", QUESTION),
+        ("question", "Which TTL?"),
+        ("answer", "One hour."),
+    ]
+
+
+def test_feedback_on_an_older_review_cycle_is_refused(session: Session, vp) -> None:
+    task = in_review(session, vp)
+    seen = board.get_card(session, ADMIN, task.id).updated_at
+    # Meanwhile the task is sent back and a newer run reaches Review again.
+    conversation.request_rework(session, ADMIN, task.id, "Add a test.")
+    claims.claim_task(session, ADMIN, "VP", RUNNER, task=task.id)
+    claims.hand_over_task(session, ADMIN, task.id, RUNNER, branch_name="issue-7")
+
+    with pytest.raises(Conflict, match="Board card changed since"):
+        conversation.request_rework(session, ADMIN, task.id, "Rename it.", seen)
+
+    current = board.get_card(session, ADMIN, task.id)
+    assert current.column == BoardColumn.REVIEW
+    sent_back = conversation.request_rework(
+        session, ADMIN, task.id, "Rename it.", current.updated_at
+    )
+    assert sent_back.column == BoardColumn.PLANNED
+
+
 def test_the_whole_loop_stays_in_the_history(session: Session, vp) -> None:
     task = asked(session, vp)
     conversation.answer_question(session, ADMIN, task.id, "Postgres.")
@@ -222,6 +265,40 @@ def test_rest_runs_the_loop(api: TestClient, column: str) -> None:
     ]
 
 
+def test_rest_refuses_a_stale_answer_and_stale_feedback(api: TestClient) -> None:
+    api.post("/api/board/claim", json={"projectId": "VP", "assignee": RUNNER})
+    released = api.post(
+        "/api/board/VP-1/release",
+        json={"assignee": RUNNER, "outcome": "needs_input", "note": QUESTION},
+    ).json()["item"]
+    stale = "2000-01-01T00:00:00Z"
+
+    refused = api.post(
+        "/api/board/VP-1/answer", json={"answer": "Postgres.", "expectedUpdatedAt": stale}
+    )
+    assert refused.status_code == 409
+    answered = api.post(
+        "/api/board/VP-1/answer",
+        json={"answer": "Postgres.", "expectedUpdatedAt": released["updatedAt"]},
+    )
+    assert answered.status_code == 200, answered.text
+
+    api.post("/api/board/claim", json={"projectId": "VP", "assignee": RUNNER})
+    handed = api.post(
+        "/api/board/VP-1/handover", json={"assignee": RUNNER, "branchName": "vp-1"}
+    ).json()["item"]
+    refused = api.post(
+        "/api/board/VP-1/rework", json={"feedback": "Needs a test.", "expectedUpdatedAt": stale}
+    )
+    assert refused.status_code == 409
+    assert api.get("/api/board/VP-1").json()["item"]["column"] == "review"
+    reworked = api.post(
+        "/api/board/VP-1/rework",
+        json={"feedback": "Needs a test.", "expectedUpdatedAt": handed["updatedAt"]},
+    )
+    assert reworked.status_code == 200, reworked.text
+
+
 # --- MCP -----------------------------------------------------------------------------
 
 
@@ -266,3 +343,70 @@ async def test_mcp_runs_the_loop(server_url: str, session: Session, vp, column: 
         server_url, token, "request_task_rework", id="VP-1", feedback="Try again", view="full"
     )
     assert (reworked["item"]["column"], reworked["item"]["branchName"]) == ("planned", "b")
+
+
+async def test_mcp_refuses_a_stale_answer_and_stale_feedback(
+    server_url: str, session: Session, vp
+) -> None:
+    planned(session, vp, "Over MCP")
+    token = tokens.create_token(session, "Runner", [vp.id]).token
+    stale = "2000-01-01T00:00:00Z"
+
+    await call(server_url, token, "claim_next_task", projectId="VP", assignee=RUNNER)
+    released = await call(
+        server_url,
+        token,
+        "release_task",
+        id="VP-1",
+        assignee=RUNNER,
+        outcome="needs_input",
+        note=QUESTION,
+        view="full",
+    )
+    with pytest.raises(ToolError, match="Board card changed since"):
+        await call(
+            server_url,
+            token,
+            "answer_task_question",
+            id="VP-1",
+            answer="Redis",
+            expectedUpdatedAt=stale,
+        )
+    answered = await call(
+        server_url,
+        token,
+        "answer_task_question",
+        id="VP-1",
+        answer="Redis",
+        expectedUpdatedAt=released["item"]["updatedAt"],
+    )
+    assert answered["item"]["column"] == "planned"
+
+    await call(server_url, token, "claim_next_task", projectId="VP", assignee=RUNNER)
+    handed = await call(
+        server_url,
+        token,
+        "hand_over_task",
+        id="VP-1",
+        assignee=RUNNER,
+        branchName="b",
+        view="full",
+    )
+    with pytest.raises(ToolError, match="Board card changed since"):
+        await call(
+            server_url,
+            token,
+            "request_task_rework",
+            id="VP-1",
+            feedback="Again",
+            expectedUpdatedAt=stale,
+        )
+    reworked = await call(
+        server_url,
+        token,
+        "request_task_rework",
+        id="VP-1",
+        feedback="Again",
+        expectedUpdatedAt=handed["item"]["updatedAt"],
+    )
+    assert reworked["item"]["column"] == "planned"
