@@ -2,19 +2,22 @@
 
 A worker registers when it starts and then sends a heartbeat every few seconds with its status
 (idle, working or paused), the task it works on and the step it is in. The board shows it as
-offline once the heartbeats stop, and right away when it signs off.
+offline once the heartbeats stop. A worker that signs off is removed; an offline one can be
+removed from the board too.
 
 The worker's name is the holder of the claims it takes (see `claims.py`), so every heartbeat
 also renews those claims: a running worker never loses its task to claim expiry. Registering
-a live name is refused unless replacement is explicitly requested. Offline registrations can
-be replaced so a restarted worker takes its claims back up. The heartbeat reply carries
-instructions for the worker.
+a live name is refused unless replacement is explicitly requested. An offline registration,
+or one replaced explicitly, is removed, so a restarted worker takes its claims back up. The
+heartbeat reply carries instructions for the worker.
+
+Removing a worker leaves its run reports and task history alone: they keep its name by value.
 """
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import delete, func, update
+from sqlalchemy import delete, func, or_, update
 from sqlmodel import Session, col, select
 
 from vibepod_board.access import AccessContext, AdminAccess, assert_can_access_project
@@ -57,7 +60,8 @@ from vibepod_board.tables import (
     WorkerRow,
 )
 
-# Workers not seen for this long are left out of the list, and pruned after the retention.
+# Workers not seen for this long are left out of the list, and pruned after the retention: a
+# safety net for workers that crashed and were never removed.
 WORKER_LIST_WINDOW = timedelta(hours=24)
 WORKER_RETENTION = timedelta(days=7)
 
@@ -95,6 +99,7 @@ def workers_from_rows(
             agent=row.agent,
             machine=row.machine,
             mode=ClaimMode(row.mode),
+            instance=row.instance,
             status=_state(row, timestamp, timing),
             status_reason=row.status_reason,
             task_id=row.idea_id,
@@ -102,6 +107,7 @@ def workers_from_rows(
             task_title=titles.get(row.idea_id) if row.idea_id else None,
             step=WorkerStep(row.step) if row.step else None,
             task_started_at=row.task_started_at,
+            run_id=row.run_id,
             started_at=row.started_at,
             last_seen_at=row.last_seen_at,
             stopped_at=row.stopped_at,
@@ -183,9 +189,11 @@ def register_worker(
     timing: WorkerTiming | None = None,
     mode: ClaimMode = ClaimMode.IMPLEMENT,
     replace: bool = False,
+    instance: str | None = None,
 ) -> WorkerSession:
     """Connects a worker to a project. It shows up as idle right away. `mode` says whether it
-    implements planned tasks or reviews tasks in Review."""
+    implements planned tasks or reviews tasks in Review. `instance` is a short id of the
+    running worker process, such as its container id."""
     timing = timing or WorkerTiming()
     mode = ClaimMode(mode)
     name = (name or "").strip()
@@ -214,9 +222,10 @@ def register_worker(
     if not replace:
         for worker in current:
             if _state(worker, timestamp, timing) != WorkerState.OFFLINE:
+                running = f", instance {worker.instance}" if worker.instance else ""
                 raise Conflict(
-                    f"A worker named {name} is connected (machine {worker.machine or 'unknown'}, "
-                    f"started at {worker.started_at.isoformat()}); "
+                    f"A worker named {name} is connected (machine {worker.machine or 'unknown'}"
+                    f"{running}, started at {worker.started_at.isoformat()}); "
                     "stop it or register under another name"
                 )
     session.execute(
@@ -234,23 +243,19 @@ def register_worker(
             col(WorkerRow.stopped_at).is_(None),
         )
     ).one()
-    # A restarted worker replaces its earlier registration and keeps its claims.
-    session.execute(
-        update(WorkerRow)
-        .where(
-            col(WorkerRow.project_id) == project_id,
-            col(WorkerRow.name) == name,
-            col(WorkerRow.stopped_at).is_(None),
+    # A restarted worker replaces its earlier registrations, which are removed, and keeps its
+    # claims. Locking them makes a late heartbeat or sign-off of theirs wait, then miss them.
+    replaced = session.exec(
+        select(WorkerRow)
+        .where(col(WorkerRow.project_id) == project_id, col(WorkerRow.name) == name)
+        .order_by(col(WorkerRow.id))
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).all()
+    for old in replaced:
+        _remove(
+            session, old, timing, timestamp, f"Worker {_label(old)} removed: replaced by a restart"
         )
-        .values(
-            stopped_at=timestamp,
-            status=WorkerStatus.IDLE,
-            status_reason="Replaced by a new registration",
-            idea_id=None,
-            step=None,
-            task_started_at=None,
-        )
-    )
     row = WorkerRow(
         id=new_id(),
         project_id=project_id,
@@ -258,6 +263,7 @@ def register_worker(
         agent=(agent or "").strip(),
         machine=(machine or "").strip(),
         mode=mode,
+        instance=normalize_optional_text(instance),
         status=WorkerStatus.IDLE,
         started_at=timestamp,
         last_seen_at=timestamp,
@@ -375,9 +381,11 @@ def heartbeat(
     task: str | None = None,
     step: WorkerStep | None = None,
     lease_seconds: int | None = None,
+    run_id: str | None = None,
     timing: WorkerTiming | None = None,
 ) -> WorkerSession:
-    """Records that the worker is alive, what it is doing, and renews its claims."""
+    """Records that the worker is alive, what it is doing, and renews its claims. `run_id`
+    names the agent container or task running the task, as `vp task logs` takes it."""
     timing = timing or WorkerTiming()
     status = WorkerStatus(status)
     lease = lease_for(lease_seconds, timing.lease_seconds)
@@ -405,12 +413,16 @@ def heartbeat(
             raise BadRequest(f"Task {task} is not in the worker's project")
         if row.idea_id != idea.id or row.status != WorkerStatus.WORKING:
             row.task_started_at = timestamp
+            row.run_id = None
         row.idea_id = idea.id
         row.step = WorkerStep(step) if step else None
+        # Kept from an earlier heartbeat on the same task that named it.
+        row.run_id = normalize_optional_text(run_id) or row.run_id
     else:
         row.idea_id = None
         row.step = None
         row.task_started_at = None
+        row.run_id = None
     row.status = status
     row.status_reason = reason
     row.last_seen_at = timestamp
@@ -433,34 +445,133 @@ def sign_off(
     max_attempts: int = 3,
     timing: WorkerTiming | None = None,
 ) -> Worker:
-    """Marks the worker offline right away. Claims it still holds go back to Planned without
-    counting an attempt. A registration that was already replaced or signed off releases
-    nothing: the claims under its name belong to whoever registered it since."""
+    """Disconnects the worker and removes it; the reply is its last state, offline. Claims it
+    still holds go back to Planned without counting an attempt. A registration replaced by a
+    restart is gone already, so its late sign-off is NotFound and leaves the claims under its
+    name to whoever registered it since."""
     timing = timing or WorkerTiming()
     row = require_worker(session, access, worker_id, for_update=True)
     timestamp = now()
-    _sign_off(session, access, row, max_attempts, timestamp)
+    _release_claims(session, access, row, f"Worker {row.name} signed off", max_attempts, timestamp)
+    return _remove(session, row, timing, timestamp, f"Worker {_label(row)} removed: signed off")
+
+
+@transactional
+def stop_worker(
+    session: Session,
+    access: AccessContext,
+    worker_id: str,
+    max_attempts: int = 3,
+    timing: WorkerTiming | None = None,
+) -> Worker:
+    """Asks a worker to stop: its next heartbeat reply tells it to give its task back and
+    sign off, which removes it. A worker that is already offline cannot hear it, so its
+    claims are released and it is removed here; the reply is then its last state."""
+    timing = timing or WorkerTiming()
+    row = require_worker(session, access, worker_id, for_update=True)
+    timestamp = now()
+    actor = actor_for(session, access)
+    if _state(row, timestamp, timing) == WorkerState.OFFLINE:
+        add_activity(session, "worker.stopped", f"{actor} stopped worker {row.name}", timestamp)
+        _release_claims(
+            session, access, row, f"Worker {row.name} signed off", max_attempts, timestamp
+        )
+        return _remove(
+            session, row, timing, timestamp, f"Worker {_label(row)} removed: stopped by {actor}"
+        )
+    if row.stop_requested_at is None:
+        row.stop_requested_at = timestamp
+        add_activity(session, "worker.stopped", f"{actor} stopped worker {row.name}", timestamp)
+    session.flush()
     return workers_from_rows(session, [row], timing, timestamp)[0]
 
 
-def _sign_off(
+@transactional
+def remove_worker(
+    session: Session,
+    access: AccessContext,
+    worker_id: str,
+    max_attempts: int = 3,
+    timing: WorkerTiming | None = None,
+) -> Worker:
+    """Removes an offline worker; the reply is its last state. Claims it still holds go back
+    to Planned without counting an attempt. A worker that is still connected is refused: it
+    has to be stopped first."""
+    timing = timing or WorkerTiming()
+    row = require_worker(session, access, worker_id, for_update=True)
+    timestamp = now()
+    if _state(row, timestamp, timing) != WorkerState.OFFLINE:
+        raise Conflict(f"Worker {row.name} is still connected; stop it first")
+    return _remove_by_hand(session, access, row, max_attempts, timing, timestamp)
+
+
+@transactional
+def remove_offline_workers(
+    session: Session,
+    access: AccessContext,
+    project: str | None = None,
+    max_attempts: int = 3,
+    timing: WorkerTiming | None = None,
+) -> list[Worker]:
+    """Removes every offline worker of the caller's projects (or one project), as
+    `remove_worker` does; connected ones stay. Answers with the removed workers."""
+    timing = timing or WorkerTiming()
+    scope = list_scope(session, access, project)
+    if scope == []:
+        return []
+    timestamp = now()
+    silent_since = timestamp - timedelta(seconds=timing.offline_seconds)
+    rows = session.exec(
+        scoped(select(WorkerRow), WorkerRow.project_id, scope)
+        .where(
+            or_(
+                col(WorkerRow.stopped_at).is_not(None),
+                col(WorkerRow.last_seen_at) < silent_since,
+            )
+        )
+        .order_by(col(WorkerRow.id))
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).all()
+    removed = []
+    for row in rows:
+        # A heartbeat that got in before the lock brought it back.
+        if _state(row, timestamp, timing) == WorkerState.OFFLINE:
+            removed.append(_remove_by_hand(session, access, row, max_attempts, timing, timestamp))
+    return removed
+
+
+def _remove_by_hand(
     session: Session,
     access: AccessContext,
     row: WorkerRow,
     max_attempts: int,
+    timing: WorkerTiming,
+    timestamp: datetime,
+) -> Worker:
+    actor = actor_for(session, access)
+    _release_claims(session, access, row, f"Worker {row.name} was removed", max_attempts, timestamp)
+    return _remove(session, row, timing, timestamp, f"Worker {_label(row)} removed by {actor}")
+
+
+def _label(row: WorkerRow) -> str:
+    """The worker's name with its instance, or its short id, to tell restarts apart."""
+    return f"{row.name} ({row.instance or row.id[:8]})"
+
+
+def _release_claims(
+    session: Session,
+    access: AccessContext,
+    row: WorkerRow,
+    reason: str,
+    max_attempts: int,
     timestamp: datetime,
 ) -> None:
-    live = row.stopped_at is None
-    if live:
-        row.stopped_at = timestamp
-        row.last_seen_at = timestamp
-    row.status = WorkerStatus.IDLE
-    row.idea_id = None
-    row.step = None
-    row.task_started_at = None
-    row.stop_requested_at = None
-    if not live:
-        session.flush()
+    """Gives the claims under the worker's name back to Planned without counting an attempt,
+    and ends its open reviews.
+    A registration signed off before workers were removed on sign-off (`stopped_at`) holds
+    none: the claims under its name belong to whoever registered it since."""
+    if row.stopped_at is not None:
         return
     held = session.exec(
         select(BoardCardRow.id).where(
@@ -477,19 +588,19 @@ def _sign_off(
                 card_id,
                 row.name,
                 ReleaseOutcome.RELEASED,
-                f"Worker {row.name} signed off",
+                reason,
                 max_attempts,
                 allow_lapsed=True,
             )
         except Conflict:
             # The claim ended since it was listed, such as by a cancel from the board.
             continue
-    _release_reviews(session, row, timestamp)
-    session.flush()
+    _release_reviews(session, row, timestamp, reason[:1].lower() + reason[1:])
 
 
-def _release_reviews(session: Session, row: WorkerRow, timestamp: datetime) -> None:
-    """Ends the open reviews of a worker that signs off; the reviewer may take them again."""
+def _release_reviews(session: Session, row: WorkerRow, timestamp: datetime, reason: str) -> None:
+    """Ends the open reviews of a worker that signs off or is removed; the reviewer may take
+    them again."""
     held = session.exec(
         select(TaskReviewRow.id, TaskReviewRow.idea_id).where(
             TaskReviewRow.project_id == row.project_id,
@@ -504,33 +615,24 @@ def _release_reviews(session: Session, row: WorkerRow, timestamp: datetime) -> N
             lock(session, BoardCardRow, card_id)
         review = lock(session, TaskReviewRow, review_id)
         if review.ended_at is None:
-            reason = f"worker {row.name} signed off"
             end_review(session, review, timestamp, reason, row.name, ReviewVerdict.RELEASED)
 
 
-@transactional
-def stop_worker(
-    session: Session,
-    access: AccessContext,
-    worker_id: str,
-    max_attempts: int = 3,
-    timing: WorkerTiming | None = None,
+def _remove(
+    session: Session, row: WorkerRow, timing: WorkerTiming, timestamp: datetime, message: str
 ) -> Worker:
-    """Asks a worker to stop: its next heartbeat reply tells it to give its task back and
-    sign off. A worker that is already offline cannot hear it, so it is signed off here."""
-    timing = timing or WorkerTiming()
-    row = require_worker(session, access, worker_id, for_update=True)
-    timestamp = now()
+    """Deletes the worker's row and records it in the activity; answers with its last state.
+    Its run reports keep its name, and their link to it is cleared (`ON DELETE SET NULL`)."""
     if row.stopped_at is None:
-        if _state(row, timestamp, timing) == WorkerState.OFFLINE:
-            _sign_off(session, access, row, max_attempts, timestamp)
-        elif row.stop_requested_at is None:
-            row.stop_requested_at = timestamp
-        add_activity(
-            session,
-            "worker.stopped",
-            f"{actor_for(session, access)} stopped worker {row.name}",
-            timestamp,
-        )
+        row.stopped_at = timestamp
+    row.status = WorkerStatus.IDLE
+    row.idea_id = None
+    row.step = None
+    row.task_started_at = None
+    row.run_id = None
+    row.stop_requested_at = None
+    last = workers_from_rows(session, [row], timing, timestamp)[0]
+    session.delete(row)
     session.flush()
-    return workers_from_rows(session, [row], timing, timestamp)[0]
+    add_activity(session, "worker.removed", message, timestamp)
+    return last

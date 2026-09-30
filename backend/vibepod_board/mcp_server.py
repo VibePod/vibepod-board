@@ -912,9 +912,11 @@ def create_mcp_server(
     @mcp.tool(
         title="List Workers",
         description="List the automated workers connected to your projects (or one project), "
-        "seen in the last day: name, agent, machine, status (idle, working, paused or "
-        "offline), the task being worked on with its step and since when, and when each was "
-        "last seen.",
+        "seen in the last day: name, agent, machine, instance (a short id of the worker "
+        "process, such as its container id; tells restarts under one name apart), status "
+        "(idle, working, paused or offline), the task being worked on with its step, since when "
+        "and its runId (the agent container or task, as `vp task logs` takes it), and when each "
+        "was started and last seen.",
         annotations=READ_ONLY,
     )
     def list_workers(projectId: ProjectFilter = None) -> dict[str, Any]:  # noqa: N803
@@ -934,9 +936,10 @@ def create_mcp_server(
         description="Connect an automated worker to a project; it shows up on the board right "
         "away. Its name is the holder of the claims it takes (use it as the assignee of "
         "claim_next_task). A connected name is refused unless replace is true; an offline "
-        "registration is replaced, keeping its claims. Send worker_heartbeat every "
-        "heartbeatSeconds, and sign_off_worker when done. A worker in review mode claims "
-        "with mode review.",
+        "registration is replaced and removed, and its claims carry over. `instance` is a "
+        "short id of the worker process, such as its container id. Send worker_heartbeat "
+        "every heartbeatSeconds, and sign_off_worker when done. A worker in review mode "
+        "claims with mode review.",
     )
     def register_worker(
         projectId: Annotated[  # noqa: N803
@@ -947,6 +950,7 @@ def create_mcp_server(
         machine: str | None = None,
         mode: Mode = ClaimMode.IMPLEMENT,
         replace: bool = False,
+        instance: str | None = None,
     ) -> dict[str, Any]:
         return run(
             lambda s, a: workers.register_worker(
@@ -959,6 +963,7 @@ def create_mcp_server(
                 worker_timing(settings),
                 mode,
                 replace=replace,
+                instance=instance,
             )
         )
 
@@ -966,8 +971,9 @@ def create_mcp_server(
         title="Worker Heartbeat",
         description="Report that a worker is alive: its status (idle, working or paused, with "
         "a reason when paused), the task it works on and the step it is in (preparing_workspace, "
-        "agent_running, verifying, handing_over). Renews the claims the worker holds. The "
-        "reply carries instructions for the worker.",
+        "agent_running, verifying, handing_over), and the runId of the agent container or task "
+        "running it. Renews the claims the worker holds. The reply carries instructions for "
+        "the worker. A worker that was removed gets NotFound.",
     )
     def worker_heartbeat(
         id: Annotated[str, Field(min_length=1, description="Worker id from register_worker.")],
@@ -978,6 +984,7 @@ def create_mcp_server(
         ] = None,
         step: WorkerStep | None = None,
         leaseSeconds: LeaseSeconds = None,  # noqa: N803
+        runId: str | None = None,  # noqa: N803
     ) -> dict[str, Any]:
         return run(
             lambda s, a: workers.heartbeat(
@@ -989,14 +996,15 @@ def create_mcp_server(
                 task=task,
                 step=step,
                 lease_seconds=leaseSeconds,
+                run_id=runId,
                 timing=worker_timing(settings),
             )
         )
 
     @mcp.tool(
         title="Sign Off Worker",
-        description="Disconnect a worker: it shows as offline right away, and claims it still "
-        "holds go back to Planned without counting an attempt.",
+        description="Disconnect a worker: it is removed from the board, and claims it still "
+        "holds go back to Planned without counting an attempt. The reply is its last state.",
     )
     def sign_off_worker(
         id: Annotated[str, Field(min_length=1, description="Worker id from register_worker.")],
@@ -1038,7 +1046,8 @@ def create_mcp_server(
     @mcp.tool(
         title="Stop Worker",
         description="Stop a worker: its next heartbeat reply tells it to give its task back and "
-        "sign off. A worker that is already offline is signed off at once.",
+        "sign off, which removes it. A worker that is already offline has its claims released "
+        "and is removed at once.",
     )
     def stop_worker(
         id: Annotated[str, Field(min_length=1, description="Worker id from list_workers.")],
@@ -1047,6 +1056,37 @@ def create_mcp_server(
             lambda s, a: {
                 "item": workers.stop_worker(
                     s, a, id, settings.claim_max_attempts, worker_timing(settings)
+                )
+            }
+        )
+
+    @mcp.tool(
+        title="Remove Worker",
+        description="Remove an offline worker (its heartbeats stopped) from the board. Claims "
+        "it still holds go back to Planned without counting an attempt; its run reports and "
+        "task history keep its name. A connected worker is refused: stop it first.",
+    )
+    def remove_worker(
+        id: Annotated[str, Field(min_length=1, description="Worker id from list_workers.")],
+    ) -> dict[str, Any]:
+        return run(
+            lambda s, a: {
+                "item": workers.remove_worker(
+                    s, a, id, settings.claim_max_attempts, worker_timing(settings)
+                )
+            }
+        )
+
+    @mcp.tool(
+        title="Remove Offline Workers",
+        description="Remove every offline worker of your projects (or one project), as "
+        "remove_worker does; connected workers stay. Returns the removed workers.",
+    )
+    def remove_offline_workers(projectId: ProjectFilter = None) -> dict[str, Any]:  # noqa: N803
+        return run(
+            lambda s, a: {
+                "items": workers.remove_offline_workers(
+                    s, a, projectId, settings.claim_max_attempts, worker_timing(settings)
                 )
             }
         )

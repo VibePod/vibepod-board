@@ -389,6 +389,8 @@ class Worker(ApiModel):
     agent: str
     machine: str
     mode: ClaimMode = ClaimMode.IMPLEMENT
+    # A short id of the running worker process, such as its container id, when it sent one.
+    instance: str | None = None
     # offline once the heartbeats stopped or the worker signed off.
     status: WorkerState
     status_reason: str | None = None
@@ -398,6 +400,8 @@ class Worker(ApiModel):
     task_title: str | None = None
     step: WorkerStep | None = None
     task_started_at: Timestamp | None = None
+    # The agent container or task running the current task, as `vp task logs` takes it.
+    run_id: str | None = None
     started_at: Timestamp
     last_seen_at: Timestamp
     stopped_at: Timestamp | None = None
@@ -434,6 +438,12 @@ class WorkerList(ApiModel):
     items: list[Worker]
     # The automation state when the list is for one project.
     automation: AutomationState | None = None
+
+
+class RemovedWorkers(ApiModel):
+    """The workers a removal took out, in their last state."""
+
+    items: list[Worker]
 
 
 class RunCommit(ApiModel):

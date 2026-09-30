@@ -641,8 +641,8 @@ def test_reviews_are_renewed_by_heartbeats_and_released_on_sign_off(session: Ses
     ended = reviews.review_state(session, ADMIN, task.id).items[0]
     assert (ended.open, ended.verdict) == (False, ReviewVerdict.RELEASED)
     assert card(session, task).column == BoardColumn.REVIEW
-    listed = workers.list_workers(session, ADMIN, "VP")
-    assert [worker.mode for worker in listed] == [ClaimMode.REVIEW]
+    # Signing off removes the worker; its mode showed while it was listed.
+    assert workers.list_workers(session, ADMIN, "VP") == []
 
 
 def test_a_review_is_cancelled_from_the_board(session: Session, vp) -> None:

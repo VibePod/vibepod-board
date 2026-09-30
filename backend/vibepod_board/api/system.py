@@ -51,6 +51,8 @@ MCP_INFO_TOOLS = (
     "register_worker",
     "release_task",
     "remove_idea_dependency",
+    "remove_offline_workers",
+    "remove_worker",
     "renew_task_claim",
     "renew_task_review",
     "request_task_rework",
