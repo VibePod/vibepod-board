@@ -301,24 +301,22 @@ def instructions_for(session: Session, row: WorkerRow) -> list[WorkerInstruction
             WorkerInstruction(type=InstructionType.STOP, reason="Stopped from the board")
         )
     if row.status == WorkerStatus.WORKING and row.idea_id:
-        if row.mode == ClaimMode.REVIEW:
-            lost = _open_review(session, row) is None
-            reason = _lost_claim_reason(session, row.idea_id)
-        else:
-            card = session.exec(
-                select(BoardCardRow).where(BoardCardRow.idea_id == row.idea_id)
-            ).first()
-            # A lease that ran out is lost too, even before the sweep ends it (see
-            # `claims._held`): the task may be handed to another runner at any moment.
-            lapsed = card is not None and (
-                card.claim_expires_at is None or card.claim_expires_at <= now()
-            )
-            lost = card is None or card.claimed_at is None or card.assignee != row.name or lapsed
-            reason = (
-                "The claim expired before the worker reported again"
-                if lapsed and card is not None and card.claimed_at is not None
-                else _lost_claim_reason(session, row.idea_id)
-            )
+        card = session.exec(select(BoardCardRow).where(BoardCardRow.idea_id == row.idea_id)).first()
+        claimed = card is not None and card.claimed_at is not None and card.assignee == row.name
+        # A lease that ran out is lost too, even before the sweep ends it (see
+        # `claims._held`): the task may be handed to another runner at any moment.
+        lapsed = (
+            claimed
+            and card is not None
+            and (card.claim_expires_at is None or card.claim_expires_at <= now())
+        )
+        # A review worker holds a review instead of the card's claim.
+        lost = (not claimed or lapsed) and _open_review(session, row) is None
+        reason = (
+            "The claim expired before the worker reported again"
+            if lapsed
+            else _lost_claim_reason(session, row.idea_id)
+        )
         if lost:
             instructions.append(
                 WorkerInstruction(
