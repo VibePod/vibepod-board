@@ -1522,6 +1522,9 @@ const App = () => {
     try {
       await api(`/api/workers/${worker.id}/stop`, { method: "POST" });
       setNotice(`Asked ${worker.name} to stop.`);
+      // An offline worker is signed off at once and its tasks go back to
+      // Planned; the worker poll restarts below and would not notice.
+      await loadState({ background: true }).catch(() => undefined);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to stop worker");
     }

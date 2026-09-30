@@ -268,6 +268,10 @@ describe("worker controls", () => {
   it("stops a worker from the list", async () => {
     const fetchMock = await renderBoard();
     const dialog = await openWorkers();
+    const boardLoads = () =>
+      fetchMock.mock.calls.filter(([input]) => String(input) === "/api/board")
+        .length;
+    const before = boardLoads();
 
     await userEvent.click(
       within(dialog).getByRole("button", { name: `Stop ${holder}` }),
@@ -275,6 +279,8 @@ describe("worker controls", () => {
 
     expect(await screen.findByText(`Asked ${holder} to stop.`)).toBeTruthy();
     expect(posts(fetchMock)).toEqual([["/api/workers/worker-1/stop", null]]);
+    // A stopped offline worker's tasks went back to Planned: the board reloads.
+    await waitFor(() => expect(boardLoads()).toBeGreaterThan(before));
   });
 
   it("cancels a run from the card after confirming", async () => {
