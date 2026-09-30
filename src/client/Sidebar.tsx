@@ -69,6 +69,7 @@ export const Sidebar = ({
       return !current;
     });
   };
+  const toggleButtonRef = useRef<HTMLButtonElement>(null);
   const toggleRef = useRef(toggle);
   toggleRef.current = toggle;
 
@@ -96,6 +97,8 @@ export const Sidebar = ({
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setOverlayOpen(false);
+        // Focus would stay inside the hidden menu; hand it back to the toggle.
+        toggleButtonRef.current?.focus();
       }
     };
     window.addEventListener("keydown", closeOnEscape);
@@ -139,6 +142,7 @@ export const Sidebar = ({
             aria-label={toggleLabel}
             aria-expanded={expanded}
             aria-controls={panelId}
+            ref={toggleButtonRef}
             onClick={toggle}
           >
             <ToggleIcon size={18} />

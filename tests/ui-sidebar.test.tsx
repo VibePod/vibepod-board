@@ -244,8 +244,13 @@ describe("collapsible sidebar", () => {
         .getAttribute("aria-expanded"),
     ).toBe("true");
 
+    // Escape from inside the menu hands focus back to the toggle.
+    screen.getByRole("link", { name: "Board" }).focus();
     await userEvent.keyboard("{Escape}");
     expect(sidebar()?.classList.contains("is-open")).toBe(false);
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Show menu" }),
+    );
 
     await userEvent.keyboard("[[");
     expect(sidebar()?.classList.contains("is-open")).toBe(true);
