@@ -18,6 +18,10 @@ export type Project = {
   key: string;
   title: string;
   summary: string;
+  /** Approvals from distinct reviewers a task's head commit needs to move to PR ready. */
+  requiredApprovals?: number;
+  /** Rework verdicts in a row after which a task is blocked for a human. */
+  maxReviewRounds?: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -104,6 +108,11 @@ export type BoardCard = {
   blockedReason?: string;
   /** The agent's question while the task waits for an answer; it is blocked meanwhile. */
   question?: string;
+  /** The commit the last hand-over put up for review, and when; reviews are bound to it. */
+  headSha?: string;
+  handedOverAt?: string;
+  /** Rework verdicts in a row since the card was last moved by hand or approved. */
+  reviewRounds?: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -121,7 +130,10 @@ export const taskEventKinds = [
   "question",
   "answer",
   "feedback",
+  "review_started",
   "approved",
+  "rework_requested",
+  "review_ended",
   "pr_opened",
   "pr_linked",
   "pr_unlinked",
@@ -152,12 +164,16 @@ export type WorkerState = (typeof workerStates)[number];
 export type WorkerStep = (typeof workerSteps)[number];
 
 /** An automated runner connected to a project. */
+/** What a worker claims tasks for: implementing planned work or reviewing it. */
+export type WorkerMode = "implement" | "review";
+
 export type Worker = {
   id: string;
   projectId: string;
   name: string;
   agent: string;
   machine: string;
+  mode?: WorkerMode;
   status: WorkerState;
   statusReason?: string;
   /** The task being worked on, and since when. */

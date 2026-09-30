@@ -228,6 +228,7 @@ describe("connected workers", () => {
           name: "codex@desktop",
           agent: "codex",
           machine: "desktop",
+          mode: "review",
           status: "paused",
           statusReason: "Usage limit reached",
         }),
@@ -245,6 +246,8 @@ describe("connected workers", () => {
       "codex@desktop",
     ]);
     expect(within(dialog).getByText("Usage limit reached")).toBeTruthy();
+    expect(within(dialog).getByText("codex · desktop · reviewer")).toBeTruthy();
+    expect(within(dialog).getByText("claude · laptop")).toBeTruthy();
     expect(within(dialog).getByText("Paused")).toBeTruthy();
     expect(within(dialog).getByText("Verifying")).toBeTruthy();
 

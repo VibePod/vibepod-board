@@ -1214,7 +1214,9 @@ def create_mcp_server(
     @mcp.tool(
         title="Answer Task Question",
         description="Answer the question a task waits on after its automated run asked for "
-        "input; the task goes back to Planned and the next run gets the answer. Pass the "
+        "input; the task goes back to Planned and the next run gets the answer. A question "
+        "from a reviewer is answered in Review, where the reviewers pick the task up again. "
+        "Pass the "
         "expectedUpdatedAt you read to refuse an answer to a question that has since changed.",
     )
     def answer_task_question(
