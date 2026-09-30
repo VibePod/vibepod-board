@@ -459,3 +459,36 @@ def test_an_offline_timeout_shorter_than_two_heartbeats_fails_at_startup(monkeyp
         assert (settings.worker_heartbeat_seconds, settings.worker_offline_seconds) == (30, 60)
     finally:
         get_settings.cache_clear()
+
+
+def test_a_sign_off_waiting_behind_an_edit_stamps_its_releases_after_it(
+    db: Engine, session: Session, vp
+) -> None:
+    task = planned(session, vp, "Contended")
+    worker = register(session).item
+    card_id = claims.claim_task(session, ADMIN, "VP", NAME, task=task.id).item.card.id
+    done: list[Any] = []
+
+    def sign_off() -> None:
+        with Session(db, expire_on_commit=False) as own:
+            done.append(workers.sign_off(own, ADMIN, worker.id))
+
+    with Session(db) as editor:
+        editor.execute(
+            text("select id from board_cards where id = :id for update"), {"id": card_id}
+        )
+        signer = threading.Thread(target=sign_off)
+        signer.start()
+        time.sleep(0.5)
+        edited_at = now()
+        editor.execute(
+            text("update board_cards set updated_at = :at where id = :id"),
+            {"at": edited_at, "id": card_id},
+        )
+        editor.commit()
+    signer.join(timeout=30)
+
+    assert len(done) == 1
+    released = board.get_card(session, ADMIN, task.id)
+    assert released.claimed_at is None
+    assert released.updated_at > edited_at
