@@ -665,8 +665,9 @@ const App = () => {
   // cards they work on. When what they do changes, automation moved cards, so
   // the board reloads too.
   useEffect(() => {
+    // Another project's workers must not show while this one's load.
+    setWorkers([]);
     if (auth.status !== "authenticated" || !selectedProjectId) {
-      setWorkers([]);
       return;
     }
     let cancelled = false;
