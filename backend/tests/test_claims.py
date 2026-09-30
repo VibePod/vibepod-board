@@ -15,7 +15,7 @@ from sqlmodel import Session
 
 from vibepod_board.access import admin_access, token_access
 from vibepod_board.bundle import parse_project_bundle
-from vibepod_board.enums import BoardColumn, ReleaseOutcome
+from vibepod_board.enums import BoardColumn, ReleaseOutcome, TaskEventKind
 from vibepod_board.errors import BadRequest, Conflict, Forbidden, NotFound
 from vibepod_board.schemas import now
 from vibepod_board.services import board, claims, history, ideas, projects, readiness, transfer
@@ -858,6 +858,17 @@ def test_denying_a_claimed_task_ends_the_claim(session: Session, vp) -> None:
     with pytest.raises(Conflict, match="it is not claimed"):
         claims.hand_over_task(session, ADMIN, task.id, RUNNER)
     assert claim(session).claimed is False
+
+
+def test_events_written_together_keep_their_order_in_the_history(session: Session, vp) -> None:
+    task = planned(session, vp, "Failed, claimed again, then moved by hand")
+    claim(session)
+    claims.release_task(session, ADMIN, task.id, RUNNER, ReleaseOutcome.FAILED)
+    claim(session)
+
+    board.move_card(session, ADMIN, card(session, task).id, BoardColumn.PLANNED)
+
+    assert kinds(session, task)[:2] == [TaskEventKind.UNBLOCKED, TaskEventKind.CLAIM_ENDED]
 
 
 def test_a_lease_setting_out_of_range_fails_at_startup(monkeypatch) -> None:
