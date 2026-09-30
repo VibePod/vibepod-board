@@ -217,6 +217,18 @@ def test_pausing_without_a_reason_is_refused(session: Session, vp) -> None:
             workers.heartbeat(session, ADMIN, worker.id, WorkerStatus.PAUSED, status_reason=reason)
 
 
+def test_registering_again_renews_the_claims_under_the_name(session: Session, vp) -> None:
+    task = planned(session, vp, "Picked back up")
+    register(session)
+    claimed = claims.claim_task(session, ADMIN, "VP", NAME, lease_seconds=60).item.card
+
+    register(session)
+
+    renewed = board.get_card(session, ADMIN, task.id)
+    assert renewed.claim_expires_at >= claimed.claim_expires_at + timedelta(seconds=600)
+    assert renewed.updated_at == claimed.updated_at
+
+
 def test_heartbeats_leave_other_holders_claims_alone(session: Session, vp) -> None:
     planned(session, vp, "Someone else's")
     worker = register(session).item

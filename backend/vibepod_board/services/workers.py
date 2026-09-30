@@ -205,6 +205,9 @@ def register_worker(
         last_seen_at=timestamp,
     )
     session.add(row)
+    # A restarted worker takes its claims back up: renew them now rather than at its first
+    # heartbeat, which may come after they would have lapsed.
+    _renew_claims(session, row, timestamp + timedelta(seconds=timing.lease_seconds))
     add_activity(
         session, "worker.registered", f"Worker {name} connected to {project_row.key}", timestamp
     )
