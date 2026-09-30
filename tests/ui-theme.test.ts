@@ -25,6 +25,13 @@ describe("UI theme and card readability styles", () => {
     expect(clientEntry).toContain('defaultColorScheme="light"');
   });
 
+  it("lets the sidebar scroll on short windows", () => {
+    const sidebar = styles.slice(styles.indexOf(".sidebar {"));
+    const rule = sidebar.slice(0, sidebar.indexOf("}"));
+    expect(rule).toContain("overflow-y: auto");
+    expect(rule).not.toMatch(/overflow:\s*hidden/);
+  });
+
   it("defines readable card and badge color treatments", () => {
     expect(styles).toContain(".project-card");
     expect(styles).toContain(".task-list-card");
