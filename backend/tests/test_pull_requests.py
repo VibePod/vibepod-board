@@ -136,6 +136,19 @@ def test_offers_the_branch_of_an_unmerged_dependency_pr_as_base(
     assert (draft.base, draft.bases) == ("main", ["main"])
 
 
+def test_does_not_offer_a_fork_branch_as_base(
+    session: Session, project, fake: FakeGitHub, github: GitHubClient
+) -> None:
+    fake.branches[REPO] += ["feature/base"]
+    base = pr_ready_card(session, project, "feature/base", title="Base")
+    fork = fake.add_pull(REPO, "feature/forked", head_repository="someone/fork")
+    pull_requests.link_pull_request(session, ADMIN, base.id, fork["html_url"], github)
+    stacked = pr_ready_card(session, project, depends_on=[base.idea_id])
+
+    draft = pull_requests.pull_request_draft(session, ADMIN, stacked.id, github)
+    assert (draft.base, draft.bases) == ("main", ["main"])
+
+
 def test_needs_a_github_repository(session: Session, project, github: GitHubClient) -> None:
     card = pr_ready_card(session, project, repository_remote_url="git@gitlab.com:x/y.git")
     with pytest.raises(BadRequest, match="No GitHub repository"):

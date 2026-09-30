@@ -62,6 +62,7 @@ class FakeGitHub:
         draft: bool = False,
         state: str = "open",
         merged: bool = False,
+        head_repository: str | None = None,
     ) -> dict[str, Any]:
         # Issues and pulls share their numbers on GitHub.
         taken = [n for (r, n) in (*self.issues, *self.pulls) if r == repository]
@@ -74,7 +75,7 @@ class FakeGitHub:
             "state": state,
             "draft": draft,
             "merged_at": self.tick() if merged else None,
-            "head": {"ref": head},
+            "head": {"ref": head, "repo": {"full_name": head_repository or repository}},
             "base": {"ref": base},
         }
         self.pulls[(repository, number)] = pull

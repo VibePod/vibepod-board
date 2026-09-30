@@ -65,6 +65,9 @@ class RemotePull:
     draft: bool
     head: str
     base: str
+    # The repository the head branch lives in: another one for a PR from a fork, None when
+    # that fork was deleted.
+    head_repository: str | None = None
 
 
 @dataclass(frozen=True)
@@ -141,7 +144,14 @@ def _remote_pull(repository: str, data: dict[str, Any]) -> RemotePull:
         draft=bool(data.get("draft")),
         head=data["head"]["ref"],
         base=data["base"]["ref"],
+        head_repository=_head_repository(data["head"]),
     )
+
+
+def _head_repository(head: dict[str, Any]) -> str | None:
+    repo = head.get("repo")
+    name = repo.get("full_name") if isinstance(repo, dict) else None
+    return normalize_repository(name) if name else None
 
 
 def _error_detail(response: httpx.Response, limit: int = 300) -> str:

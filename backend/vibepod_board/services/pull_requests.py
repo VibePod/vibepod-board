@@ -75,6 +75,9 @@ def _dependency_branches(
             pull = client.get_pull_request(PullRef(repository, number))
         except NotFound:
             continue
+        # A PR from a fork has its head in another repository: that branch is no base here.
+        if pull.head_repository != repository:
+            continue
         if pull.state == "open" and pull.head not in branches:
             branches.append(pull.head)
     return branches
