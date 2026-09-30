@@ -83,8 +83,10 @@ def add_run_report(
     outcome = RunOutcome(outcome)
     if duration_seconds is not None and duration_seconds < 0:
         raise BadRequest("durationSeconds must not be negative")
+    resolved_worker_id = None
     if worker_id:
         worker = require_worker(session, access, worker_id)
+        resolved_worker_id = worker.id
         if worker.project_id != idea.project_id:
             raise BadRequest("The worker belongs to another project")
         # The registered worker names the report, whatever name the caller sent along.
@@ -99,7 +101,7 @@ def add_run_report(
     row = TaskRunRow(
         id=new_id(),
         idea_id=idea.id,
-        worker_id=worker_id or None,
+        worker_id=resolved_worker_id,
         worker_name=normalize_optional_text(worker_name),
         agent=normalize_optional_text(agent),
         outcome=outcome,

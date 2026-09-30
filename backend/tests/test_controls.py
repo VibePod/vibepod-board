@@ -304,6 +304,16 @@ def test_a_report_from_a_registered_worker_carries_its_name(session: Session, vp
     assert report.worker_name == NAME
 
 
+def test_a_report_stores_the_resolved_worker_id(session: Session, vp) -> None:
+    worker, task = working(session, vp)
+
+    report = runs.add_run_report(
+        session, ADMIN, task.id, RunOutcome.DONE, worker_id=f"  {worker.id}  "
+    )
+
+    assert report.worker_id == worker.id
+
+
 def test_long_verify_output_keeps_its_head_and_tail(session: Session, vp) -> None:
     task = planned(session, vp, "Noisy tests")
     output = "HEAD" + "x" * 50_000 + "TAIL: 3 failed"
