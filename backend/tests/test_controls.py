@@ -140,6 +140,7 @@ def test_stopping_an_online_worker_asks_it_to_stop(session: Session, vp) -> None
     signed_off = workers.sign_off(session, ADMIN, worker.id)
     assert signed_off.status == WorkerState.OFFLINE
     assert signed_off.stop_requested_at is None
+    assert workers.list_workers(session, ADMIN) == []
 
 
 def test_a_pending_stop_survives_a_restart_under_the_same_name(session: Session, vp) -> None:
@@ -161,7 +162,7 @@ def test_a_restart_without_a_pending_stop_gets_none(session: Session, vp) -> Non
     assert reply.instructions == []
 
 
-def test_stopping_an_offline_worker_signs_it_off_at_once(db: Engine, session: Session, vp) -> None:
+def test_stopping_an_offline_worker_removes_it_at_once(db: Engine, session: Session, vp) -> None:
     worker, task = working(session, vp)
     with db.begin() as connection:
         connection.execute(text("update workers set last_seen_at = now() - interval '5 minutes'"))
@@ -170,6 +171,9 @@ def test_stopping_an_offline_worker_signs_it_off_at_once(db: Engine, session: Se
 
     assert stopped.status == WorkerState.OFFLINE
     assert stopped.stopped_at is not None
+    assert workers.list_workers(session, ADMIN) == []
+    with pytest.raises(NotFound):
+        workers.heartbeat(session, ADMIN, worker.id, WorkerStatus.IDLE)
     card = board.get_card(session, ADMIN, task.id)
     assert (card.column, card.claimed_at, card.attempts) == (BoardColumn.PLANNED, None, 0)
 

@@ -6,7 +6,7 @@ from vibepod_board.api.queries import ProjectFilter, project_filter
 from vibepod_board.api.responses import Item
 from vibepod_board.auth import AccessDep
 from vibepod_board.db import SessionDep
-from vibepod_board.schemas import Worker, WorkerList, WorkerSession
+from vibepod_board.schemas import RemovedWorkers, Worker, WorkerList, WorkerSession
 from vibepod_board.services import automation, workers
 
 router = APIRouter(prefix="/api/workers", tags=["workers"])
@@ -20,7 +20,8 @@ def list_workers(
     project_id: ProjectFilter = None,
 ) -> WorkerList:
     """Workers seen in the last day, connected ones first; `offline` once their heartbeats
-    stopped or they signed off. For one project, also whether its automation is paused."""
+    stopped. A worker that signs off is removed. `instance` tells restarts under the same name
+    apart, with `startedAt`. For one project, also whether its automation is paused."""
     project = project_filter(project_id)
     items = workers.list_workers(session, access, project, worker_timing(settings))
     state = automation.get_automation(session, access, project) if project else None
@@ -38,9 +39,29 @@ def register_worker(
         body.name,
         body.agent,
         body.machine,
+        body.instance,
         worker_timing(settings),
         body.mode,
     )
+
+
+@router.post("/remove-offline")
+def remove_offline_workers(
+    session: SessionDep,
+    access: AccessDep,
+    settings: SettingsDep,
+    project_id: ProjectFilter = None,
+) -> RemovedWorkers:
+    """Removes every offline worker of your projects (or one project); connected ones stay.
+    Claims they still hold go back to Planned without counting an attempt."""
+    items = workers.remove_offline_workers(
+        session,
+        access,
+        project_filter(project_id),
+        settings.claim_max_attempts,
+        worker_timing(settings),
+    )
+    return RemovedWorkers(items=items)
 
 
 @router.get("/{worker_id}")
@@ -69,7 +90,22 @@ def heartbeat(
         task=body.task,
         step=body.step,
         lease_seconds=body.lease_seconds,
+        run_id=body.run_id,
         timing=worker_timing(settings),
+    )
+
+
+@router.delete("/{worker_id}")
+def remove_worker(
+    worker_id: str, session: SessionDep, access: AccessDep, settings: SettingsDep
+) -> Item[Worker]:
+    """Removes an offline worker and answers with its last state. Claims it still holds go
+    back to Planned without counting an attempt. A connected worker is refused (409): stop it
+    first."""
+    return Item(
+        item=workers.remove_worker(
+            session, access, worker_id, settings.claim_max_attempts, worker_timing(settings)
+        )
     )
 
 
@@ -88,8 +124,9 @@ def sign_off(
 def stop_worker(
     worker_id: str, session: SessionDep, access: AccessDep, settings: SettingsDep
 ) -> Item[Worker]:
-    """Tells the worker, with its next heartbeat reply, to give its task back and sign off. A
-    worker that is already offline is signed off at once."""
+    """Tells the worker, with its next heartbeat reply, to give its task back and sign off,
+    which removes it. A worker that is already offline has its claims released and is removed
+    at once."""
     return Item(
         item=workers.stop_worker(
             session, access, worker_id, settings.claim_max_attempts, worker_timing(settings)

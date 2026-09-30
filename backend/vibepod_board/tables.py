@@ -233,6 +233,9 @@ class WorkerRow(SQLModel, table=True):
     machine: str = _text("")
     # implement or review: what the worker claims tasks for.
     mode: str = _text("implement")
+    # A short id of the running worker process, such as its container id: tells restarts under
+    # the same name apart.
+    instance: str | None = _text()
     # idle, working or paused, as last reported; offline is derived from `last_seen_at`.
     status: str = _text("idle")
     status_reason: str | None = _text()
@@ -240,6 +243,8 @@ class WorkerRow(SQLModel, table=True):
     idea_id: str | None = _foreign_key("ideas.id", "SET NULL", nullable=True)
     step: str | None = _text()
     task_started_at: datetime | None = _timestamp(nullable=True)
+    # The agent container or task running the current task, as `vp task logs` takes it.
+    run_id: str | None = _text()
     started_at: datetime = _timestamp()
     last_seen_at: datetime = _timestamp()
     stopped_at: datetime | None = _timestamp(nullable=True)

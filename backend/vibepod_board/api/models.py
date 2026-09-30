@@ -271,6 +271,8 @@ class WorkerRegistration(ApiModel):
     machine: StrictStr = ""
     # implement or review: what the worker claims tasks for.
     mode: ClaimMode = ClaimMode.IMPLEMENT
+    # A short id of the running worker process, such as its container id.
+    instance: StrictStr | None = None
 
 
 class HeartbeatRequest(ApiModel):
@@ -280,6 +282,8 @@ class HeartbeatRequest(ApiModel):
     # The task being worked on; required while working.
     task: RequiredText | None = None
     step: WorkerStep | None = None
+    # The agent container or task running the task, as `vp task logs` takes it.
+    run_id: StrictStr | None = None
     # The lease the worker's claims are renewed by; the server default when omitted.
     lease_seconds: LeaseSeconds | None = None
 
