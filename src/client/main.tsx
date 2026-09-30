@@ -4167,12 +4167,9 @@ const boardCardGitHubLink = (
   if (issue) {
     return <GitHubIssueBadge link={issue} size="xs" />;
   }
-  if (hasPullRequest(card)) {
-    return pullRequestBadge(card, "xs");
-  }
-  const repository = githubRepositoryLink(
-    card.repositoryRemoteUrl || idea?.repositoryRemoteUrl,
-  );
+  // Outside PR ready a linked PR is history, such as after a rework; the card's own
+  // remote decides, and a remote cleared on the card shows no link.
+  const repository = githubRepositoryLink(card.repositoryRemoteUrl);
   return repository ? (
     <GitHubRepositoryBadge link={repository} size="xs" />
   ) : null;
