@@ -786,6 +786,27 @@ def test_moving_a_claimed_card_while_it_is_handed_over_never_deadlocks(
         assert errors == []
 
 
+def test_a_dependency_added_after_the_work_order_was_read_stops_the_claim(
+    db: Engine, session: Session, vp, monkeypatch
+) -> None:
+    from vibepod_board.services import dependencies
+
+    blocker = ideas.create_idea(session, ADMIN, title="Unfinished", project_id=vp.id)
+    task = planned(session, vp, "Gains a dependency")
+    read_work_order = claims.work_order
+
+    def stale_work_order(*args: Any, **kwargs: Any):
+        order = read_work_order(*args, **kwargs)
+        with Session(db) as other:
+            dependencies.add_dependency(other, ADMIN, task.id, blocker.id)
+        return order
+
+    monkeypatch.setattr(claims, "work_order", stale_work_order)
+
+    assert claim(session).claimed is False
+    assert card(session, task).column == BoardColumn.PLANNED
+
+
 def test_taking_a_claimed_task_off_the_board_frees_its_holder(session: Session, vp) -> None:
     task = planned(session, vp, "Taken off")
     claim(session)

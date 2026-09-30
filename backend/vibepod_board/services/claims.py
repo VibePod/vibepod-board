@@ -139,11 +139,13 @@ def _next_claimable(
         card = session.get(BoardCardRow, item.card_id)
         if idea is None or _obstacle(card, idea, [], labels, min_readiness) is not None:
             continue
-        # Re-read under lock: a card write does not take the project lock, so the card may
-        # have moved since the work order was read.
+        # Re-read under lock: card and dependency writes do not take the project lock, so
+        # the card may have moved, or the task gained a dependency, since the work order was
+        # read. A dependency write locks the task row, so its edges are settled here.
         idea = lock(session, IdeaRow, item.id)
         card = lock(session, BoardCardRow, item.card_id)
-        if _obstacle(card, idea, [], labels, min_readiness) is None:
+        blocked_by = decorate_idea(session, idea).blocked_by
+        if _obstacle(card, idea, blocked_by, labels, min_readiness) is None:
             return idea, card
     return None
 
