@@ -9,6 +9,9 @@ import {
 } from "./automationUtils.js";
 import { MarkdownText } from "./Markdown.js";
 
+/** A report can arrive without anything else on the board changing. */
+export const RUNS_POLL_MS = 15_000;
+
 type TaskRunsProps = {
   ideaId: string;
   /** Reloads the reports when it changes, such as the card's `updatedAt`. */
@@ -116,8 +119,16 @@ export const TaskRuns = ({ ideaId, reloadKey }: TaskRunsProps) => {
   } | null>(null);
   const [error, setError] = useState("");
   const runs = loaded?.ideaId === ideaId ? loaded.runs : null;
+  const [poll, setPoll] = useState(0);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reloadKey only triggers a refetch
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") setPoll((count) => count + 1);
+    }, RUNS_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reloadKey and poll only trigger a refetch
   useEffect(() => {
     let cancelled = false;
     setError("");
@@ -131,7 +142,7 @@ export const TaskRuns = ({ ideaId, reloadKey }: TaskRunsProps) => {
     return () => {
       cancelled = true;
     };
-  }, [ideaId, reloadKey]);
+  }, [ideaId, reloadKey, poll]);
 
   if (error) {
     return (

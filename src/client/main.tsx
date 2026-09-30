@@ -432,6 +432,8 @@ const App = () => {
   const [workersVersion, setWorkersVersion] = useState(0);
   // The project the shown workers belong to.
   const workersProjectRef = useRef<string | null>(null);
+  // Counts board loads, so panels loaded on their own (run reports) reload with the board.
+  const [loadCount, setLoadCount] = useState(0);
 
   // Loads overlap (a worker poll reloads while a move reloads too): an older
   // snapshot never replaces a newer one, but a newer load that fails does not
@@ -464,6 +466,7 @@ const App = () => {
       documents: documents.items,
     }));
     if (!archived) setError("Failed to load archived cards");
+    setLoadCount((count) => count + 1);
     setIsLoading(false);
   };
 
@@ -3171,10 +3174,11 @@ const App = () => {
               </Paper>
             )}
 
-            {/* A runner reports after moving the card, so what the workers do reloads too. */}
+            {/* A runner reports after moving the card, so what the workers do reloads too,
+                and so does every board load. */}
             <TaskRuns
               ideaId={taskViewIdea.id}
-              reloadKey={`${taskViewCard?.updatedAt}|${workerActivitySignature(workers)}`}
+              reloadKey={`${taskViewCard?.updatedAt}|${workerActivitySignature(workers)}|${loadCount}`}
             />
 
             <TaskHistory

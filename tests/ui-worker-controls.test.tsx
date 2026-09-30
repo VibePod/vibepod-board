@@ -341,4 +341,29 @@ describe("worker controls", () => {
       within(view).getByRole("button", { name: "Cancel run" }),
     ).toBeTruthy();
   });
+
+  it("reloads the run reports with the board and while open", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const fetchMock = await renderBoard();
+      const runLoads = () =>
+        fetchMock.mock.calls.filter(
+          ([input]) => String(input) === "/api/ideas/idea-1/runs",
+        ).length;
+
+      await userEvent.click(screen.getByText("Automated login"));
+      await screen.findByRole("dialog", { name: "Task Overview" });
+      await waitFor(() => expect(runLoads()).toBeGreaterThan(0));
+      const opened = runLoads();
+
+      await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      await waitFor(() => expect(runLoads()).toBeGreaterThan(opened));
+      const refreshed = runLoads();
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      await waitFor(() => expect(runLoads()).toBeGreaterThan(refreshed));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
