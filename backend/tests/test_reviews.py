@@ -735,6 +735,33 @@ def test_a_denied_task_takes_no_verdict(session: Session, vp) -> None:
     assert card(session, task).column == BoardColumn.REVIEW
 
 
+def test_taking_a_card_off_the_board_ends_its_reviews(session: Session, vp) -> None:
+    task = in_review(session, vp, "Shelved")
+    review(session)
+    worker = workers.register_worker(session, ADMIN, "VP", CLAUDE, mode=ClaimMode.REVIEW).item
+
+    ideas.update_idea(session, ADMIN, task.id, on_board=False)
+
+    state = reviews.review_state(session, ADMIN, task.id)
+    assert (state.column, state.open_reviews) == (None, 0)
+    assert "taken off the board" in (state.items[0].ended_reason or "")
+    beat = workers.heartbeat(session, ADMIN, worker.id, WorkerStatus.WORKING, task=task.id)
+    assert [instruction.type for instruction in beat.instructions] == [InstructionType.CANCEL]
+
+
+def test_a_review_worker_of_a_task_off_the_board_is_told_to_cancel(session: Session, vp) -> None:
+    task = in_review(session, vp, "Card gone")
+    review(session)
+    worker = workers.register_worker(session, ADMIN, "VP", CLAUDE, mode=ClaimMode.REVIEW).item
+    # A card gone while its review row stayed open, as before reviews ended with the card.
+    session.execute(text("delete from board_cards where idea_id = :id"), {"id": task.id})
+    session.commit()
+
+    beat = workers.heartbeat(session, ADMIN, worker.id, WorkerStatus.WORKING, task=task.id)
+
+    assert [instruction.type for instruction in beat.instructions] == [InstructionType.CANCEL]
+
+
 def test_feedback_from_the_board_ends_the_reviews(session: Session, vp) -> None:
     task = in_review(session, vp, "Human says no")
     review(session)

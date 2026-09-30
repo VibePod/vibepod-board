@@ -310,8 +310,9 @@ def instructions_for(session: Session, row: WorkerRow) -> list[WorkerInstruction
             and card is not None
             and (card.claim_expires_at is None or card.claim_expires_at <= now())
         )
-        # A review worker holds a review instead of the card's claim.
-        lost = (not claimed or lapsed) and _open_review(session, row) is None
+        # A review worker holds a review instead of the card's claim, but only of a task
+        # still on the board.
+        lost = card is None or ((not claimed or lapsed) and _open_review(session, row) is None)
         if lost:
             reason = (
                 "The claim expired before the worker reported again"

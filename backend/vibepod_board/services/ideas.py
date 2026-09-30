@@ -179,6 +179,8 @@ def _take_off_board(
     ).first()
     if archived:
         raise Conflict("Task is archived; unarchive its card before taking it off the board")
+    # Reviews go with the card too: without it no verdict can land.
+    end_open_reviews(session, idea.id, timestamp, "taken off the board", actor)
     claimed = session.exec(
         select(BoardCardRow).where(
             BoardCardRow.idea_id == idea.id, col(BoardCardRow.claimed_at).is_not(None)
