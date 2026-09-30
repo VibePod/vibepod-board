@@ -96,6 +96,7 @@ import {
   type Project,
   type ProjectBundle,
   type ReadinessEvent,
+  type RemovedWorkersResponse,
   type Worker,
   type WorkerListResponse,
 } from "../shared/types.js";
@@ -1558,11 +1559,45 @@ const App = () => {
     try {
       await api(`/api/workers/${worker.id}/stop`, { method: "POST" });
       setNotice(`Asked ${worker.name} to stop.`);
-      // An offline worker is signed off at once and its tasks go back to
+      // An offline worker is removed at once and its tasks go back to
       // Planned; the worker poll restarts below and would not notice.
       await loadState({ background: true }).catch(() => undefined);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to stop worker");
+    }
+    setWorkersVersion((version) => version + 1);
+  };
+
+  /** Removes an offline worker; tasks it still held go back to Planned. */
+  const removeWorker = async (worker: Worker) => {
+    setError("");
+    try {
+      await api(`/api/workers/${worker.id}`, { method: "DELETE" });
+      setNotice(`Removed ${worker.name}.`);
+      await loadState({ background: true }).catch(() => undefined);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to remove worker");
+    }
+    setWorkersVersion((version) => version + 1);
+  };
+
+  const removeOfflineWorkers = async () => {
+    if (!selectedProject) return;
+    setError("");
+    try {
+      const removed = await api<RemovedWorkersResponse>(
+        `/api/workers/remove-offline?projectId=${encodeURIComponent(selectedProject.id)}`,
+        { method: "POST" },
+      );
+      const count = removed.items.length;
+      setNotice(
+        `Removed ${count} offline ${count === 1 ? "worker" : "workers"}.`,
+      );
+      await loadState({ background: true }).catch(() => undefined);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to remove offline workers",
+      );
     }
     setWorkersVersion((version) => version + 1);
   };
@@ -1960,6 +1995,8 @@ const App = () => {
                 automation={automation ?? null}
                 onOpenTask={openTaskById}
                 onStop={stopWorker}
+                onRemove={removeWorker}
+                onRemoveOffline={removeOfflineWorkers}
                 onPause={pauseAutomation}
                 onResume={resumeAutomation}
               />
