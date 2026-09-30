@@ -18,8 +18,10 @@ from sqlmodel import Session, col, select
 
 from vibepod_board.access import AccessContext, AdminAccess, assert_can_access_project
 from vibepod_board.enums import (
+    ClaimMode,
     InstructionType,
     ReleaseOutcome,
+    ReviewVerdict,
     TaskEventKind,
     WorkerState,
     WorkerStatus,
@@ -31,18 +33,28 @@ from vibepod_board.services.automation import pause_reason
 from vibepod_board.services.claims import DEFAULT_LEASE_SECONDS, apply_release, lease_for
 from vibepod_board.services.common import (
     add_activity,
+    lock,
     new_id,
     normalize_optional_text,
     transactional,
 )
 from vibepod_board.services.history import actor_for
 from vibepod_board.services.listing import list_scope, scoped
+from vibepod_board.services.open_reviews import end_review
 from vibepod_board.services.references import (
     require_idea_ref,
     resolve_project_id,
     task_keys,
 )
-from vibepod_board.tables import BoardCardRow, IdeaRow, ProjectRow, TaskEventRow, WorkerRow
+from vibepod_board.services.reviews import renew_reviews_of
+from vibepod_board.tables import (
+    BoardCardRow,
+    IdeaRow,
+    ProjectRow,
+    TaskEventRow,
+    TaskReviewRow,
+    WorkerRow,
+)
 
 # Workers not seen for this long are left out of the list, and pruned after the retention.
 WORKER_LIST_WINDOW = timedelta(hours=24)
@@ -81,6 +93,7 @@ def workers_from_rows(
             name=row.name,
             agent=row.agent,
             machine=row.machine,
+            mode=ClaimMode(row.mode),
             status=_state(row, timestamp, timing),
             status_reason=row.status_reason,
             task_id=row.idea_id,
@@ -167,9 +180,12 @@ def register_worker(
     agent: str | None = None,
     machine: str | None = None,
     timing: WorkerTiming | None = None,
+    mode: ClaimMode = ClaimMode.IMPLEMENT,
 ) -> WorkerSession:
-    """Connects a worker to a project. It shows up as idle right away."""
+    """Connects a worker to a project. It shows up as idle right away. `mode` says whether it
+    implements planned tasks or reviews tasks in Review."""
     timing = timing or WorkerTiming()
+    mode = ClaimMode(mode)
     name = (name or "").strip()
     if not name:
         raise BadRequest("Worker name is required")
@@ -219,6 +235,7 @@ def register_worker(
         name=name,
         agent=(agent or "").strip(),
         machine=(machine or "").strip(),
+        mode=mode,
         status=WorkerStatus.IDLE,
         started_at=timestamp,
         last_seen_at=timestamp,
@@ -235,9 +252,11 @@ def register_worker(
 
 
 def _renew_claims(session: Session, row: WorkerRow, expires_at: datetime) -> None:
-    """Keeps the claims the worker holds alive. `updated_at` is left alone, like any
-    renewal. A claim whose lease already ran out stays over: the sweep ends it and counts the
-    attempt, as it does for a report from its holder (see `claims._held`)."""
+    """Keeps the claims and reviews the worker holds alive. `updated_at` is left alone, like
+    any renewal. A claim whose lease already ran out stays over: the sweep ends it and counts
+    the attempt, as it does for a report from its holder (see `claims._held`)."""
+    session.flush()
+    renew_reviews_of(session, row.project_id, row.name, expires_at, row.id)
     session.execute(
         update(BoardCardRow)
         .where(
@@ -258,7 +277,10 @@ def _lost_claim_reason(session: Session, idea_id: str) -> str:
         .order_by(col(TaskEventRow.created_at).desc(), col(TaskEventRow.id).desc())
         .limit(1)
     ).first()
-    if event is not None and event.kind != TaskEventKind.CLAIMED:
+    if event is not None and event.kind not in (
+        TaskEventKind.CLAIMED,
+        TaskEventKind.REVIEW_STARTED,
+    ):
         return event.message
     return "The task is no longer claimed by this worker"
 
@@ -279,18 +301,25 @@ def instructions_for(session: Session, row: WorkerRow) -> list[WorkerInstruction
             WorkerInstruction(type=InstructionType.STOP, reason="Stopped from the board")
         )
     if row.status == WorkerStatus.WORKING and row.idea_id:
-        card = session.exec(select(BoardCardRow).where(BoardCardRow.idea_id == row.idea_id)).first()
-        # A lease that ran out is lost too, even before the sweep ends it (see `claims._held`):
-        # the task may be handed to another runner at any moment.
-        lapsed = card is not None and (
-            card.claim_expires_at is None or card.claim_expires_at <= now()
-        )
-        if card is None or card.claimed_at is None or card.assignee != row.name or lapsed:
+        if row.mode == ClaimMode.REVIEW:
+            lost = _open_review(session, row) is None
+            reason = _lost_claim_reason(session, row.idea_id)
+        else:
+            card = session.exec(
+                select(BoardCardRow).where(BoardCardRow.idea_id == row.idea_id)
+            ).first()
+            # A lease that ran out is lost too, even before the sweep ends it (see
+            # `claims._held`): the task may be handed to another runner at any moment.
+            lapsed = card is not None and (
+                card.claim_expires_at is None or card.claim_expires_at <= now()
+            )
+            lost = card is None or card.claimed_at is None or card.assignee != row.name or lapsed
             reason = (
                 "The claim expired before the worker reported again"
                 if lapsed and card is not None and card.claimed_at is not None
                 else _lost_claim_reason(session, row.idea_id)
             )
+        if lost:
             instructions.append(
                 WorkerInstruction(
                     type=InstructionType.CANCEL,
@@ -300,6 +329,16 @@ def instructions_for(session: Session, row: WorkerRow) -> list[WorkerInstruction
                 )
             )
     return instructions
+
+
+def _open_review(session: Session, row: WorkerRow) -> TaskReviewRow | None:
+    return session.exec(
+        select(TaskReviewRow).where(
+            TaskReviewRow.idea_id == row.idea_id,
+            TaskReviewRow.reviewer == row.name,
+            col(TaskReviewRow.ended_at).is_(None),
+        )
+    ).first()
 
 
 @transactional
@@ -421,7 +460,28 @@ def _sign_off(
         except Conflict:
             # The claim ended since it was listed, such as by a cancel from the board.
             continue
+    _release_reviews(session, row, timestamp)
     session.flush()
+
+
+def _release_reviews(session: Session, row: WorkerRow, timestamp: datetime) -> None:
+    """Ends the open reviews of a worker that signs off; the reviewer may take them again."""
+    held = session.exec(
+        select(TaskReviewRow.id, TaskReviewRow.idea_id).where(
+            TaskReviewRow.project_id == row.project_id,
+            TaskReviewRow.reviewer == row.name,
+            col(TaskReviewRow.ended_at).is_(None),
+        )
+    ).all()
+    for review_id, idea_id in held:
+        # Task, card, then review: the order the verdicts take.
+        lock(session, IdeaRow, idea_id)
+        for card_id in session.exec(select(BoardCardRow.id).where(BoardCardRow.idea_id == idea_id)):
+            lock(session, BoardCardRow, card_id)
+        review = lock(session, TaskReviewRow, review_id)
+        if review.ended_at is None:
+            reason = f"worker {row.name} signed off"
+            end_review(session, review, timestamp, reason, row.name, ReviewVerdict.RELEASED)
 
 
 @transactional

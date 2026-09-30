@@ -16,9 +16,11 @@ from pydantic import (
 
 from vibepod_board.enums import (
     BoardColumn,
+    ClaimMode,
     DocumentKind,
     IdeaStatus,
     ReleaseOutcome,
+    ReviewVerdict,
     RunOutcome,
     WorkerStatus,
     WorkerStep,
@@ -26,6 +28,12 @@ from vibepod_board.enums import (
 from vibepod_board.schemas import ApiModel
 from vibepod_board.services.claims import MAX_LEASE_SECONDS, MIN_LEASE_SECONDS
 from vibepod_board.services.listing import BATCH_LIMIT
+from vibepod_board.services.open_reviews import (
+    MAX_REQUIRED_APPROVALS,
+    MAX_REVIEW_ROUNDS,
+    MIN_REQUIRED_APPROVALS,
+    MIN_REVIEW_ROUNDS,
+)
 from vibepod_board.services.runs import COMMIT_LIMIT
 
 
@@ -58,13 +66,26 @@ class LoginRequest(ApiModel):
     password: StrictStr
 
 
-class ProjectCreate(ApiModel):
+RequiredApprovals = Annotated[
+    StrictInt, Field(ge=MIN_REQUIRED_APPROVALS, le=MAX_REQUIRED_APPROVALS)
+]
+MaxReviewRounds = Annotated[StrictInt, Field(ge=MIN_REVIEW_ROUNDS, le=MAX_REVIEW_ROUNDS)]
+
+
+class ProjectSettings(ApiModel):
+    # Approvals a task needs for its head commit to move to PR ready.
+    required_approvals: RequiredApprovals | None = None
+    # Rework verdicts in a row after which a task is blocked for a human.
+    max_review_rounds: MaxReviewRounds | None = None
+
+
+class ProjectCreate(ProjectSettings):
     key: ProjectKey
     title: RequiredText
     summary: StrictStr = ""
 
 
-class ProjectUpdate(ApiModel):
+class ProjectUpdate(ProjectSettings):
     key: ProjectKey | None = None
     title: RequiredText | None = None
     summary: StrictStr | None = None
@@ -172,6 +193,8 @@ class ClaimRequest(ApiModel):
     )
     # How long the claim lasts unless renewed; the server default applies when omitted.
     lease_seconds: LeaseSeconds | None = None
+    # implement takes a planned task; review takes a task in Review for a review.
+    mode: ClaimMode = ClaimMode.IMPLEMENT
 
 
 class RenewClaimRequest(ApiModel):
@@ -179,9 +202,14 @@ class RenewClaimRequest(ApiModel):
     lease_seconds: LeaseSeconds | None = None
 
 
+HeadSha = Annotated[StrictStr, Field(pattern=r"^\s*[0-9a-fA-F]{4,64}\s*$")]
+
+
 class HandoverRequest(ApiModel):
     assignee: RequiredText
     branch_name: RequiredText | None = None
+    # The commit the branch ends at; reviews and approvals are bound to it.
+    head_sha: HeadSha | None = None
     note: StrictStr | None = None
     expected_updated_at: RequiredText | None = None
 
@@ -229,6 +257,8 @@ class WorkerRegistration(ApiModel):
     name: RequiredText
     agent: StrictStr = ""
     machine: StrictStr = ""
+    # implement or review: what the worker claims tasks for.
+    mode: ClaimMode = ClaimMode.IMPLEMENT
 
 
 class HeartbeatRequest(ApiModel):
@@ -288,3 +318,22 @@ class ReworkRequest(ApiModel):
     feedback: RequiredText
     # Refuses the feedback (409) when the card changed since this updatedAt.
     expected_updated_at: RequiredText | None = None
+
+
+class ReviewRequest(ApiModel):
+    # The reviewer holding the review.
+    assignee: RequiredText
+    verdict: ReviewVerdict
+    # The commit reviewed, from the claim; a verdict for another commit is refused (409).
+    head_sha: HeadSha | None = None
+    # The feedback for rework, the question for needs_input, else an optional note.
+    note: StrictStr | None = None
+
+
+class RenewReviewRequest(ApiModel):
+    assignee: RequiredText
+    lease_seconds: LeaseSeconds | None = None
+
+
+class CancelReviewRequest(ApiModel):
+    reason: StrictStr | None = None

@@ -39,6 +39,7 @@ def register_worker(
         body.agent,
         body.machine,
         worker_timing(settings),
+        body.mode,
     )
 
 

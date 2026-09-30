@@ -16,9 +16,11 @@ from pydantic.alias_generators import to_camel
 
 from vibepod_board.enums import (
     BoardColumn,
+    ClaimMode,
     DocumentKind,
     IdeaStatus,
     InstructionType,
+    ReviewVerdict,
     RunOutcome,
     TaskEventKind,
     WorkerState,
@@ -58,6 +60,10 @@ class Project(ApiModel):
     key: str
     title: str
     summary: str
+    # Approvals a task needs for its head commit to move to PR ready, and rework verdicts in
+    # a row after which it is blocked for a human.
+    required_approvals: int = 1
+    max_review_rounds: int = 3
     created_at: Timestamp
     updated_at: Timestamp
 
@@ -134,6 +140,11 @@ class BoardCard(ApiModel):
     blocked_reason: str | None = None
     # The agent's question while the task waits for an answer.
     question: str | None = None
+    # The commit the last hand-over put up for review, and when; reviews are bound to it.
+    head_sha: str | None = None
+    handed_over_at: Timestamp | None = None
+    # Rework verdicts in a row since the card was last moved by hand or approved.
+    review_rounds: int = 0
     created_at: Timestamp
     updated_at: Timestamp
 
@@ -256,10 +267,52 @@ class Claim(ApiModel):
     card: KeyedBoardCard
 
 
+class TaskReview(ApiModel):
+    """A review claim and, once given, its verdict."""
+
+    id: str
+    idea_id: str
+    task_key: str | None = None
+    project_id: str
+    reviewer: str
+    worker_id: str | None = None
+    # The commit under review; a verdict must name it.
+    head_sha: str | None = None
+    lease_expires_at: Timestamp
+    open: bool
+    # Left out while open, and when the review ended without one (expired or cancelled).
+    verdict: ReviewVerdict | None = None
+    feedback: str | None = None
+    ended_reason: str | None = None
+    ended_at: Timestamp | None = None
+    created_at: Timestamp
+    updated_at: Timestamp
+
+
+class ReviewState(ApiModel):
+    """Where a task stands with its reviewers: approvals for the current head commit against
+    the project's requirement, open reviews, and every review, newest first."""
+
+    task_id: str
+    task_key: str | None = None
+    column: BoardColumn | None = None
+    head_sha: str | None = None
+    required_approvals: int
+    # Distinct reviewers that approved the current head commit.
+    approvals: int
+    approved_by: list[str]
+    open_reviews: int
+    review_rounds: int
+    max_review_rounds: int
+    items: list[TaskReview]
+
+
 class ClaimResult(ApiModel):
     claimed: bool
     # The claimed task and its card; left out when nothing was claimed.
     item: Claim | None = None
+    # A review claim: the review to report the verdict on, with the head commit to review.
+    review: TaskReview | None = None
     # Why nothing was claimed.
     reason: str | None = None
     # True when nothing was claimed because automation of the project is paused.
@@ -335,6 +388,7 @@ class Worker(ApiModel):
     name: str
     agent: str
     machine: str
+    mode: ClaimMode = ClaimMode.IMPLEMENT
     # offline once the heartbeats stopped or the worker signed off.
     status: WorkerState
     status_reason: str | None = None

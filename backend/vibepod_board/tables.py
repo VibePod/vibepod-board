@@ -65,6 +65,14 @@ class ProjectRow(SQLModel, table=True):
     # Set while automation is paused: claims are refused and workers are told to pause.
     automation_paused_at: datetime | None = _timestamp(nullable=True)
     automation_paused_reason: str | None = _text()
+    # Review workers: the approvals a task needs for its head commit to move to PR ready, and
+    # the rework verdicts in a row after which it is blocked for a human.
+    required_approvals: int = Field(
+        default=1, sa_column=Column(Integer, nullable=False, server_default=text("1"))
+    )
+    max_review_rounds: int = Field(
+        default=3, sa_column=Column(Integer, nullable=False, server_default=text("3"))
+    )
     created_at: datetime = _timestamp()
     updated_at: datetime = _timestamp()
 
@@ -181,6 +189,14 @@ class BoardCardRow(SQLModel, table=True):
     blocked_reason: str | None = _text()
     # The agent's question while the task waits for an answer; it is blocked meanwhile.
     question: str | None = _text()
+    # The commit the last hand-over put up for review, and when that was: reviews and their
+    # approvals are bound to it.
+    head_sha: str | None = _text()
+    handed_over_at: datetime | None = _timestamp(nullable=True)
+    # Rework verdicts in a row; reset by an approval to PR ready or a move by hand.
+    review_rounds: int = Field(
+        default=0, sa_column=Column(Integer, nullable=False, server_default=text("0"))
+    )
     created_at: datetime = _timestamp()
     updated_at: datetime = _timestamp()
 
@@ -211,6 +227,8 @@ class WorkerRow(SQLModel, table=True):
     name: str = Field(sa_column=Column(Text, nullable=False))
     agent: str = _text("")
     machine: str = _text("")
+    # implement or review: what the worker claims tasks for.
+    mode: str = _text("implement")
     # idle, working or paused, as last reported; offline is derived from `last_seen_at`.
     status: str = _text("idle")
     status_reason: str | None = _text()
@@ -223,6 +241,39 @@ class WorkerRow(SQLModel, table=True):
     stopped_at: datetime | None = _timestamp(nullable=True)
     # Asked from the board to stop; the worker learns it with its next heartbeat.
     stop_requested_at: datetime | None = _timestamp(nullable=True)
+
+
+class TaskReviewRow(SQLModel, table=True):
+    """A review claim: a reviewer judging the head commit of a task in Review. Several can be
+    open on one task at once, so they live here rather than in the card's holder fields."""
+
+    __tablename__ = "task_reviews"
+    __table_args__ = (
+        Index("task_reviews_idea_idx", "idea_id", text("created_at DESC")),
+        Index(
+            "task_reviews_open_idx",
+            "project_id",
+            "lease_expires_at",
+            postgresql_where=text("ended_at IS NULL"),
+        ),
+    )
+
+    id: str = Field(sa_column=Column(Text, primary_key=True))
+    idea_id: str = _foreign_key("ideas.id", "CASCADE")
+    project_id: str = _foreign_key("projects.id", "CASCADE")
+    reviewer: str = Field(sa_column=Column(Text, nullable=False))
+    worker_id: str | None = _foreign_key("workers.id", "SET NULL", nullable=True)
+    head_sha: str | None = _text()
+    # The lease, renewed like a claim's; the review is open until `ended_at`.
+    lease_expires_at: datetime = _timestamp()
+    # approve, rework, needs_input, failed or released; none when it expired or was cancelled.
+    verdict: str | None = _text()
+    feedback: str | None = _text()
+    # Why a review ended without a verdict, such as an expired lease.
+    ended_reason: str | None = _text()
+    ended_at: datetime | None = _timestamp(nullable=True)
+    created_at: datetime = _timestamp()
+    updated_at: datetime = _timestamp()
 
 
 class TaskRunRow(SQLModel, table=True):

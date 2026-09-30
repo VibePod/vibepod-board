@@ -39,6 +39,7 @@ from vibepod_board.services.listing import (
     scoped,
     with_cursor,
 )
+from vibepod_board.services.open_reviews import end_open_reviews
 from vibepod_board.services.references import require_card_ref, resolve_project_id
 from vibepod_board.tables import BoardCardRow, IdeaRow
 
@@ -233,11 +234,17 @@ def _apply_manual_move(
     timestamp: datetime,
     actor: str,
 ) -> None:
-    """A column written outside the claim calls. It ends an automated claim, since the runner
-    no longer owns where the card is; leaving Planned drops the blocked state; and putting a
-    card in Planned by hand, even the Planned it already sits in, unblocks it and resets its
-    failed attempts, so it can be claimed again."""
+    """A column written outside the claim calls. It ends an automated claim and the open
+    reviews, since their holders no longer own where the card is; leaving Planned drops the
+    blocked state; and putting a card in Planned by hand, even the Planned it already sits in,
+    unblocks it and resets its failed attempts, so it can be claimed again. Any move by hand
+    also resets the review rounds."""
     moved = column != card.column_name
+    if moved and card.idea_id:
+        where = column.value.replace("_", " ")
+        end_open_reviews(session, card.idea_id, timestamp, f"moved to {where}", actor)
+    if moved or column == BoardColumn.PLANNED:
+        card.review_rounds = 0
     if card.claimed_at is not None and (moved or column == BoardColumn.PLANNED):
         holder = card.assignee
         card.claimed_at = None

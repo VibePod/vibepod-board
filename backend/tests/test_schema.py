@@ -45,6 +45,7 @@ def test_creates_board_and_token_tables(db: Engine) -> None:
         "projects",
         "task_dependencies",
         "task_events",
+        "task_reviews",
         "task_runs",
         "workers",
     ]

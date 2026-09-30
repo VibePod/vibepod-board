@@ -37,6 +37,31 @@ class ReleaseOutcome(StrEnum):
     NEEDS_INPUT = "needs_input"
 
 
+class ClaimMode(StrEnum):
+    """What a claim is for, and the mode a worker runs in."""
+
+    # Take a planned task and do the work.
+    IMPLEMENT = "implement"
+    # Take a task in Review and decide whether its branch needs rework or is ready for a PR.
+    REVIEW = "review"
+
+
+class ReviewVerdict(StrEnum):
+    """How a reviewer ends its review."""
+
+    # The work is good; enough approvals for the head commit move the task to PR ready.
+    APPROVE = "approve"
+    # The work needs changes; the task goes back to Planned with the feedback.
+    REWORK = "rework"
+    # The reviewer cannot decide without a human; the card is blocked in Review with the
+    # question.
+    NEEDS_INPUT = "needs_input"
+    # The review itself failed; the card stays in Review for other reviewers.
+    FAILED = "failed"
+    # The reviewer stops without judging, e.g. on shutdown; it may review the task again.
+    RELEASED = "released"
+
+
 class TaskEventKind(StrEnum):
     CLAIMED = "claimed"
     HANDED_OVER = "handed_over"
@@ -54,8 +79,14 @@ class TaskEventKind(StrEnum):
     QUESTION = "question"
     ANSWER = "answer"
     FEEDBACK = "feedback"
-    # A reviewer moved the card from Review to PR ready.
+    # Review workers: a review claim taken, an approval, and a verdict sending the task back.
+    # Each names the reviewer and the head commit it reviewed. An approval is also recorded
+    # when someone moves the card from Review to PR ready.
+    REVIEW_STARTED = "review_started"
     APPROVED = "approved"
+    REWORK_REQUESTED = "rework_requested"
+    # A review that ended without a verdict: expired, cancelled, released or failed.
+    REVIEW_ENDED = "review_ended"
     # The task's pull request: opened from the board, or linked and unlinked by URL.
     PR_OPENED = "pr_opened"
     PR_LINKED = "pr_linked"

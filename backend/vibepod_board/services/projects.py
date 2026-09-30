@@ -1,6 +1,6 @@
 from sqlmodel import Session, col, select
 
-from vibepod_board.access import AccessContext, AdminAccess
+from vibepod_board.access import AccessContext, AdminAccess, assert_can_access_project
 from vibepod_board.errors import Conflict
 from vibepod_board.schemas import Project, now
 from vibepod_board.services.common import (
@@ -12,6 +12,7 @@ from vibepod_board.services.common import (
     require_project,
     transactional,
 )
+from vibepod_board.services.open_reviews import validate_review_settings
 from vibepod_board.services.references import resolve_project_id
 from vibepod_board.tables import ProjectRow
 
@@ -38,9 +39,17 @@ def _assert_key_available(session: Session, key: str, current_id: str | None = N
 
 
 @transactional
-def create_project(session: Session, key: str, title: str, summary: str | None = None) -> Project:
+def create_project(
+    session: Session,
+    key: str,
+    title: str,
+    summary: str | None = None,
+    required_approvals: int | None = None,
+    max_review_rounds: int | None = None,
+) -> Project:
     assert_title(title, "Project")
     key = normalize_project_key(key)
+    validate_review_settings(required_approvals, max_review_rounds)
     timestamp = now()
     _assert_key_available(session, key)
     row = ProjectRow(
@@ -51,6 +60,7 @@ def create_project(session: Session, key: str, title: str, summary: str | None =
         created_at=timestamp,
         updated_at=timestamp,
     )
+    _apply_review_settings(row, required_approvals, max_review_rounds)
     session.add(row)
     session.flush()
     add_activity(session, "project.created", f"Created project: {row.title}", timestamp)
@@ -64,8 +74,12 @@ def update_project(
     key: str | None = None,
     title: str | None = None,
     summary: str | None = None,
+    required_approvals: int | None = None,
+    max_review_rounds: int | None = None,
 ) -> Project:
     row = require_project(session, project_id)
+    validate_review_settings(required_approvals, max_review_rounds)
+    _apply_review_settings(row, required_approvals, max_review_rounds)
     if key is not None:
         key = normalize_project_key(key)
         _assert_key_available(session, key, row.id)
@@ -79,6 +93,44 @@ def update_project(
     row.updated_at = timestamp
     session.flush()
     add_activity(session, "project.updated", f"Updated project: {row.title}", timestamp)
+    return project_from_row(row)
+
+
+def _apply_review_settings(
+    row: ProjectRow, required_approvals: int | None, max_review_rounds: int | None
+) -> None:
+    if required_approvals is not None:
+        row.required_approvals = required_approvals
+    if max_review_rounds is not None:
+        row.max_review_rounds = max_review_rounds
+
+
+@transactional
+def update_project_settings(
+    session: Session,
+    access: AccessContext,
+    project: str,
+    required_approvals: int | None = None,
+    max_review_rounds: int | None = None,
+) -> Project:
+    """Changes how review workers treat the project's tasks: the approvals a task needs for
+    its head commit, and the rework verdicts in a row after which it is blocked. Unlike the
+    rest of the project, any caller with access to the project may change them. A new
+    requirement applies from the next verdict on."""
+    validate_review_settings(required_approvals, max_review_rounds)
+    project_id = resolve_project_id(session, project)
+    assert_can_access_project(access, project_id)
+    row = session.exec(
+        select(ProjectRow)
+        .where(ProjectRow.id == project_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one()
+    _apply_review_settings(row, required_approvals, max_review_rounds)
+    timestamp = now()
+    row.updated_at = timestamp
+    session.flush()
+    add_activity(session, "project.updated", f"Updated review settings of {row.key}", timestamp)
     return project_from_row(row)
 
 

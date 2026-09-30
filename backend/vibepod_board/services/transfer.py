@@ -9,7 +9,7 @@ from vibepod_board.bundle import ProjectBundle, parse_project_bundle
 from vibepod_board.enums import BoardColumn
 from vibepod_board.errors import Conflict
 from vibepod_board.github import normalize_repository
-from vibepod_board.schemas import ImportProjectResult, Project, format_timestamp, now
+from vibepod_board.schemas import ImportProjectResult, format_timestamp, now
 from vibepod_board.services.board import list_cards
 from vibepod_board.services.common import (
     add_activity,
@@ -50,7 +50,12 @@ AUTOMATION_CARD_FIELDS = {
     "blocked_at",
     "blocked_reason",
     "question",
+    "head_sha",
+    "handed_over_at",
+    "review_rounds",
 }
+# Review settings are how a board automates the project, not part of the project's content.
+AUTOMATION_PROJECT_FIELDS = {"required_approvals", "max_review_rounds"}
 
 
 def export_project(session: Session, project_id: str) -> ProjectBundle:
@@ -71,7 +76,7 @@ def export_project(session: Session, project_id: str) -> ProjectBundle:
         {
             "bundleVersion": 4,
             "exportedAt": format_timestamp(now()),
-            "project": project.model_dump(mode="json"),
+            "project": project.model_dump(mode="json", exclude=AUTOMATION_PROJECT_FIELDS),
             "ideas": [idea.model_dump(mode="json") for idea in ideas],
             "boardCards": [
                 card.model_dump(mode="json", exclude=AUTOMATION_CARD_FIELDS) for card in cards
@@ -255,13 +260,9 @@ def import_project(
         )
         session.flush()
     _insert_children(session, bundle, destination)
-    imported = session.get(ProjectRow, destination)
-    if imported is not None:
-        highest = max((idea.task_number for idea in bundle.ideas), default=0)
-        imported.last_task_number = max(imported.last_task_number, highest)
+    imported = require_project(session, destination)
+    highest = max((idea.task_number for idea in bundle.ideas), default=0)
+    imported.last_task_number = max(imported.last_task_number, highest)
     add_activity(session, "project.imported", f"Imported project: {bundle.project.title}")
-
-    project = Project.model_validate(bundle.project.model_dump())
-    return ImportProjectResult(
-        item=project.model_copy(update={"id": destination}), replaced=existing is not None
-    )
+    # A replaced project keeps its review settings.
+    return ImportProjectResult(item=project_from_row(imported), replaced=existing is not None)

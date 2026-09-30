@@ -2,7 +2,7 @@ import json
 
 from fastapi import APIRouter, Response, status
 
-from vibepod_board.api.models import PauseRequest, ProjectCreate, ProjectUpdate
+from vibepod_board.api.models import PauseRequest, ProjectCreate, ProjectSettings, ProjectUpdate
 from vibepod_board.api.responses import Item, Items
 from vibepod_board.auth import AccessDep, AdminDep
 from vibepod_board.bundle import ImportProjectRequest
@@ -29,7 +29,16 @@ def import_project(
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_project(body: ProjectCreate, session: SessionDep, _admin: AdminDep) -> Item[Project]:
-    return Item(item=projects.create_project(session, body.key, body.title, body.summary))
+    return Item(
+        item=projects.create_project(
+            session,
+            body.key,
+            body.title,
+            body.summary,
+            body.required_approvals,
+            body.max_review_rounds,
+        )
+    )
 
 
 @router.patch("/{project_id}")
@@ -38,6 +47,16 @@ def update_project(
 ) -> Item[Project]:
     changes = body.model_dump(exclude_unset=True, by_alias=False)
     return Item(item=projects.update_project(session, project_id, **changes))
+
+
+@router.patch("/{project_id}/settings")
+def update_project_settings(
+    project_id: str, body: ProjectSettings, session: SessionDep, access: AccessDep
+) -> Item[Project]:
+    """The review settings, for any caller with access to the project: `requiredApprovals`
+    (1 to 5) and `maxReviewRounds` (1 to 10)."""
+    changes = body.model_dump(exclude_unset=True, by_alias=False)
+    return Item(item=projects.update_project_settings(session, access, project_id, **changes))
 
 
 @router.get("/{project_id}/export")
