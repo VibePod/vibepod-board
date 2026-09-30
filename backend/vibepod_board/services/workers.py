@@ -251,6 +251,9 @@ def heartbeat(
     row = require_worker(session, access, worker_id, for_update=True)
     if row.stopped_at is not None:
         raise Conflict(f"Worker {row.name} is signed off; register again to reconnect")
+    reason = normalize_optional_text(status_reason)
+    if status == WorkerStatus.PAUSED and not reason:
+        raise BadRequest("A paused worker must say why: statusReason is required")
     timestamp = now()
     idea = None
     if status == WorkerStatus.WORKING:
@@ -273,7 +276,7 @@ def heartbeat(
         row.step = None
         row.task_started_at = None
     row.status = status
-    row.status_reason = normalize_optional_text(status_reason)
+    row.status_reason = reason
     row.last_seen_at = timestamp
     _renew_claims(session, row, timestamp + lease)
     return _session_reply(session, row, timing, instructions_for(session, row))

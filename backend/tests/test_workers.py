@@ -209,6 +209,14 @@ def test_heartbeats_leave_a_lapsed_claim_over(session: Session, vp) -> None:
     assert board.get_card(session, ADMIN, task.id).column == BoardColumn.PLANNED
 
 
+def test_pausing_without_a_reason_is_refused(session: Session, vp) -> None:
+    worker = register(session).item
+
+    for reason in (None, "  "):
+        with pytest.raises(BadRequest, match="statusReason is required"):
+            workers.heartbeat(session, ADMIN, worker.id, WorkerStatus.PAUSED, status_reason=reason)
+
+
 def test_heartbeats_leave_other_holders_claims_alone(session: Session, vp) -> None:
     planned(session, vp, "Someone else's")
     worker = register(session).item
