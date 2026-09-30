@@ -322,16 +322,11 @@ describe("connected workers", () => {
     }
   });
 
-  it("offers Stop for a silent worker that never signed off", async () => {
+  it("offers Stop for connected workers and Remove for offline ones", async () => {
     await renderBoard({
       workers: [
-        worker({ id: "silent", name: "silent@box", status: "offline" }),
-        worker({
-          id: "gone",
-          name: "gone@box",
-          status: "offline",
-          stoppedAt: timestamp,
-        }),
+        worker({ id: "live", name: "live@box", status: "idle" }),
+        worker({ id: "silent-1", name: "silent@box", status: "offline" }),
         worker({
           id: "unanswered",
           name: "unanswered@box",
@@ -349,21 +344,68 @@ describe("connected workers", () => {
     });
 
     await userEvent.click(
-      await screen.findByRole("button", { name: /1 worker/ }),
+      await screen.findByRole("button", { name: /2 workers/ }),
     );
     const dialog = await screen.findByRole("dialog", { name: "Workers" });
     expect(
-      within(dialog).getByRole("button", { name: "Stop silent@box" }),
+      within(dialog).getByRole("button", { name: "Stop live@box" }),
     ).toBeTruthy();
     expect(
-      within(dialog).queryByRole("button", { name: "Stop gone@box" }),
+      within(dialog).queryByRole("button", { name: /^Remove live@box/ }),
     ).toBeNull();
     expect(
-      within(dialog).getByRole("button", { name: "Stop unanswered@box" }),
+      within(dialog).queryByRole("button", { name: "Stop silent@box" }),
+    ).toBeNull();
+    expect(
+      within(dialog).getByRole("button", { name: "Remove silent@box (silent-1)" }),
+    ).toBeTruthy();
+    expect(
+      within(dialog).getByRole("button", {
+        name: "Remove unanswered@box (unanswer)",
+      }),
     ).toBeTruthy();
     expect(
       within(dialog).queryByRole("button", { name: "Stop stopping@box" }),
     ).toBeNull();
+  });
+
+  it("tells restarts under one name apart", async () => {
+    await renderBoard({
+      workers: [
+        worker({
+          id: "4f9d2c1e-0000-4000-8000-000000000000",
+          name: "codex@host",
+          status: "working",
+          taskId: "idea-1",
+          taskKey: "VP-1",
+          taskTitle: "Automated login",
+          instance: "3f2a9c1b77d0",
+          runId: "vp-task-42",
+          startedAt: new Date(Date.now() - 120_000).toISOString(),
+        }),
+        worker({
+          id: "8a7b6c5d-0000-4000-8000-000000000000",
+          name: "codex@host",
+          status: "offline",
+          startedAt: new Date(Date.now() - 3 * 3_600_000).toISOString(),
+        }),
+      ],
+      columns: inProgress(),
+    });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: /1 worker/ }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Workers" });
+    const instances = Array.from(
+      dialog.querySelectorAll(".worker-instance"),
+    ).map((line) => line.textContent);
+    expect(instances).toEqual([
+      "3f2a9c1b77d0 · started 2 min ago",
+      "8a7b6c5d · started 3 h ago",
+    ]);
+    const runId = within(dialog).getByText("vp-task-42");
+    expect(runId.getAttribute("title")).toBe("vp task logs vp-task-42");
   });
 
   it("offers the automation controls before any worker connects", async () => {

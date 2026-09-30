@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   formatElapsed,
   formatLastSeen,
+  offlineWorkers,
   onlineWorkers,
   workerActivitySignature,
+  workerInstanceLabel,
   workingWorkersByTask,
 } from "../src/client/workerUtils.js";
 import type { Worker } from "../src/shared/types.js";
@@ -59,5 +61,23 @@ describe("worker helpers", () => {
     expect(workerActivitySignature(done)).not.toBe(
       workerActivitySignature(before),
     );
+  });
+
+  it("labels a worker by its instance or the start of its id", () => {
+    expect(workerInstanceLabel(worker({ instance: "3f2a9c1b" }))).toBe(
+      "3f2a9c1b",
+    );
+    expect(
+      workerInstanceLabel(worker({ id: "4f9d2c1e-0000-4000-8000-0000" })),
+    ).toBe("4f9d2c1e");
+  });
+
+  it("splits workers into online and offline", () => {
+    const workers = [
+      worker({ id: "a", status: "working" }),
+      worker({ id: "b", status: "offline" }),
+    ];
+    expect(onlineWorkers(workers).map((item) => item.id)).toEqual(["a"]);
+    expect(offlineWorkers(workers).map((item) => item.id)).toEqual(["b"]);
   });
 });

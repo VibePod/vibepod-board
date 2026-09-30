@@ -3,6 +3,7 @@ import {
   Anchor,
   Badge,
   Button,
+  Code,
   Group,
   Modal,
   Paper,
@@ -10,14 +11,16 @@ import {
   Text,
   TextInput,
 } from "@mantine/core";
-import { Bot, Pause, Play, Square } from "lucide-react";
+import { Bot, Pause, Play, Square, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { AutomationState, Worker } from "../shared/types.js";
 import {
   elapsedSince,
   formatElapsed,
   formatLastSeen,
+  offlineWorkers,
   onlineWorkers,
+  workerInstanceLabel,
   workerStateColors,
   workerStateLabels,
   workerStepLabels,
@@ -79,12 +82,15 @@ type WorkersListProps = {
   onOpenTask: (taskId: string) => void;
   /** Asks a worker to stop; omitted where the list is read-only. */
   onStop?: (worker: Worker) => Promise<void>;
+  /** Removes an offline worker; omitted where the list is read-only. */
+  onRemove?: (worker: Worker) => Promise<void>;
 };
 
 export const WorkersList = ({
   workers,
   onOpenTask,
   onStop,
+  onRemove,
 }: WorkersListProps) => {
   const now = useNow();
   return (
@@ -110,6 +116,16 @@ export const WorkersList = ({
                     .filter(Boolean)
                     .join(" · ")}
                 </Text>
+                {/* Restarts under one name look alike otherwise. */}
+                <Text size="xs" c="dimmed" className="worker-instance">
+                  <span title={worker.instance ? "Instance" : "Worker id"}>
+                    {workerInstanceLabel(worker)}
+                  </span>
+                  {" · "}
+                  <span title={new Date(worker.startedAt).toLocaleString()}>
+                    started {formatLastSeen(worker.startedAt, now)}
+                  </span>
+                </Text>
               </Stack>
               <Group gap={6} wrap="nowrap">
                 <Badge
@@ -131,12 +147,9 @@ export const WorkersList = ({
                     {workerStateLabels[worker.status]}
                   </Badge>
                 )}
-                {/* A silent worker that never signed off still holds its claims; stopping
-                    it signs it off and gives them back, also after an earlier stop request
-                    it went silent without answering. */}
                 {onStop &&
-                  !worker.stoppedAt &&
-                  (!worker.stopRequestedAt || worker.status === "offline") && (
+                  worker.status !== "offline" &&
+                  !worker.stopRequestedAt && (
                     <Button
                       type="button"
                       size="compact-xs"
@@ -149,6 +162,22 @@ export const WorkersList = ({
                       Stop
                     </Button>
                   )}
+                {/* A silent worker that never signed off still holds its claims; removing
+                    it gives them back, also after a stop request it went silent without
+                    answering. */}
+                {onRemove && worker.status === "offline" && (
+                  <Button
+                    type="button"
+                    size="compact-xs"
+                    variant="subtle"
+                    color="red"
+                    leftSection={<Trash2 size={10} aria-hidden />}
+                    aria-label={`Remove ${worker.name} (${workerInstanceLabel(worker)})`}
+                    onClick={() => void onRemove(worker)}
+                  >
+                    Remove
+                  </Button>
+                )}
               </Group>
             </Group>
             {worker.status === "paused" && worker.statusReason && (
@@ -176,6 +205,14 @@ export const WorkersList = ({
                   <Text size="xs" c="dimmed">
                     {formatElapsed(elapsedSince(worker.taskStartedAt, now))}
                   </Text>
+                )}
+                {worker.runId && (
+                  <Code
+                    className="worker-run-id"
+                    title={`vp task logs ${worker.runId}`}
+                  >
+                    {worker.runId}
+                  </Code>
                 )}
               </Group>
             )}
@@ -255,9 +292,77 @@ export const AutomationControl = ({
   );
 };
 
+type RemoveOfflineWorkersProps = {
+  count: number;
+  onRemoveOffline: () => Promise<void>;
+};
+
+/** Removes every offline worker of the list, once confirmed in place. */
+export const RemoveOfflineWorkers = ({
+  count,
+  onRemoveOffline,
+}: RemoveOfflineWorkersProps) => {
+  const [confirming, setConfirming] = useState(false);
+  if (count === 0) return null;
+  if (!confirming) {
+    return (
+      <Group justify="flex-end">
+        <Button
+          type="button"
+          size="xs"
+          variant="subtle"
+          color="red"
+          leftSection={<Trash2 size={14} aria-hidden />}
+          onClick={() => setConfirming(true)}
+        >
+          Remove offline workers
+        </Button>
+      </Group>
+    );
+  }
+  return (
+    <Alert
+      className="remove-offline-workers"
+      color="red"
+      variant="light"
+      title={`Remove ${count} offline ${count === 1 ? "worker" : "workers"}?`}
+    >
+      <Stack gap="xs" align="flex-start">
+        <Text size="sm">
+          Tasks they still hold go back to Planned. Their run reports and task
+          history stay.
+        </Text>
+        <Group gap="xs">
+          <Button
+            type="button"
+            size="xs"
+            color="red"
+            onClick={() => {
+              setConfirming(false);
+              void onRemoveOffline();
+            }}
+          >
+            Remove
+          </Button>
+          <Button
+            type="button"
+            size="xs"
+            variant="default"
+            onClick={() => setConfirming(false)}
+          >
+            Keep them
+          </Button>
+        </Group>
+      </Stack>
+    </Alert>
+  );
+};
+
 type WorkersIndicatorProps = WorkersListProps &
-  AutomationControlProps & {
+  AutomationControlProps &
+  Pick<RemoveOfflineWorkersProps, "onRemoveOffline"> & {
     onStop: (worker: Worker) => Promise<void>;
+    onRemove: (worker: Worker) => Promise<void>;
   };
 
 /**
@@ -270,6 +375,8 @@ export const WorkersIndicator = ({
   automation,
   onOpenTask,
   onStop,
+  onRemove,
+  onRemoveOffline,
   onPause,
   onResume,
 }: WorkersIndicatorProps) => {
@@ -311,6 +418,10 @@ export const WorkersIndicator = ({
             onPause={onPause}
             onResume={onResume}
           />
+          <RemoveOfflineWorkers
+            count={offlineWorkers(workers).length}
+            onRemoveOffline={onRemoveOffline}
+          />
           {workers.length === 0 ? (
             <Text c="dimmed" size="sm">
               No worker has connected in the last day.
@@ -319,6 +430,7 @@ export const WorkersIndicator = ({
             <WorkersList
               workers={workers}
               onStop={onStop}
+              onRemove={onRemove}
               onOpenTask={(taskId) => {
                 setOpened(false);
                 onOpenTask(taskId);

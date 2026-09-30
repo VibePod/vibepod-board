@@ -109,6 +109,8 @@ Opening and reading pull requests uses the same `GITHUB_TOKEN` as issue sync (se
 - `POST /api/workers/:id/heartbeat`
 - `POST /api/workers/:id/sign-off`
 - `POST /api/workers/:id/stop`
+- `DELETE /api/workers/:id`
+- `POST /api/workers/remove-offline`
 - `POST /api/board/:id/cancel`
 - `POST /api/board/:id/answer`
 - `GET /api/board/:id/reviews`
@@ -352,31 +354,35 @@ automating what:
   `name`, its `agent`, its `machine` and optionally its `instance`, a short id of the running
   worker process such as its container id. The worker appears in the board at once. Its name
   is the holder of the claims it takes: claim with `assignee` set to it. Registering a name
-  that is already connected to the project replaces and removes that registration, so a
-  restarted worker picks its claims back up.
+  again replaces and removes the earlier registration, so a restarted worker picks its claims
+  back up and the list does not fill with its old registrations.
 - **Heartbeat** every `heartbeatSeconds` with `POST /api/workers/:id/heartbeat`
   (`worker_heartbeat`): `status` is `idle`, `working` (naming its `task` and `step`:
-  `preparing_workspace`, `agent_running`, `verifying` or `handing_over`) or `paused` with a
-  `statusReason`, such as a reached usage limit. Every heartbeat renews the claims the worker
-  holds, so a running worker never loses its task to claim expiry. The reply carries
-  `instructions` for the worker.
+  `preparing_workspace`, `agent_running`, `verifying` or `handing_over`, and optionally the
+  `runId` of the agent container or task running it, as `vp task logs` takes it) or `paused`
+  with a `statusReason`, such as a reached usage limit. Every heartbeat renews the claims the
+  worker holds, so a running worker never loses its task to claim expiry. The reply carries
+  `instructions` for the worker. A worker that was removed gets 404.
 - **Sign off** with `POST /api/workers/:id/sign-off` (`sign_off_worker`) when stopping: the
   worker is removed from the board, and claims it still holds go back to Planned without
-  counting an attempt. A worker whose heartbeats stop is shown as offline after
-  `WORKER_OFFLINE_SECONDS`.
-- **Remove** an offline worker with `DELETE /api/workers/:id` (`remove_worker`), or all of them
-  with `POST /api/workers/remove-offline` (`remove_offline_workers`), or **Remove** and
-  **Remove offline workers** in the workers list. Claims it still holds go back to Planned
-  without counting an attempt. A worker that is still connected is refused: stop it first.
-  Removing a worker leaves its run reports and task history, which keep its name. Offline
-  workers nobody removes are pruned after seven days.
+  counting an attempt. The reply is its last state. A worker whose heartbeats stop is shown as
+  offline after `WORKER_OFFLINE_SECONDS`.
+- **Remove** an offline worker with `DELETE /api/workers/:id` (`remove_worker`), or every
+  offline worker of a project with `POST /api/workers/remove-offline?projectId=...`
+  (`remove_offline_workers`). Claims they still hold go back to Planned without counting an
+  attempt. A worker that is still connected is refused (409): stop it first. Workers that were
+  never removed, such as ones that crashed, are pruned a week after they were last seen.
+  Removing a worker leaves its run reports and task history alone; they keep its name.
 - `GET /api/workers?projectId=...` (`list_workers`) lists the workers seen in the last day with
-  their `instance`, status, task, step, `taskStartedAt` (how long they have been on the task),
-  the current run's `runId`, `startedAt` and `lastSeenAt`, limited to the caller's projects.
+  their status, `instance`, `startedAt`, task, step, `taskStartedAt` (how long they have been on
+  the task), `runId` and `lastSeenAt`, limited to the caller's projects.
 
 In the UI, a workers indicator in the project header opens the list, and a card being worked
-on shows the worker, its current step and the elapsed time. The indicator on the card goes
-away when the task moves on or the worker goes offline.
+on shows the worker, its current step and the elapsed time. The list tells workers under one
+name apart by their instance (or the start of their worker id) and when they started, shows
+the run id of a working worker, and offers **Remove** on offline workers and **Remove offline
+workers** for the whole list. The indicator on the card goes away when the task moves on or
+the worker goes offline.
 
 ### Questions and Rework
 
@@ -409,7 +415,7 @@ heartbeat, without another connection:
   and the workers list of one project (`automation`) report the state.
 - **Stop a worker** with **Stop** in the workers list, `POST /api/workers/:id/stop`
   (`stop_worker`): the reply carries `{"type": "stop"}`, and the worker gives its task back and
-  signs off, which removes it. A worker that is already offline gives up its claims and is
+  signs off, which removes it. A worker that is already offline has its claims released and is
   removed at once.
 - **Cancel a run** with **Cancel run** on a claimed card or in the task view,
   `POST /api/board/:id/cancel` (`cancel_task_run`): the task returns to Planned at once without
