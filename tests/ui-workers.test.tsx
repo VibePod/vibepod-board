@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -323,5 +329,44 @@ describe("connected workers", () => {
       ).toBe(true),
     );
     expect(document.querySelector(".workers-indicator")).toBeNull();
+  });
+
+  it("keeps the newest board when an older reload finishes last", async () => {
+    const scenario = { workers: [], columns: inProgress() };
+    const fetchMock = await renderBoard(scenario);
+    const baseline = fetchMock.getMockImplementation();
+    let releaseStale: (() => void) | undefined;
+    const renamed = (title: string): BoardColumns => ({
+      ...inProgress(),
+      in_progress: [
+        card({ id: "card-1", ideaId: "idea-1", title }),
+        card({ id: "card-2", ideaId: "idea-2", title: "Manual logout" }),
+      ],
+    });
+    let boardLoads = 0;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/board") {
+        boardLoads += 1;
+        if (boardLoads === 1) {
+          await new Promise<void>((resolve) => {
+            releaseStale = resolve;
+          });
+          return jsonResponse({ columns: renamed("Stale snapshot") });
+        }
+        return jsonResponse({ columns: renamed("Newest snapshot") });
+      }
+      return baseline?.(input) ?? jsonResponse({ error: "Not found" }, 404);
+    });
+
+    const refresh = screen.getByRole("button", { name: "Refresh" });
+    fireEvent.click(refresh);
+    await waitFor(() => expect(releaseStale).toBeDefined());
+    fireEvent.click(refresh);
+    await screen.findByText("Newest snapshot");
+    releaseStale?.();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(screen.getByText("Newest snapshot")).toBeTruthy();
+    expect(screen.queryByText("Stale snapshot")).toBeNull();
   });
 });

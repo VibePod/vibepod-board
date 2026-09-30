@@ -420,8 +420,13 @@ const App = () => {
   );
   const [workers, setWorkers] = useState<Worker[]>([]);
 
+  // Loads overlap (a worker poll reloads while a move reloads too); only the
+  // latest one may commit, so an older snapshot never replaces a newer one.
+  const loadGeneration = useRef(0);
+
   /** A background reload keeps the error banner: the user has not read it yet. */
   const loadState = async ({ background = false } = {}) => {
+    const generation = ++loadGeneration.current;
     if (!background) setError("");
     const [projects, ideas, board, archived, documents, github] =
       await Promise.all([
@@ -435,6 +440,7 @@ const App = () => {
         // Sync buttons stay disabled when the status cannot be read.
         api<GitHubStatus>("/api/github").catch(() => null),
       ]);
+    if (generation !== loadGeneration.current) return;
     setGitHubStatus(github);
     setState((prev) => ({
       projects: projects.items,
