@@ -2,13 +2,14 @@
 approvals against the project's requirement, rework, and the loop guard."""
 
 import threading
+from datetime import timedelta
 from typing import Any
 
 import pytest
 from conftest import call, login
 from fastapi.testclient import TestClient
 from fastmcp.exceptions import ToolError
-from sqlalchemy import Engine
+from sqlalchemy import Engine, text
 from sqlmodel import Session
 
 from vibepod_board.access import admin_access
@@ -579,6 +580,31 @@ def test_a_review_is_cancelled_from_the_board(session: Session, vp) -> None:
     assert reviews.review_state(session, ADMIN, task.id).open_reviews == 0
     assert card(session, task).column == BoardColumn.REVIEW
     assert card(session, task).attempts == 0
+
+
+def test_a_review_worker_on_its_review_gets_no_cancel(session: Session, vp) -> None:
+    task = in_review(session, vp, "Under review")
+    review(session, CLAUDE)
+    worker = workers.register_worker(session, ADMIN, "VP", CLAUDE, mode=ClaimMode.REVIEW).item
+
+    beat = workers.heartbeat(session, ADMIN, worker.id, WorkerStatus.WORKING, task=task.id)
+
+    assert beat.instructions == []
+
+
+def test_a_review_worker_whose_review_lapsed_is_told_to_cancel(session: Session, vp) -> None:
+    task = in_review(session, vp, "Review lapsed")
+    opened = review(session, CLAUDE).review
+    worker = workers.register_worker(session, ADMIN, "VP", CLAUDE, mode=ClaimMode.REVIEW).item
+    session.execute(
+        text("update task_reviews set lease_expires_at = :at where id = :id"),
+        {"at": now() - timedelta(seconds=1), "id": opened.id},
+    )
+    session.commit()
+
+    beat = workers.heartbeat(session, ADMIN, worker.id, WorkerStatus.WORKING, task=task.id)
+
+    assert [instruction.type for instruction in beat.instructions] == [InstructionType.CANCEL]
 
 
 def test_moving_a_card_by_hand_ends_its_reviews(session: Session, vp) -> None:

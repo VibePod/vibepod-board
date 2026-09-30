@@ -312,12 +312,12 @@ def instructions_for(session: Session, row: WorkerRow) -> list[WorkerInstruction
         )
         # A review worker holds a review instead of the card's claim.
         lost = (not claimed or lapsed) and _open_review(session, row) is None
-        reason = (
-            "The claim expired before the worker reported again"
-            if lapsed
-            else _lost_claim_reason(session, row.idea_id)
-        )
         if lost:
+            reason = (
+                "The claim expired before the worker reported again"
+                if lapsed
+                else _lost_claim_reason(session, row.idea_id)
+            )
             instructions.append(
                 WorkerInstruction(
                     type=InstructionType.CANCEL,
@@ -330,11 +330,14 @@ def instructions_for(session: Session, row: WorkerRow) -> list[WorkerInstruction
 
 
 def _open_review(session: Session, row: WorkerRow) -> TaskReviewRow | None:
+    """The worker's review of its task, while its lease lasts: a lapsed review is over even
+    before the sweep ends it, as a lapsed claim is."""
     return session.exec(
         select(TaskReviewRow).where(
             TaskReviewRow.idea_id == row.idea_id,
             TaskReviewRow.reviewer == row.name,
             col(TaskReviewRow.ended_at).is_(None),
+            col(TaskReviewRow.lease_expires_at) > now(),
         )
     ).first()
 
