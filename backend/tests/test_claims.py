@@ -839,6 +839,27 @@ def test_taking_a_claimed_task_off_the_board_frees_its_holder(session: Session, 
     assert claimed_key(claim(session, OTHER)) == "VP-1"
 
 
+def test_denying_a_claimed_task_ends_the_claim(session: Session, vp) -> None:
+    task = planned(session, vp, "Denied midway")
+    claim(session)
+
+    ideas.update_idea(session, ADMIN, task.id, status="denied")
+
+    denied = card(session, task)
+    assert (denied.column, denied.claimed_at, denied.assignee) == (
+        BoardColumn.PLANNED,
+        None,
+        None,
+    )
+    assert ideas.get_idea(session, ADMIN, task.id).assignee is None
+    assert history.list_task_history(session, ADMIN, task.id)[0].message == (
+        f"Claim by {RUNNER} ended: the task was denied"
+    )
+    with pytest.raises(Conflict, match="it is not claimed"):
+        claims.hand_over_task(session, ADMIN, task.id, RUNNER)
+    assert claim(session).claimed is False
+
+
 def test_a_lease_setting_out_of_range_fails_at_startup(monkeypatch) -> None:
     from vibepod_board.config import get_settings
 

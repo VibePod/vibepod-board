@@ -13,7 +13,7 @@ from vibepod_board.access import (
     assert_can_access_project,
     default_project_id_for_create,
 )
-from vibepod_board.enums import IdeaStatus, TaskEventKind
+from vibepod_board.enums import BoardColumn, IdeaStatus, TaskEventKind
 from vibepod_board.errors import BoardError, Conflict
 from vibepod_board.graph import build_work_order, format_task_key
 from vibepod_board.schemas import DeletedIdea, Idea, TaskWorkOrder, now
@@ -198,6 +198,39 @@ def _take_off_board(
     session.execute(delete(BoardCardRow).where(col(BoardCardRow.idea_id) == idea.id))
 
 
+def _end_claim_on_denial(
+    session: Session, idea: IdeaRow, timestamp: datetime, actor: str | None
+) -> None:
+    """Denying a task ends a claim on it: the runner must not keep working on, or holding,
+    a task nobody wants done. The card goes back to Planned, where denied tasks are skipped."""
+    claimed = session.exec(
+        select(BoardCardRow.id).where(
+            BoardCardRow.idea_id == idea.id, col(BoardCardRow.claimed_at).is_not(None)
+        )
+    ).first()
+    if claimed is None:
+        return
+    card = lock(session, BoardCardRow, claimed)
+    if card.claimed_at is None:
+        return
+    holder = card.assignee
+    card.claimed_at = None
+    card.claim_expires_at = None
+    card.assignee = None
+    card.column_name = BoardColumn.PLANNED
+    card.updated_at = timestamp
+    if idea.assignee == holder:
+        idea.assignee = None
+    add_task_event(
+        session,
+        idea.id,
+        TaskEventKind.CLAIM_ENDED,
+        f"Claim by {holder} ended: the task was denied",
+        actor,
+        timestamp,
+    )
+
+
 def _apply_idea_update(
     session: Session,
     access: AccessContext,
@@ -251,6 +284,8 @@ def _apply_idea_update(
     if next_status == IdeaStatus.IDEA and refined and (idea.details or idea.acceptance_criteria):
         next_status = IdeaStatus.REFINING
     idea.status = next_status
+    if next_status == IdeaStatus.DENIED:
+        _end_claim_on_denial(session, idea, timestamp, actor_for(session, access))
 
     idea.updated_at = timestamp
     session.flush()
