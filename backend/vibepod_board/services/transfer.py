@@ -167,7 +167,11 @@ def _insert_children(session: Session, bundle: ProjectBundle, destination: str) 
                 github_issue_number=card.github_issue_number,
                 github_pr_url=card.github_pr_url,
                 github_pr_number=card.github_pr_number,
-                github_pr_repository=card.github_pr_repository,
+                github_pr_repository=(
+                    normalize_repository(card.github_pr_repository)
+                    if card.github_pr_repository
+                    else None
+                ),
                 github_pr_state=card.github_pr_state,
                 github_pr_draft=card.github_pr_draft,
                 github_pr_base=card.github_pr_base,

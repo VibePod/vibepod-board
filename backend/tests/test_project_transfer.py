@@ -190,6 +190,30 @@ def test_imports_a_bundle_as_a_new_project(store: Store, column: BoardColumn) ->
     )
 
 
+def test_normalises_the_pull_request_repository_on_import(store: Store) -> None:
+    s = store.session
+    project = create_project(s, key="APP", title="Application", summary="")
+    idea = create_idea(s, admin, project_id=project.id, title="Linked")
+    mark_ready(s, admin, idea.id)
+    bundle = export_project(s, project.id)
+    card = bundle.board_cards[0].model_copy(
+        update={
+            "github_pr_url": "https://github.com/Example/App/pull/5",
+            "github_pr_number": 5,
+            "github_pr_repository": "Example/App",
+            "github_pr_state": "open",
+        }
+    )
+    bundle = bundle.model_copy(update={"board_cards": [card]})
+
+    store.reset()
+    s = store.session
+    import_project(s, bundle, replace_existing=False)
+
+    [imported] = list_cards(s, admin, project.id)
+    assert imported.github_pr_repository == "example/app"
+
+
 def test_requires_confirmation_and_replaces_a_project_while_retaining_its_identity(
     store: Store,
 ) -> None:
