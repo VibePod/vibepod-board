@@ -112,20 +112,23 @@ export const WorkersList = ({
                   </Badge>
                 )}
                 {/* A silent worker that never signed off still holds its claims; stopping
-                    it signs it off and gives them back. */}
-                {onStop && !worker.stoppedAt && !worker.stopRequestedAt && (
-                  <Button
-                    type="button"
-                    size="compact-xs"
-                    variant="subtle"
-                    color="red"
-                    leftSection={<Square size={10} aria-hidden />}
-                    aria-label={`Stop ${worker.name}`}
-                    onClick={() => void onStop(worker)}
-                  >
-                    Stop
-                  </Button>
-                )}
+                    it signs it off and gives them back, also after an earlier stop request
+                    it went silent without answering. */}
+                {onStop &&
+                  !worker.stoppedAt &&
+                  (!worker.stopRequestedAt || worker.status === "offline") && (
+                    <Button
+                      type="button"
+                      size="compact-xs"
+                      variant="subtle"
+                      color="red"
+                      leftSection={<Square size={10} aria-hidden />}
+                      aria-label={`Stop ${worker.name}`}
+                      onClick={() => void onStop(worker)}
+                    >
+                      Stop
+                    </Button>
+                  )}
               </Group>
             </Group>
             {worker.status === "paused" && worker.statusReason && (

@@ -328,12 +328,24 @@ describe("connected workers", () => {
           status: "offline",
           stoppedAt: timestamp,
         }),
+        worker({
+          id: "unanswered",
+          name: "unanswered@box",
+          status: "offline",
+          stopRequestedAt: timestamp,
+        }),
+        worker({
+          id: "stopping",
+          name: "stopping@box",
+          status: "working",
+          stopRequestedAt: timestamp,
+        }),
       ],
       columns: inProgress(),
     });
 
     await userEvent.click(
-      await screen.findByRole("button", { name: "Workers offline" }),
+      await screen.findByRole("button", { name: /1 worker/ }),
     );
     const dialog = await screen.findByRole("dialog", { name: "Workers" });
     expect(
@@ -341,6 +353,12 @@ describe("connected workers", () => {
     ).toBeTruthy();
     expect(
       within(dialog).queryByRole("button", { name: "Stop gone@box" }),
+    ).toBeNull();
+    expect(
+      within(dialog).getByRole("button", { name: "Stop unanswered@box" }),
+    ).toBeTruthy();
+    expect(
+      within(dialog).queryByRole("button", { name: "Stop stopping@box" }),
     ).toBeNull();
   });
 
