@@ -105,6 +105,7 @@ const emptyColumns = {
   planned: [],
   in_progress: [],
   review: [],
+  pr_ready: [],
   done: [],
 };
 

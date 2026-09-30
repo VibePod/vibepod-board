@@ -13,6 +13,7 @@ class BoardColumn(StrEnum):
     PLANNED = "planned"
     IN_PROGRESS = "in_progress"
     REVIEW = "review"
+    PR_READY = "pr_ready"
     DONE = "done"
 
 

@@ -48,11 +48,13 @@ def test_archives_a_done_card_and_hides_it_from_the_board(session: Session, proj
     assert (kept.id, kept.status) == (task.id, "ready")
 
 
-def test_only_done_cards_can_be_archived(session: Session, project) -> None:
+@pytest.mark.parametrize("column", [BoardColumn.READY, BoardColumn.PR_READY])
+def test_only_done_cards_can_be_archived(session: Session, project, column: BoardColumn) -> None:
     task = ideas.create_idea(session, ADMIN, title="Busy", project_id=project.id)
     ideas.mark_ready(session, ADMIN, task.id)
     card = board.board_columns(session, ADMIN, project.id).ready[0]
 
+    board.move_card(session, ADMIN, card.id, column)
     with pytest.raises(Conflict, match="Only cards in the done column can be archived"):
         board.archive_card(session, ADMIN, card.id)
 

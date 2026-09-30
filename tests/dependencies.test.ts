@@ -171,3 +171,7 @@ describe("task dependency graph", () => {
     expect(order.items[0].isActionable).toBe(true);
   });
 });
+
+it("PR ready is not complete", () => {
+  expect(isTaskComplete({ status: "ready", column: "pr_ready" })).toBe(false);
+});

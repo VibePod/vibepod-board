@@ -248,6 +248,7 @@ describe("task view after a GitHub pull", () => {
               planned: [],
               in_progress: [],
               review: [],
+              pr_ready: [],
               done: [],
             },
           });

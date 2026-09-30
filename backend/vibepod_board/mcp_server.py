@@ -1072,8 +1072,9 @@ def create_mcp_server(
 
     @mcp.tool(
         title="Request Task Rework",
-        description="Send a task from Review back to Planned with feedback. It keeps its "
-        "branch, and the next automated run continues there with the feedback in its prompt.",
+        description="Send a task from Review or PR ready back to Planned with feedback. "
+        "It keeps its branch, and the next automated run continues there "
+        "with the feedback in its prompt.",
     )
     def request_task_rework(
         id: CardId,

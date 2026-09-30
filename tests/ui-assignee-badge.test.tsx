@@ -78,6 +78,7 @@ const stubFetch = (cards: unknown[]) => {
             planned: [],
             in_progress: [],
             review: [],
+            pr_ready: [],
             done: [],
           },
         });

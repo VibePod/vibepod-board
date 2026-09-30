@@ -96,7 +96,7 @@ const jsonResponse = (body: unknown, status = 200) =>
     headers: { "Content-Type": "application/json" },
   });
 
-const boardApi = () => {
+const boardApi = (reviewColumn: "review" | "pr_ready" = "review") => {
   const ideas = [
     idea({ id: "idea-1", taskNumber: 1, title: "Add a cache" }),
     idea({ id: "idea-2", taskNumber: 2, title: "Reviewed cache" }),
@@ -113,7 +113,7 @@ const boardApi = () => {
     id: "card-2",
     ideaId: "idea-2",
     title: "Reviewed cache",
-    column: "review",
+    column: reviewColumn,
     branchName: "issue-7",
   });
   const columns = (): BoardColumns => ({
@@ -121,6 +121,7 @@ const boardApi = () => {
     planned: [asking, ...(reviewed.column === "planned" ? [reviewed] : [])],
     in_progress: [],
     review: reviewed.column === "review" ? [reviewed] : [],
+    pr_ready: reviewed.column === "pr_ready" ? [reviewed] : [],
     done: [],
   });
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -149,6 +150,10 @@ const boardApi = () => {
       };
       return jsonResponse({ item: asking });
     }
+    if (path === "/api/board/card-2" && method === "PATCH") {
+      reviewed = { ...reviewed, ...JSON.parse(String(init?.body)) };
+      return jsonResponse({ item: reviewed });
+    }
     if (path === "/api/board/card-2/rework" && method === "POST") {
       reviewed = { ...reviewed, column: "planned" };
       return jsonResponse({ item: reviewed });
@@ -165,9 +170,9 @@ const posts = (fetchMock: ReturnType<typeof boardApi>) =>
       JSON.parse(String((init as RequestInit).body)),
     ]);
 
-const renderBoard = async () => {
+const renderBoard = async (reviewColumn: "review" | "pr_ready" = "review") => {
   window.history.replaceState(null, "", `/projects/${project.id}/board`);
-  const fetchMock = boardApi();
+  const fetchMock = boardApi(reviewColumn);
   vi.stubGlobal("fetch", fetchMock);
   const { AppShell } = await import("../src/client/main.js");
   render(<AppShell />);
@@ -242,62 +247,68 @@ describe("the needs-input and rework loop", () => {
     );
   });
 
-  it("sends a reviewed task back with feedback", async () => {
-    const fetchMock = await renderBoard();
+  it.each(["review", "pr_ready"] as const)(
+    "sends a %s task back with feedback",
+    async (column) => {
+      const fetchMock = await renderBoard(column);
 
-    await userEvent.click(
-      screen.getByRole("button", {
-        name: "Request changes to Reviewed cache",
-      }),
-    );
-    const dialog = await screen.findByRole("dialog", {
-      name: "Request changes: Reviewed cache",
-    });
-    expect(within(dialog).getByText(/continues on issue-7/)).toBeTruthy();
-    await userEvent.type(
-      within(dialog).getByLabelText(/Feedback/),
-      "Invalidate the cache on delete.",
-    );
-    await userEvent.click(
-      within(dialog).getByRole("button", { name: "Send back to Planned" }),
-    );
-
-    expect(
-      await screen.findByText("Sent Reviewed cache back for rework."),
-    ).toBeTruthy();
-    expect(posts(fetchMock)).toEqual([
-      [
-        "/api/board/card-2/rework",
-        { feedback: "Invalidate the cache on delete." },
-      ],
-    ]);
-  });
-
-  it("asks for feedback when a reviewed card is dragged back to Planned", async () => {
-    const fetchMock = await renderBoard();
-    const dataTransfer = {
-      setData: vi.fn(),
-      getData: vi.fn(),
-      effectAllowed: "move",
-      dropEffect: "move",
-    };
-
-    fireEvent.dragStart(cardFor("Reviewed cache"), { dataTransfer });
-    const planned = screen
-      .getByText("Planned", { selector: ".column-title" })
-      .closest(".column") as HTMLElement;
-    fireEvent.drop(planned, { dataTransfer });
-
-    expect(
-      await screen.findByRole("dialog", {
+      await userEvent.click(
+        screen.getByRole("button", {
+          name: "Request changes to Reviewed cache",
+        }),
+      );
+      const dialog = await screen.findByRole("dialog", {
         name: "Request changes: Reviewed cache",
-      }),
-    ).toBeTruthy();
-    const patches = fetchMock.mock.calls.filter(
-      ([, init]) => (init as RequestInit | undefined)?.method === "PATCH",
-    );
-    expect(patches).toEqual([]);
-  });
+      });
+      expect(within(dialog).getByText(/continues on issue-7/)).toBeTruthy();
+      await userEvent.type(
+        within(dialog).getByLabelText(/Feedback/),
+        "Invalidate the cache on delete.",
+      );
+      await userEvent.click(
+        within(dialog).getByRole("button", { name: "Send back to Planned" }),
+      );
+
+      expect(
+        await screen.findByText("Sent Reviewed cache back for rework."),
+      ).toBeTruthy();
+      expect(posts(fetchMock)).toEqual([
+        [
+          "/api/board/card-2/rework",
+          { feedback: "Invalidate the cache on delete." },
+        ],
+      ]);
+    },
+  );
+
+  it.each(["review", "pr_ready"] as const)(
+    "asks for feedback when a %s card is dragged back to Planned",
+    async (column) => {
+      const fetchMock = await renderBoard(column);
+      const dataTransfer = {
+        setData: vi.fn(),
+        getData: vi.fn(),
+        effectAllowed: "move",
+        dropEffect: "move",
+      };
+
+      fireEvent.dragStart(cardFor("Reviewed cache"), { dataTransfer });
+      const planned = screen
+        .getByText("Planned", { selector: ".column-title" })
+        .closest(".column") as HTMLElement;
+      fireEvent.drop(planned, { dataTransfer });
+
+      expect(
+        await screen.findByRole("dialog", {
+          name: "Request changes: Reviewed cache",
+        }),
+      ).toBeTruthy();
+      const patches = fetchMock.mock.calls.filter(
+        ([, init]) => (init as RequestInit | undefined)?.method === "PATCH",
+      );
+      expect(patches).toEqual([]);
+    },
+  );
 
   it("keeps questions, answers and feedback in the task history", async () => {
     await renderBoard();
@@ -315,4 +326,52 @@ describe("the needs-input and rework loop", () => {
       within(view).getByRole("button", { name: "Request changes" }),
     ).toBeTruthy();
   });
+});
+
+it("renders PR ready in order and moves cards into and out of it with their branch", async () => {
+  const fetchMock = await renderBoard();
+  expect(
+    Array.from(document.querySelectorAll(".column-title")).map(
+      (el) => el.textContent,
+    ),
+  ).toEqual(["Ready", "Planned", "In Progress", "Review", "PR ready", "Done"]);
+  for (const label of ["PR ready", "Review"]) {
+    const dataTransfer = {
+      setData: vi.fn(),
+      getData: vi.fn(),
+      effectAllowed: "move",
+      dropEffect: "move",
+    };
+    fireEvent.dragStart(cardFor("Reviewed cache"), { dataTransfer });
+    const target = screen
+      .getByText(label, { selector: ".column-title" })
+      .closest(".column") as HTMLElement;
+    fireEvent.drop(target, { dataTransfer });
+    await waitFor(() =>
+      expect(within(target).getByText("Reviewed cache")).toBeTruthy(),
+    );
+    expect(within(target).getByText("issue-7")).toBeTruthy();
+  }
+  const patches = fetchMock.mock.calls.filter(
+    ([, init]) => init?.method === "PATCH",
+  );
+  expect(
+    patches.map(([, init]) => JSON.parse(String(init?.body)).column),
+  ).toEqual(["pr_ready", "review"]);
+});
+
+it("searches cards in PR ready", async () => {
+  await renderBoard("pr_ready");
+  const target = screen
+    .getByText("PR ready", { selector: ".column-title" })
+    .closest(".column") as HTMLElement;
+  fireEvent.change(screen.getByRole("textbox", { name: "Search" }), {
+    target: { value: "Reviewed" },
+  });
+  expect(within(target).getByText("Reviewed cache")).toBeTruthy();
+  expect(screen.queryByText("Add a cache")).toBeNull();
+  fireEvent.change(screen.getByRole("textbox", { name: "Search" }), {
+    target: { value: "missing" },
+  });
+  expect(within(target).queryByText("Reviewed cache")).toBeNull();
 });

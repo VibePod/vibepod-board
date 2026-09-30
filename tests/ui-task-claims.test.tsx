@@ -116,6 +116,7 @@ const boardApi = () => {
     planned: [blocked, flaky],
     in_progress: [claimed],
     review: [],
+    pr_ready: [],
     done: [],
   });
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

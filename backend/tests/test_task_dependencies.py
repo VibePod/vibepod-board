@@ -188,3 +188,15 @@ def test_exposes_dependency_tools_over_mcp(session: Session) -> None:
     dependencies.add_dependency(session, ADMIN, api.id, schema.id)
     removed = dependencies.remove_dependency(session, ADMIN, api.id, schema.id)
     assert removed.depends_on == []
+
+
+def test_pr_ready_keeps_dependents_blocked_until_done(session: Session) -> None:
+    _, (schema, api) = project_with_tasks(session, ["Schema", "API"])
+    dependencies.add_dependency(session, ADMIN, api.id, schema.id)
+    ideas.mark_ready(session, ADMIN, schema.id)
+    ideas.mark_ready(session, ADMIN, api.id)
+    board.move_card(session, ADMIN, schema.id, BoardColumn.PR_READY)
+    assert find(ideas.list_ideas(session, ADMIN), api.id).blocked_by == [schema.id]
+    assert board.get_card(session, ADMIN, api.id).blocked_by == [schema.id]
+    board.move_card(session, ADMIN, schema.id, BoardColumn.DONE)
+    assert board.get_card(session, ADMIN, api.id).blocked_by == []

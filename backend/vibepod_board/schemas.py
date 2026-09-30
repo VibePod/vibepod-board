@@ -273,6 +273,7 @@ class BoardColumns(ApiModel):
     planned: list[BoardCard] = Field(default_factory=list)
     in_progress: list[BoardCard] = Field(default_factory=list)
     review: list[BoardCard] = Field(default_factory=list)
+    pr_ready: list[BoardCard] = Field(default_factory=list)
     done: list[BoardCard] = Field(default_factory=list)
 
     # Column names are snake_case on the wire too, so they are exempt from the camelCase alias.
