@@ -141,6 +141,7 @@ import {
   parseBoardSearch,
   parseNavigationPath,
 } from "./navigation.js";
+import { PullRequestBadge, PullRequestPanel } from "./PullRequest.js";
 import {
   downloadResponse,
   parseProjectBundleText,
@@ -2338,6 +2339,9 @@ const App = () => {
                   state.columns,
                   selectedProject.key,
                 );
+                const linkedCard = Object.values(state.columns)
+                  .flat()
+                  .find((card) => card.ideaId === idea.id);
                 return (
                   <Card
                     className="item task-list-card"
@@ -2379,6 +2383,7 @@ const App = () => {
                             {taskCard.isBlocked &&
                               blockedBadge(taskCard.blockedByCount)}
                             {githubIssueBadge(idea)}
+                            {linkedCard && pullRequestBadge(linkedCard)}
                           </Group>
                           {labelBadges(taskCard.labels)}
                           {idea.assignee && (
@@ -2618,6 +2623,7 @@ const App = () => {
                                 ideaById.get(card.ideaId) as Idea,
                                 "xs",
                               )}
+                            {pullRequestBadge(card, "xs")}
                             {card.blockedBy.length > 0 && (
                               <Group
                                 className="board-card-blocked"
@@ -3198,6 +3204,7 @@ const App = () => {
                     Archived {formatDateTime(taskViewCard.archivedAt)}
                   </Badge>
                   {githubIssueBadge(taskViewIdea)}
+                  {taskViewCard && pullRequestBadge(taskViewCard)}
                 </Group>
               ) : (
                 <GitHubSyncPanel
@@ -3207,6 +3214,15 @@ const App = () => {
                 />
               )}
             </Stack>
+
+            {taskViewCard && !isTaskViewArchived && (
+              <PullRequestPanel
+                key={taskViewCard.id}
+                card={taskViewCard}
+                enabled={githubStatus?.enabled ?? false}
+                onChange={loadState}
+              />
+            )}
 
             {taskViewCard?.question && (
               <Alert
@@ -4229,6 +4245,11 @@ const githubIssueBadge = (idea: Idea, size: "xs" | "sm" = "sm"): ReactNode => {
   const link = issueLinkForIdea(idea);
   return link ? <GitHubIssueBadge link={link} size={size} /> : null;
 };
+
+const pullRequestBadge = (
+  card: BoardCard,
+  size: "xs" | "sm" = "sm",
+): ReactNode => <PullRequestBadge card={card} size={size} />;
 
 const blockedBadge = (blockedByCount: number): ReactNode => (
   <Badge

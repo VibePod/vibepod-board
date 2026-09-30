@@ -47,6 +47,7 @@ from vibepod_board.services import (
     history,
     ideas,
     projects,
+    pull_requests,
     readiness,
     runs,
     state,
@@ -484,6 +485,41 @@ def create_mcp_server(
     def pull_github_issue(id: TaskId) -> dict[str, Any]:
         client = github()
         return run(lambda s, a: {"item": github_sync.pull(s, a, id, client)})
+
+    @mcp.tool(
+        title="Open Pull Request",
+        description="Open the GitHub pull request for a card in PR ready, with the card's "
+        "branch as head. The branch must already be on GitHub; the board never pushes. "
+        "Title, base and body default to what the board generates: the task title, the "
+        "branch of a dependency's open PR (else the default branch), and a body with the "
+        "summary, acceptance criteria, closing issue, approvals and latest run. When a PR "
+        "for the branch is already open, that one is linked instead.",
+    )
+    def open_pull_request(
+        id: CardId,
+        title: str | None = None,
+        base: Annotated[str | None, Field(description="Branch to merge into.")] = None,
+        body: str | None = None,
+        draft: bool = False,
+    ) -> dict[str, Any]:
+        client = github()
+        return run(
+            lambda s, a: {
+                "item": pull_requests.open_pull_request(
+                    s, a, id, client, title=title, base=base, body=body, draft=draft
+                )
+            }
+        )
+
+    @mcp.tool(
+        title="Link Pull Request",
+        description="Link a pull request opened by hand to a card by its URL "
+        "(https://github.com/owner/repo/pull/123); an empty string unlinks it. With "
+        "GITHUB_TOKEN set, the PR's state is read from GitHub.",
+    )
+    def link_pull_request(id: CardId, url: str) -> dict[str, Any]:
+        client = github() if settings.github_token and url.strip() else None
+        return run(lambda s, a: {"item": pull_requests.link_pull_request(s, a, id, url, client)})
 
     @mcp.tool(
         title="Upsert GitHub Issue",

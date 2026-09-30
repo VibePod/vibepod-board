@@ -69,7 +69,7 @@ def export_project(session: Session, project_id: str) -> ProjectBundle:
             ideas[index] = idea.model_copy(update={"assignee": None})
     return parse_project_bundle(
         {
-            "bundleVersion": 3,
+            "bundleVersion": 4,
             "exportedAt": format_timestamp(now()),
             "project": project.model_dump(mode="json"),
             "ideas": [idea.model_dump(mode="json") for idea in ideas],
@@ -165,6 +165,13 @@ def _insert_children(session: Session, bundle: ProjectBundle, destination: str) 
                 branch_name=card.branch_name,
                 github_issue_url=card.github_issue_url,
                 github_issue_number=card.github_issue_number,
+                github_pr_url=card.github_pr_url,
+                github_pr_number=card.github_pr_number,
+                github_pr_repository=card.github_pr_repository,
+                github_pr_state=card.github_pr_state,
+                github_pr_draft=card.github_pr_draft,
+                github_pr_base=card.github_pr_base,
+                github_pr_synced_at=card.github_pr_synced_at,
                 repository_local_path=card.repository_local_path,
                 repository_remote_url=card.repository_remote_url,
                 assignee=card.assignee,

@@ -118,7 +118,7 @@ def test_exports_one_self_contained_project(store: Store) -> None:
     bundle = export_project(s, project.id)
     data = dump(bundle)
 
-    match_object(data, {"bundleVersion": 3, "project": {"id": project.id, "key": "APP"}})
+    match_object(data, {"bundleVersion": 4, "project": {"id": project.id, "key": "APP"}})
     assert len(bundle.ideas) == 2
     assert [idea.project_id for idea in bundle.ideas] == [project.id, project.id]
     assert next(idea for idea in bundle.ideas if idea.id == feature.id).depends_on == [

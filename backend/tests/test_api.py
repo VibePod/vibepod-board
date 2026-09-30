@@ -104,7 +104,7 @@ def test_exports_projects_only_for_admins(client: TestClient, session: Session) 
     assert response.status_code == 200
     assert "application/json" in response.headers["content-type"]
     assert response.headers["content-disposition"] == 'attachment; filename="APP-project.json"'
-    expected = {"bundleVersion": 3, "project": {"id": project.id, "key": "APP"}}
+    expected = {"bundleVersion": 4, "project": {"id": project.id, "key": "APP"}}
     assert_subset(response.json(), expected)
     assert agent.get("/api/projects/missing/export").status_code == 404
 

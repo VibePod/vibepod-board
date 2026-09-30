@@ -54,6 +54,12 @@ class TaskEventKind(StrEnum):
     QUESTION = "question"
     ANSWER = "answer"
     FEEDBACK = "feedback"
+    # A reviewer moved the card from Review to PR ready.
+    APPROVED = "approved"
+    # The task's pull request: opened from the board, or linked and unlinked by URL.
+    PR_OPENED = "pr_opened"
+    PR_LINKED = "pr_linked"
+    PR_UNLINKED = "pr_unlinked"
 
 
 BOARD_COLUMNS: tuple[BoardColumn, ...] = tuple(BoardColumn)

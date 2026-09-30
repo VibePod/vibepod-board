@@ -75,6 +75,13 @@ const boardCardSchema = z
     ideaId: optionalTextSchema,
     githubIssueUrl: optionalTextSchema,
     githubIssueNumber: optionalIntegerSchema,
+    githubPrUrl: optionalTextSchema,
+    githubPrNumber: optionalIntegerSchema,
+    githubPrRepository: optionalTextSchema,
+    githubPrState: z.enum(["open", "closed", "merged"]).optional(),
+    githubPrDraft: z.boolean().optional(),
+    githubPrBase: optionalTextSchema,
+    githubPrSyncedAt: timestampSchema.optional(),
     repositoryLocalPath: optionalTextSchema,
     repositoryRemoteUrl: optionalTextSchema,
     assignee: optionalTextSchema,
@@ -186,6 +193,13 @@ const validateRelationships = (bundle: ProjectBundle, ctx: z.RefinementCtx) => {
     });
   }
   bundle.boardCards.forEach((card, index) => {
+    if (bundle.bundleVersion < 4 && card.githubPrUrl !== undefined) {
+      addIssue(
+        ctx,
+        ["boardCards", index, "githubPrUrl"],
+        "Linked pull requests require bundleVersion 4",
+      );
+    }
     if (card.archivedAt === undefined) {
       return;
     }
@@ -299,7 +313,12 @@ const validateRelationships = (bundle: ProjectBundle, ctx: z.RefinementCtx) => {
 
 export const projectBundleSchema = z
   .object({
-    bundleVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    bundleVersion: z.union([
+      z.literal(1),
+      z.literal(2),
+      z.literal(3),
+      z.literal(4),
+    ]),
     exportedAt: timestampSchema,
     project: projectSchema,
     ideas: z.array(ideaSchema),
