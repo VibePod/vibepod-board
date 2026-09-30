@@ -422,3 +422,21 @@ def test_a_heartbeat_for_a_deleted_task_records_the_worker_idle(session: Session
     reply = workers.heartbeat(session, ADMIN, worker.id, WorkerStatus.WORKING, task=task.id)
 
     assert (reply.item.status, reply.item.task_id) == (WorkerState.IDLE, None)
+
+
+def test_an_offline_timeout_shorter_than_two_heartbeats_fails_at_startup(monkeypatch) -> None:
+    from vibepod_board.config import get_settings
+
+    monkeypatch.setenv("DATABASE_URL", "postgres://x@localhost/x")
+    monkeypatch.setenv("WORKER_HEARTBEAT_SECONDS", "30")
+    monkeypatch.setenv("WORKER_OFFLINE_SECONDS", "30")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="at least twice WORKER_HEARTBEAT_SECONDS"):
+            get_settings()
+        monkeypatch.setenv("WORKER_OFFLINE_SECONDS", "60")
+        get_settings.cache_clear()
+        settings = get_settings()
+        assert (settings.worker_heartbeat_seconds, settings.worker_offline_seconds) == (30, 60)
+    finally:
+        get_settings.cache_clear()

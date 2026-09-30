@@ -49,6 +49,15 @@ def get_settings() -> Settings:
     if os.environ.get("APP_ENV") == "production" and not (username and password):
         raise RuntimeError("ADMIN_USERNAME and ADMIN_PASSWORD are required in production")
     public_dir = Path(os.environ.get("PUBLIC_DIR", DEFAULT_PUBLIC_DIR))
+    heartbeat_seconds = _positive_int("WORKER_HEARTBEAT_SECONDS", 15)
+    offline_seconds = _positive_int("WORKER_OFFLINE_SECONDS", 60)
+    # A worker waits a heartbeat interval between reports, and scheduling adds jitter: an
+    # offline timeout under two intervals shows healthy workers as offline.
+    if offline_seconds < 2 * heartbeat_seconds:
+        raise RuntimeError(
+            f"WORKER_OFFLINE_SECONDS must be at least twice WORKER_HEARTBEAT_SECONDS: "
+            f"{offline_seconds} < 2 × {heartbeat_seconds}"
+        )
     return Settings(
         database_url=database_url,
         admin_username=username or "admin",
@@ -61,8 +70,8 @@ def get_settings() -> Settings:
         claim_lease_seconds=_lease_seconds("CLAIM_LEASE_SECONDS", 15 * 60),
         claim_max_attempts=_positive_int("CLAIM_MAX_ATTEMPTS", 3),
         claim_sweep_seconds=_positive_int("CLAIM_SWEEP_SECONDS", 15, allow_zero=True),
-        worker_heartbeat_seconds=_positive_int("WORKER_HEARTBEAT_SECONDS", 15),
-        worker_offline_seconds=_positive_int("WORKER_OFFLINE_SECONDS", 60),
+        worker_heartbeat_seconds=heartbeat_seconds,
+        worker_offline_seconds=offline_seconds,
     )
 
 

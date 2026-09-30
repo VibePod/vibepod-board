@@ -332,7 +332,7 @@ CLAIM_LEASE_SECONDS=900        # default lease when a claim or heartbeat names n
 CLAIM_MAX_ATTEMPTS=3           # failed attempts before a task is blocked; a release may pass maxAttempts
 CLAIM_SWEEP_SECONDS=15         # how often expired claims are swept; 0 turns the sweep off
 WORKER_HEARTBEAT_SECONDS=15    # how often workers are asked to send a heartbeat
-WORKER_OFFLINE_SECONDS=60      # silence after which a worker is shown as offline
+WORKER_OFFLINE_SECONDS=60      # silence after which a worker is shown as offline (at least 2× the heartbeat)
 ```
 
 ## Deleting Tasks
