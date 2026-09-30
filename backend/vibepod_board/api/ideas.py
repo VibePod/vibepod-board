@@ -191,9 +191,17 @@ def add_run_report(
 
 
 @router.get("/ideas/{idea_id}/runs")
-def list_run_reports(idea_id: str, session: SessionDep, access: AccessDep) -> Items[TaskRun]:
-    """Every automated run of the task, newest first."""
-    return Items(items=runs.list_run_reports(session, access, idea_id))
+def list_run_reports(
+    idea_id: str,
+    session: SessionDep,
+    access: AccessDep,
+    limit: Annotated[int | None, Query(ge=1, le=runs.RUNS_PAGE_MAX)] = None,
+    before: Annotated[str | None, Query(description="nextCursor of the previous page.")] = None,
+) -> ItemsPage[TaskRun]:
+    """The task's automated runs, newest first, a page at a time (20 by default). Pass the
+    page's nextCursor back as `before` for older runs."""
+    page = runs.list_run_reports(session, access, idea_id, limit=limit, before=before)
+    return ItemsPage(items=page.items, next_cursor=page.next_cursor)
 
 
 @router.get("/readiness")

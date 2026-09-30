@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
+from sqlalchemy import tuple_
 from sqlmodel import Session, col, func, select
 
 from vibepod_board.access import AccessContext, assert_can_access_project
@@ -19,6 +20,7 @@ from vibepod_board.services.common import (
     normalize_optional_text,
     transactional,
 )
+from vibepod_board.services.listing import Page
 from vibepod_board.services.references import require_idea_ref, task_keys
 from vibepod_board.services.workers import require_worker
 from vibepod_board.tables import IdeaRow, TaskRunRow
@@ -28,6 +30,9 @@ VERIFY_OUTPUT_TAIL = 14_000
 SUMMARY_LIMIT = 20_000
 REASON_LIMIT = 4_000
 COMMIT_LIMIT = 200
+# Run reports are listed newest first, a page at a time: a long-lived task collects many.
+RUNS_PAGE_DEFAULT = 20
+RUNS_PAGE_MAX = 100
 
 
 def truncate_middle(text: str, head: int, tail: int) -> tuple[str, bool]:
@@ -140,13 +145,34 @@ def add_run_report(
     return task_run_from_row(row)
 
 
-def list_run_reports(session: Session, access: AccessContext, reference: str) -> list[TaskRun]:
-    """Every run of the task, newest first."""
+def list_run_reports(
+    session: Session,
+    access: AccessContext,
+    reference: str,
+    limit: int | None = None,
+    before: str | None = None,
+) -> Page[TaskRun]:
+    """The task's runs, newest first, a page at a time. `before` is the `next_cursor` of the
+    previous page: the id of the last run it listed."""
     idea = require_idea_ref(session, access, reference)
     assert_can_access_project(access, idea.project_id)
+    size = limit or RUNS_PAGE_DEFAULT
+    if not 1 <= size <= RUNS_PAGE_MAX:
+        raise BadRequest(f"limit must be between 1 and {RUNS_PAGE_MAX}")
+    query = select(TaskRunRow).where(TaskRunRow.idea_id == idea.id)
+    if before:
+        cursor = session.get(TaskRunRow, before.strip())
+        if cursor is None or cursor.idea_id != idea.id:
+            raise BadRequest("before must name a run of this task")
+        query = query.where(
+            tuple_(col(TaskRunRow.created_at), col(TaskRunRow.id)) < (cursor.created_at, cursor.id)
+        )
     rows = session.exec(
-        select(TaskRunRow)
-        .where(TaskRunRow.idea_id == idea.id)
-        .order_by(col(TaskRunRow.created_at).desc(), col(TaskRunRow.id).desc())
+        query.order_by(col(TaskRunRow.created_at).desc(), col(TaskRunRow.id).desc()).limit(size + 1)
     ).all()
-    return [task_run_from_row(row) for row in rows]
+    more = len(rows) > size
+    rows = rows[:size]
+    return Page(
+        items=[task_run_from_row(row) for row in rows],
+        next_cursor=rows[-1].id if more else None,
+    )

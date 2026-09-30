@@ -1039,11 +1039,20 @@ def create_mcp_server(
 
     @mcp.tool(
         title="List Run Reports",
-        description="Every automated run of a task, newest first: the history of its attempts.",
+        description="The automated runs of a task, newest first: the history of its attempts. "
+        "Returns 20 by default; pass nextCursor back as before for older runs.",
         annotations=READ_ONLY,
     )
-    def list_run_reports(id: TaskId) -> dict[str, Any]:
-        return run(lambda s, a: {"items": runs.list_run_reports(s, a, id)})
+    def list_run_reports(
+        id: TaskId,
+        limit: Annotated[int | None, Field(ge=1, le=runs.RUNS_PAGE_MAX)] = None,
+        before: Annotated[str | None, Field(description="nextCursor of the previous page.")] = None,
+    ) -> dict[str, Any]:
+        def page(s: Session, a: AccessContext) -> dict[str, Any]:
+            listed = runs.list_run_reports(s, a, id, limit=limit, before=before)
+            return {"items": listed.items, "nextCursor": listed.next_cursor}
+
+        return run(page)
 
     @mcp.tool(
         title="Set Card Readiness",

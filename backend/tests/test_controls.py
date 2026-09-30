@@ -307,7 +307,7 @@ def test_run_reports_keep_the_history_of_attempts(session: Session, vp) -> None:
     assert first.worker_name == NAME
     assert first.agent == "claude"
     assert first.failure_reason == "Verify command failed"
-    assert [run.id for run in runs.list_run_reports(session, ADMIN, task.id)] == [
+    assert [run.id for run in runs.list_run_reports(session, ADMIN, task.id).items] == [
         second.id,
         first.id,
     ]
@@ -345,7 +345,7 @@ def test_reports_in_the_same_millisecond_keep_their_order(
     first = runs.add_run_report(session, ADMIN, task.id, RunOutcome.FAILED, summary="first")
     second = runs.add_run_report(session, ADMIN, task.id, RunOutcome.DONE, summary="second")
 
-    listed = runs.list_run_reports(session, ADMIN, task.id)
+    listed = runs.list_run_reports(session, ADMIN, task.id).items
     assert [report.id for report in listed] == [second.id, first.id]
 
 
@@ -377,6 +377,30 @@ def test_reports_arriving_together_take_turns_for_their_timestamp(
 
     assert len(reported) == 2
     assert len({report.created_at for report in reported}) == 2
+
+
+def test_run_reports_come_a_page_at_a_time(session: Session, vp) -> None:
+    task = planned(session, vp, "Retried a lot")
+    added = [
+        runs.add_run_report(session, ADMIN, task.id, RunOutcome.FAILED, summary=str(n))
+        for n in range(25)
+    ]
+    newest_first = [report.id for report in reversed(added)]
+
+    first = runs.list_run_reports(session, ADMIN, task.id)
+    assert [report.id for report in first.items] == newest_first[:20]
+    assert first.next_cursor == newest_first[19]
+
+    rest = runs.list_run_reports(session, ADMIN, task.id, before=first.next_cursor)
+    assert [report.id for report in rest.items] == newest_first[20:]
+    assert rest.next_cursor is None
+
+    small = runs.list_run_reports(session, ADMIN, task.id, limit=3)
+    assert [report.id for report in small.items] == newest_first[:3]
+    with pytest.raises(BadRequest, match="limit must be between 1 and 100"):
+        runs.list_run_reports(session, ADMIN, task.id, limit=101)
+    with pytest.raises(BadRequest, match="before must name a run of this task"):
+        runs.list_run_reports(session, ADMIN, task.id, before="nope")
 
 
 def test_long_verify_output_keeps_its_head_and_tail(session: Session, vp) -> None:
@@ -478,6 +502,15 @@ def test_rest_records_and_lists_run_reports(api: TestClient) -> None:
     )
     assert item["startedAt"] == "2026-09-29T08:00:00.000Z"
     assert [run["id"] for run in api.get("/api/ideas/VP-1/runs").json()["items"]] == [item["id"]]
+    second = api.post("/api/ideas/VP-1/runs", json={"outcome": "failed"}).json()["item"]
+    page = api.get("/api/ideas/VP-1/runs", params={"limit": 1}).json()
+    assert ([run["id"] for run in page["items"]], page["nextCursor"]) == (
+        [second["id"]],
+        second["id"],
+    )
+    older = api.get("/api/ideas/VP-1/runs", params={"limit": 1, "before": page["nextCursor"]})
+    assert [run["id"] for run in older.json()["items"]] == [item["id"]]
+    assert api.get("/api/ideas/VP-1/runs", params={"limit": 0}).status_code in (400, 422)
 
     assert (
         api.post(
@@ -541,6 +574,9 @@ async def test_mcp_steers_workers_and_reports_runs(server_url: str, session: Ses
         )
     reports = await call(server_url, token, "list_run_reports", id=task.id)
     assert [item["outcome"] for item in reports["items"]] == ["cancelled"]
+    assert reports["nextCursor"] is None
+    paged = await call(server_url, token, "list_run_reports", id=task.id, limit=1)
+    assert paged["nextCursor"] is None
 
 
 # --- races and edges found in review -------------------------------------------------

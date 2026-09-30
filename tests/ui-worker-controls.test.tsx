@@ -357,6 +357,44 @@ describe("worker controls", () => {
     ).toBeTruthy();
   });
 
+  it("shows older runs a page at a time", async () => {
+    const fetchMock = await renderBoard();
+    const baseline = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (input, init) => {
+      const path = String(input);
+      if (path === "/api/ideas/idea-1/runs") {
+        return jsonResponse({ items: [runs[0]], nextCursor: runs[0].id });
+      }
+      if (path === `/api/ideas/idea-1/runs?before=${runs[0].id}`) {
+        return jsonResponse({ items: [runs[1]], nextCursor: null });
+      }
+      return (
+        baseline?.(input, init) ?? jsonResponse({ error: "Not found" }, 404)
+      );
+    });
+
+    await userEvent.click(screen.getByText("Automated login"));
+    const view = await screen.findByRole("dialog", { name: "Task Overview" });
+    const section = await waitFor(() => {
+      const found = view.querySelector(".task-runs");
+      if (!found) throw new Error("no run reports yet");
+      return found as HTMLElement;
+    });
+    expect(section.querySelectorAll(".task-run")).toHaveLength(1);
+    expect(within(section).getByText("1+")).toBeTruthy();
+
+    await userEvent.click(
+      within(section).getByRole("button", { name: "Show older runs" }),
+    );
+
+    await waitFor(() =>
+      expect(section.querySelectorAll(".task-run")).toHaveLength(2),
+    );
+    expect(
+      within(section).queryByRole("button", { name: "Show older runs" }),
+    ).toBeNull();
+  });
+
   it("reloads the run reports with the board and while open", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
