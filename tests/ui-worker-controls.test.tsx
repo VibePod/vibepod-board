@@ -125,6 +125,7 @@ const boardApi = () => {
     planned: card.column === "planned" ? [card] : [],
     in_progress: card.column === "in_progress" ? [card] : [],
     review: [],
+    pr_ready: [],
     done: [],
   });
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

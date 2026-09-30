@@ -96,6 +96,7 @@ const boardApi = (failures: ApiFailures = { failing: new Set() }) => {
     planned: [],
     in_progress: [],
     review: [],
+    pr_ready: [],
     done: active,
   });
 

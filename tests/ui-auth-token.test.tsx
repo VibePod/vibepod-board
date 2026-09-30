@@ -84,6 +84,7 @@ const stubAdminFetch = (tokens: ApiTokenSummary[] = []) =>
               planned: [],
               in_progress: [],
               review: [],
+              pr_ready: [],
               done: [],
             },
           }),

@@ -172,6 +172,8 @@ class BoardCardRow(SQLModel, table=True):
     # again.
     blocked_at: datetime | None = _timestamp(nullable=True)
     blocked_reason: str | None = _text()
+    # The agent's question while the task waits for an answer; it is blocked meanwhile.
+    question: str | None = _text()
     created_at: datetime = _timestamp()
     updated_at: datetime = _timestamp()
 

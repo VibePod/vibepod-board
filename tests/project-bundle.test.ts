@@ -244,3 +244,12 @@ describe("project bundle validation", () => {
     ).toThrow();
   });
 });
+
+it("preserves a PR ready card and its branch in a bundle", () => {
+  const bundle = validBundle();
+  bundle.boardCards[0].column = "pr_ready";
+  bundle.boardCards[0].branchName = "vp-115";
+  expect(
+    parseProjectBundle(JSON.parse(JSON.stringify(bundle))).boardCards[0],
+  ).toEqual(bundle.boardCards[0]);
+});

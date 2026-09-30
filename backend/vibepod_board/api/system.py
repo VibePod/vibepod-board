@@ -17,6 +17,7 @@ router = APIRouter(prefix="/api", tags=["system"])
 MCP_INFO_TOOLS = (
     "add_idea_dependency",
     "add_run_report",
+    "answer_task_question",
     "archive_board_card",
     "cancel_task_run",
     "claim_next_task",
@@ -47,6 +48,7 @@ MCP_INFO_TOOLS = (
     "release_task",
     "remove_idea_dependency",
     "renew_task_claim",
+    "request_task_rework",
     "resume_automation",
     "set_card_readiness",
     "set_idea_dependencies",

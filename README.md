@@ -97,6 +97,8 @@ GITHUB_REPOSITORY=owner/repo    # optional default; a task's GitHub remote URL w
 - `POST /api/workers/:id/sign-off`
 - `POST /api/workers/:id/stop`
 - `POST /api/board/:id/cancel`
+- `POST /api/board/:id/answer`
+- `POST /api/board/:id/rework`
 - `GET /api/projects/:id/automation`
 - `POST /api/projects/:id/automation/pause`
 - `POST /api/projects/:id/automation/resume`
@@ -184,6 +186,8 @@ Tools:
 - `resume_automation`
 - `add_run_report`
 - `list_run_reports`
+- `answer_task_question`
+- `request_task_rework`
 - `list_idea_readiness`
 - `list_readiness`
 - `push_github_issue`
@@ -339,6 +343,23 @@ In the UI, a workers indicator in the project header opens the list, and a card 
 on shows the worker, its current step and the elapsed time. The indicator on the card goes
 away when the task moves on or the worker goes offline.
 
+### Questions and Rework
+
+An automated run does not have to guess. When a task is unclear, the agent asks, and when a
+review finds problems, the task goes back with feedback:
+
+- **Needs input.** A runner releases the task with `outcome: "needs_input"` and the question as
+  its `note`. The task is blocked, without counting a failed attempt, and the card shows
+  **Needs input** with the question (`question` on the card). **Answer** on the card or in the
+  task view, `POST /api/board/:id/answer` (`answer_task_question`), records the answer and puts
+  the task back in Planned.
+- **Rework.** **Request changes** on a card in Review, dragging it back to Planned, or
+  `POST /api/board/:id/rework` with `feedback` (`request_task_rework`) sends the task back to
+  Planned with the reviewer's feedback. The card keeps its branch, so the next run continues
+  the work there.
+- The question, the answer and the feedback stay in the task history (`question`, `answer` and
+  `feedback` events), where the next run reads them and the task view shows them.
+
 ### Controls and Run Reports
 
 People with access to a project steer its workers from the board. Workers receive these
@@ -363,8 +384,8 @@ heartbeat, without another connection:
   it was just told to stop; pause automation first to keep every worker away from it.
 
 Every automated run adds a report to its task with `POST /api/ideas/:id/runs`
-(`add_run_report`): the `outcome` (`done`, `failed`, `timed_out`, `cancelled` or
-`usage_limit`), the agent's `summary`, the `commits` made, the `verifyCommand` with its
+(`add_run_report`): the `outcome` (`done`, `failed`, `timed_out`, `cancelled`, `usage_limit`
+or `needs_input`), the agent's `summary`, the `commits` made, the `verifyCommand` with its
 `verifyExitCode` and `verifyOutput`, the `durationSeconds` and the `failureReason`. Long verify
 output keeps its first 2,000 and last 14,000 characters (`verifyOutputTruncated`). Reports are
 never replaced: `GET /api/ideas/:id/runs` (`list_run_reports`) and the task view list them as the

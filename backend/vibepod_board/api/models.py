@@ -189,7 +189,8 @@ class HandoverRequest(ApiModel):
 class ReleaseRequest(ApiModel):
     assignee: RequiredText
     outcome: ReleaseOutcome = ReleaseOutcome.FAILED
-    # Why; required to block, since it is the reason shown on the card.
+    # Why; required to block, since it is the reason shown on the card, and to ask for input,
+    # since it is the question.
     note: StrictStr | None = None
     # Failed attempts before the task is blocked; the server default applies when omitted.
     max_attempts: Annotated[StrictInt, Field(ge=1, le=100)] | None = None
@@ -275,3 +276,15 @@ class RunReportRequest(ApiModel):
     worker_id: RequiredText | None = None
     worker_name: StrictStr | None = None
     agent: StrictStr | None = None
+
+
+class AnswerRequest(ApiModel):
+    answer: RequiredText
+    # Refuses the answer (409) when the card changed since this updatedAt.
+    expected_updated_at: RequiredText | None = None
+
+
+class ReworkRequest(ApiModel):
+    feedback: RequiredText
+    # Refuses the feedback (409) when the card changed since this updatedAt.
+    expected_updated_at: RequiredText | None = None
