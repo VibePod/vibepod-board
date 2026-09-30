@@ -787,6 +787,20 @@ def test_rest_runs_the_review_lifecycle(client: TestClient, session: Session, vp
     assert task.id
 
 
+def test_reviews_are_listed_by_card_id(client: TestClient, session: Session, vp) -> None:
+    task = in_review(session, vp, "Listed by card")
+    review(session)
+    card_id = card(session, task).id
+    login(client)
+
+    listed = client.get(f"/api/board/{card_id}/reviews")
+
+    assert listed.status_code == 200, listed.text
+    assert (listed.json()["taskKey"], listed.json()["openReviews"]) == ("VP-1", 1)
+    assert client.get("/api/board/VP-1/reviews").json()["openReviews"] == 1
+    assert client.get("/api/board/VP-99/reviews").status_code == 404
+
+
 async def test_mcp_runs_the_review_lifecycle(server_url: str, session: Session, vp) -> None:
     in_review(session, vp, "Over MCP")
     token = tokens.create_token(session, "Reviewer", [vp.id]).token

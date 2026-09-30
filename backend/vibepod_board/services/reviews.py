@@ -13,8 +13,8 @@ A task moves to PR ready once distinct reviewers approved that commit as often a
 requires. Any rework verdict sends it back to Planned with the feedback and ends the other open
 reviews; after `max_review_rounds` rework verdicts in a row it is blocked in Review for a human
 instead. A question for a human blocks it as well and ends the other open reviews; a blocked
-task takes no verdict until someone acts on it. A hand-over on a new commit starts the approval count over, and a verdict for another
-commit is refused.
+task takes no verdict until someone acts on it. A hand-over on a new commit starts the approval
+count over, and a verdict for another commit is refused.
 
 Review claims are serialised on the project row like implementation claims, and every write to
 a review locks its task, its card and then the review, so counting approvals and open reviews
@@ -451,8 +451,18 @@ def _state(
 
 
 def review_state(session: Session, access: AccessContext, reference: str) -> ReviewState:
-    """The reviews of a task and its approvals for the current head commit."""
-    idea = require_idea_ref(session, access, reference)
+    """The reviews of a task and its approvals for the current head commit. `reference` is
+    a task reference or, as for the other review endpoints, a board card id."""
+    try:
+        idea = require_idea_ref(session, access, reference)
+    except NotFound:
+        try:
+            found = require_card_ref(session, access, reference)
+        except NotFound:
+            raise NotFound(f"Task not found: {reference.strip()}") from None
+        if not found.idea_id:
+            raise NotFound("Board card has no task, so it has no reviews") from None
+        idea = require_idea_ref(session, access, found.idea_id)
     assert_can_access_project(access, idea.project_id)
     project = require_project(session, idea.project_id)
     return _state(session, idea, _card_of(session, idea.id), project)
