@@ -96,6 +96,7 @@ import {
   type Project,
   type ProjectBundle,
   type ReadinessEvent,
+  type Worker,
 } from "../shared/types.js";
 import {
   ArchiveDoneDialog,
@@ -120,6 +121,7 @@ import {
   projectSelectorOptions,
   shouldShowProjectSidebar,
 } from "./layoutNavigation.js";
+import { createLoadOrder } from "./loadOrder.js";
 import { InlineMarkdown, MarkdownText } from "./Markdown.js";
 import {
   CriteriaPreview,
@@ -166,6 +168,11 @@ import {
 import { taskNavigationFor } from "./taskNavigation.js";
 import { taskOverviewForIdea } from "./taskOverviewUtils.js";
 import { formatTokenProjectLabel } from "./tokenProjects.js";
+import { WorkerActivity, WorkersIndicator } from "./Workers.js";
+import {
+  workerActivitySignature,
+  workingWorkersByTask,
+} from "./workerUtils.js";
 import "./styles.css";
 
 type AppState = {
@@ -267,6 +274,9 @@ const emptyProjectDraft = (): ProjectDraft => ({
   title: "",
   summary: "",
 });
+
+/** How often the workers of the open project are polled while the page is visible. */
+const workerPollMs = 5000;
 
 /** Matches the import body limit of the server, so oversized files fail early. */
 const maxProjectBundleBytes = 10 * 1024 * 1024;
@@ -409,9 +419,17 @@ const App = () => {
   const [tokenDraft, setTokenDraft] = useState<CreateApiTokenInput>(
     emptyTokenDraft(),
   );
+  const [workers, setWorkers] = useState<Worker[]>([]);
 
-  const loadState = async () => {
-    setError("");
+  // Loads overlap (a worker poll reloads while a move reloads too): an older
+  // snapshot never replaces a newer one, but a newer load that fails does not
+  // throw away an older one that succeeded.
+  const loadOrder = useRef(createLoadOrder()).current;
+
+  /** A background reload keeps the error banner: the user has not read it yet. */
+  const loadState = async ({ background = false } = {}) => {
+    const ticket = loadOrder.start();
+    if (!background) setError("");
     const [projects, ideas, board, archived, documents, github] =
       await Promise.all([
         api<{ items: Project[] }>("/api/projects"),
@@ -424,6 +442,7 @@ const App = () => {
         // Sync buttons stay disabled when the status cannot be read.
         api<GitHubStatus>("/api/github").catch(() => null),
       ]);
+    if (!loadOrder.apply(ticket)) return;
     setGitHubStatus(github);
     setState((prev) => ({
       projects: projects.items,
@@ -435,6 +454,10 @@ const App = () => {
     if (!archived) setError("Failed to load archived cards");
     setIsLoading(false);
   };
+
+  // The worker poll outlives renders; it reloads through the latest loadState.
+  const loadStateRef = useRef(loadState);
+  loadStateRef.current = loadState;
 
   const loginAdmin = async (event: FormEvent) => {
     event.preventDefault();
@@ -638,6 +661,44 @@ const App = () => {
     };
   }, [readinessModal]);
 
+  // Workers of the open project: their status, and the live indicator on the
+  // cards they work on. When what they do changes, automation moved cards, so
+  // the board reloads too.
+  useEffect(() => {
+    if (auth.status !== "authenticated" || !selectedProjectId) {
+      setWorkers([]);
+      return;
+    }
+    let cancelled = false;
+    let signature: string | null = null;
+    const poll = async () => {
+      try {
+        const response = await api<{ items: Worker[] }>(
+          `/api/workers?projectId=${encodeURIComponent(selectedProjectId)}`,
+        );
+        if (cancelled) return;
+        setWorkers(response.items);
+        const next = workerActivitySignature(response.items);
+        if (signature !== null && next !== signature) {
+          void loadStateRef
+            .current({ background: true })
+            .catch(() => undefined);
+        }
+        signature = next;
+      } catch {
+        if (!cancelled) setWorkers([]);
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== "hidden") void poll();
+    }, workerPollMs);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [auth.status, selectedProjectId]);
+
   useEffect(() => {
     if (
       !isMcpGuideOpen &&
@@ -735,6 +796,7 @@ const App = () => {
     activeAssigneeFilter,
   ]);
   const isBoardFiltered = visibleProjectColumns !== projectColumns;
+  const workerByTask = useMemo(() => workingWorkersByTask(workers), [workers]);
   const projectDocuments = selectedProject
     ? state.documents.filter(
         (document) => document.projectId === selectedProject.id,
@@ -1373,6 +1435,19 @@ const App = () => {
     setTaskViewModal({ ideaId: idea.id, card });
   };
 
+  const openTaskById = (ideaId: string) => {
+    const card = [
+      ...boardColumns.flatMap((column) => state.columns[column] ?? []),
+      ...state.archivedCards,
+    ].find((item) => item.ideaId === ideaId);
+    if (card) {
+      openCardTask(card);
+    } else {
+      const idea = state.ideas.find((item) => item.id === ideaId);
+      if (idea) openEditTask(idea);
+    }
+  };
+
   const archiveCard = async (card: BoardCard) => {
     setError("");
     setNotice("");
@@ -1742,6 +1817,9 @@ const App = () => {
               >
                 Add Note
               </Button>
+            )}
+            {activeView !== "projects" && selectedProject && (
+              <WorkersIndicator workers={workers} onOpenTask={openTaskById} />
             )}
             <ActionIcon
               variant="light"
@@ -2315,6 +2393,15 @@ const App = () => {
                         >
                           <Stack gap="xs">
                             <Title order={4}>{card.title}</Title>
+                            {column === "in_progress" &&
+                              card.ideaId &&
+                              workerByTask.has(card.ideaId) && (
+                                <WorkerActivity
+                                  worker={
+                                    workerByTask.get(card.ideaId) as Worker
+                                  }
+                                />
+                              )}
                             {card.ideaId &&
                               ideaById.has(card.ideaId) &&
                               githubIssueBadge(

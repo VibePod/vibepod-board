@@ -6,7 +6,14 @@ from typing import Annotated, Any
 
 from pydantic import AfterValidator, BeforeValidator, Field, StrictBool, StrictInt, StrictStr
 
-from vibepod_board.enums import BoardColumn, DocumentKind, IdeaStatus, ReleaseOutcome
+from vibepod_board.enums import (
+    BoardColumn,
+    DocumentKind,
+    IdeaStatus,
+    ReleaseOutcome,
+    WorkerStatus,
+    WorkerStep,
+)
 from vibepod_board.schemas import ApiModel
 from vibepod_board.services.claims import MAX_LEASE_SECONDS, MIN_LEASE_SECONDS
 from vibepod_board.services.listing import BATCH_LIMIT
@@ -199,3 +206,22 @@ class TokenCreate(ApiModel):
 class TokenUpdate(ApiModel):
     name: RequiredText | None = None
     project_ids: Annotated[Ids, Field(min_length=1)] | None = None
+
+
+class WorkerRegistration(ApiModel):
+    project_id: RequiredText
+    # Shown on the board and used as the holder of the claims the worker takes.
+    name: RequiredText
+    agent: StrictStr = ""
+    machine: StrictStr = ""
+
+
+class HeartbeatRequest(ApiModel):
+    status: WorkerStatus
+    # Why the worker is paused, such as a reached usage limit.
+    status_reason: StrictStr | None = None
+    # The task being worked on; required while working.
+    task: RequiredText | None = None
+    step: WorkerStep | None = None
+    # The lease the worker's claims are renewed by; the server default when omitted.
+    lease_seconds: LeaseSeconds | None = None

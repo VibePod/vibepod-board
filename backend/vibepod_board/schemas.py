@@ -14,7 +14,14 @@ from pydantic import (
 )
 from pydantic.alias_generators import to_camel
 
-from vibepod_board.enums import BoardColumn, DocumentKind, IdeaStatus, TaskEventKind
+from vibepod_board.enums import (
+    BoardColumn,
+    DocumentKind,
+    IdeaStatus,
+    TaskEventKind,
+    WorkerState,
+    WorkerStep,
+)
 
 
 def format_timestamp(value: datetime) -> str:
@@ -305,3 +312,41 @@ class CreatedApiToken(ApiModel):
 class ImportProjectResult(ApiModel):
     item: Project
     replaced: bool
+
+
+class Worker(ApiModel):
+    id: str
+    project_id: str
+    name: str
+    agent: str
+    machine: str
+    # offline once the heartbeats stopped or the worker signed off.
+    status: WorkerState
+    status_reason: str | None = None
+    # The task being worked on, with its key and title, the step it is in and since when.
+    task_id: str | None = None
+    task_key: str | None = None
+    task_title: str | None = None
+    step: WorkerStep | None = None
+    task_started_at: Timestamp | None = None
+    started_at: Timestamp
+    last_seen_at: Timestamp
+    stopped_at: Timestamp | None = None
+
+
+class WorkerInstruction(ApiModel):
+    """Something the board asks a worker to do, delivered with the heartbeat reply."""
+
+    type: str
+    reason: str | None = None
+    task_id: str | None = None
+    task_key: str | None = None
+
+
+class WorkerSession(ApiModel):
+    """The reply to a registration or heartbeat."""
+
+    item: Worker
+    instructions: list[WorkerInstruction] = Field(default_factory=list)
+    # How often the board expects a heartbeat.
+    heartbeat_seconds: int

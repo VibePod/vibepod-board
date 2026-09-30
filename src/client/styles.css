@@ -1195,3 +1195,39 @@ body {
 .task-history-event {
   display: contents;
 }
+
+.worker-live-dot {
+  flex-shrink: 0;
+  margin-top: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mantine-color-green-6);
+  box-shadow: 0 0 0 0 rgba(47, 158, 68, 0.6);
+  animation: worker-live-pulse 1.6s ease-out infinite;
+}
+
+@keyframes worker-live-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(47, 158, 68, 0.6);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(47, 158, 68, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(47, 158, 68, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .worker-live-dot {
+    animation: none;
+  }
+}
+
+.board-card-worker {
+  min-width: 0;
+  padding: 4px 6px;
+  border-radius: var(--mantine-radius-sm);
+  background: var(--mantine-color-green-light);
+}

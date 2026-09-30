@@ -139,11 +139,13 @@ def _next_claimable(
         card = session.get(BoardCardRow, item.card_id)
         if idea is None or _obstacle(card, idea, [], labels, min_readiness) is not None:
             continue
-        # Re-read under lock: a card write does not take the project lock, so the card may
-        # have moved since the work order was read.
+        # Re-read under lock: card and dependency writes do not take the project lock, so
+        # the card may have moved, or the task gained a dependency, since the work order was
+        # read. A dependency write locks the task row, so its edges are settled here.
         idea = lock(session, IdeaRow, item.id)
         card = lock(session, BoardCardRow, item.card_id)
-        if _obstacle(card, idea, [], labels, min_readiness) is None:
+        blocked_by = decorate_idea(session, idea).blocked_by
+        if _obstacle(card, idea, blocked_by, labels, min_readiness) is None:
             return idea, card
     return None
 
@@ -257,6 +259,10 @@ def _held(
     if card.claimed_at is None or card.assignee != holder:
         state = f"{card.assignee} holds it" if card.claimed_at else "it is not claimed"
         raise Conflict(f"Task {_key(session, idea)} is not claimed by {holder}: {state}")
+    if card.claim_expires_at is None or card.claim_expires_at <= now():
+        # A lapsed lease is over even before the sweep ends it: the task may be handed to
+        # another runner at any moment, so its old holder can no longer act on it.
+        raise Conflict(f"Task {_key(session, idea)} is not claimed by {holder}: the claim expired")
     return idea, card
 
 
@@ -327,22 +333,44 @@ def release_task(
     """Gives a claimed task back to Planned. A failed run counts an attempt, and the attempt
     that reaches `max_attempts` blocks the task instead; `blocked` blocks it outright, with the
     note as the reason shown on the card; `released` counts nothing."""
-    holder = _holder(assignee)
-    outcome = ReleaseOutcome(outcome)
+    card = apply_release(
+        session,
+        access,
+        reference,
+        _holder(assignee),
+        ReleaseOutcome(outcome),
+        note,
+        max_attempts or default_max_attempts,
+    )
+    return decorate_card(session, card_from_row(card))
+
+
+def apply_release(
+    session: Session,
+    access: AccessContext,
+    reference: str,
+    holder: str,
+    outcome: ReleaseOutcome,
+    note: str | None,
+    max_attempts: int,
+    timestamp: datetime | None = None,
+) -> BoardCardRow:
+    """The release inside the caller's transaction, so signing a worker off can release the
+    claims it still holds in the same write. Without a timestamp it is taken once the locks are
+    held, so a release that waited behind an edit is never stamped older than that edit."""
     note = (note or "").strip()
     if outcome == ReleaseOutcome.BLOCKED and not note:
         raise BadRequest("A note is required to block a task: it is the reason shown on the card")
-    limit = max_attempts or default_max_attempts
-    if limit < 1:
+    if max_attempts < 1:
         raise BadRequest("maxAttempts must be at least 1")
     idea, card = _held(session, access, reference, holder)
-    timestamp = now()
+    timestamp = timestamp or now()
     _end_claim(card, idea, timestamp)
     card.column_name = BoardColumn.PLANNED
     suffix = f": {note}" if note else ""
     if outcome == ReleaseOutcome.FAILED:
         card.attempts += 1
-        if card.attempts >= limit:
+        if card.attempts >= max_attempts:
             _block(card, f"Failed {_count(card.attempts, 'attempt')}{suffix}", timestamp)
             kind, message = (
                 TaskEventKind.BLOCKED,
@@ -352,7 +380,7 @@ def release_task(
         else:
             kind, message = (
                 TaskEventKind.FAILED,
-                f"Attempt {card.attempts} of {limit} failed{suffix}",
+                f"Attempt {card.attempts} of {max_attempts} failed{suffix}",
             )
     elif outcome == ReleaseOutcome.BLOCKED:
         _block(card, note, timestamp)
@@ -362,7 +390,7 @@ def release_task(
     add_task_event(session, idea.id, kind, message, holder, timestamp)
     add_activity(session, f"board.{kind.value}", f"{_key(session, idea)}: {message}", timestamp)
     session.flush()
-    return decorate_card(session, card_from_row(card))
+    return card
 
 
 def _locked_or_none[T: IdeaRow | BoardCardRow](

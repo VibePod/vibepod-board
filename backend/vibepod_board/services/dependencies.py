@@ -15,6 +15,7 @@ from vibepod_board.schemas import BoardCard, Idea, now
 from vibepod_board.services.common import (
     add_activity,
     idea_from_row,
+    lock,
     transactional,
 )
 from vibepod_board.services.references import require_idea_ref, resolve_idea_id
@@ -185,8 +186,11 @@ def _write_dependencies(
     idea_id: str,
     change: Callable[[list[str]], list[str]],
 ) -> Idea:
-    idea = require_idea_ref(session, access, idea_id)
-    assert_can_access_project(access, idea.project_id)
+    found = require_idea_ref(session, access, idea_id)
+    assert_can_access_project(access, found.project_id)
+    # Lock the task before its edges change, so a claim that re-checks the task's
+    # dependencies under the same lock sees them settled.
+    idea = lock(session, IdeaRow, found.id)
     timestamp = now()
     replace_dependencies(
         session, access, idea, change(current_dependency_ids(session, idea.id)), timestamp

@@ -4,9 +4,9 @@ Unlike the activity log, which spans all projects and keeps only its newest entr
 history belongs to its task and is kept for as long as the task exists.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from sqlmodel import Session, col, select
+from sqlmodel import Session, col, func, select
 
 from vibepod_board.access import AccessContext, AdminAccess, assert_can_access_project
 from vibepod_board.enums import TaskEventKind
@@ -32,6 +32,13 @@ def add_task_event(
     actor: str | None,
     created_at: datetime,
 ) -> None:
+    """Records an event. Events a write adds share its timestamp, so each one lands a
+    millisecond after the task's latest event: the history keeps the order they happened in."""
+    latest = session.exec(
+        select(func.max(TaskEventRow.created_at)).where(TaskEventRow.idea_id == idea_id)
+    ).one()
+    if latest is not None and created_at <= latest:
+        created_at = latest + timedelta(milliseconds=1)
     session.add(
         TaskEventRow(
             id=new_id(),

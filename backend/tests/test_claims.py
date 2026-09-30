@@ -15,7 +15,7 @@ from sqlmodel import Session
 
 from vibepod_board.access import admin_access, token_access
 from vibepod_board.bundle import parse_project_bundle
-from vibepod_board.enums import BoardColumn, ReleaseOutcome
+from vibepod_board.enums import BoardColumn, ReleaseOutcome, TaskEventKind
 from vibepod_board.errors import BadRequest, Conflict, Forbidden, NotFound
 from vibepod_board.schemas import now
 from vibepod_board.services import board, claims, history, ideas, projects, readiness, transfer
@@ -492,6 +492,27 @@ def test_a_claim_sweeps_lapsed_claims_of_its_project_first(
     assert card(session, task).attempts == 1
 
 
+def test_a_lapsed_claim_cannot_be_used_before_the_sweep_ends_it(
+    db: Engine, session: Session, vp
+) -> None:
+    task = planned(session, vp, "Lapsed but not swept")
+    claim(session)
+    with db.begin() as connection:
+        connection.execute(
+            text("update board_cards set claim_expires_at = now() - interval '1 minute'")
+        )
+
+    for report in (
+        lambda: claims.renew_claim(session, ADMIN, task.id, RUNNER),
+        lambda: claims.hand_over_task(session, ADMIN, task.id, RUNNER, branch_name="late"),
+        lambda: claims.release_task(session, ADMIN, task.id, RUNNER, ReleaseOutcome.RELEASED),
+    ):
+        with pytest.raises(Conflict, match=f"not claimed by {RUNNER}: the claim expired"):
+            report()
+    assert card(session, task).column == BoardColumn.IN_PROGRESS
+    assert claimed_key(claim(session, OTHER)) == "VP-1"
+
+
 def test_the_app_sweeps_expired_claims_in_the_background(
     db: Engine, session: Session, vp, settings
 ) -> None:
@@ -531,6 +552,25 @@ def test_exports_leave_automation_state_behind(session: Session, vp) -> None:
     assert parse_project_bundle(bundle.model_dump(mode="json"))
     assert all("claimedAt" not in card and "blockedReason" not in card for card in cards)
     assert all("attempts" not in card for card in cards)
+
+
+def test_exports_a_claimed_task_as_planned_and_unheld(session: Session, vp) -> None:
+    planned(session, vp, "Claimed")
+    kept = planned(session, vp, "Held by a person", assignee="Alice")
+    claim(session)
+
+    bundle = transfer.export_project(session, vp.id).model_dump(mode="json")
+    cards = {card["title"]: card for card in bundle["boardCards"]}
+    tasks = {task["title"]: task for task in bundle["ideas"]}
+
+    assert cards["Claimed"]["column"] == "planned"
+    assert cards["Claimed"].get("assignee") is None
+    assert tasks["Claimed"].get("assignee") is None
+    assert cards["Held by a person"]["assignee"] == "Alice"
+    assert tasks["Held by a person"]["assignee"] == "Alice"
+    assert card(session, kept).assignee == "Alice"
+    # The live board keeps the claim; only the bundle leaves it behind.
+    assert board.get_card(session, ADMIN, "VP-1").assignee == RUNNER
 
 
 # --- REST ----------------------------------------------------------------------------
@@ -765,6 +805,60 @@ def test_moving_a_claimed_card_while_it_is_handed_over_never_deadlocks(
         assert errors == []
 
 
+def test_a_dependency_added_after_the_work_order_was_read_stops_the_claim(
+    db: Engine, session: Session, vp, monkeypatch
+) -> None:
+    from vibepod_board.services import dependencies
+
+    blocker = ideas.create_idea(session, ADMIN, title="Unfinished", project_id=vp.id)
+    task = planned(session, vp, "Gains a dependency")
+    read_work_order = claims.work_order
+
+    def stale_work_order(*args: Any, **kwargs: Any):
+        order = read_work_order(*args, **kwargs)
+        with Session(db) as other:
+            dependencies.add_dependency(other, ADMIN, task.id, blocker.id)
+        return order
+
+    monkeypatch.setattr(claims, "work_order", stale_work_order)
+
+    assert claim(session).claimed is False
+    assert card(session, task).column == BoardColumn.PLANNED
+
+
+def test_a_release_waiting_behind_an_edit_is_stamped_after_it(
+    db: Engine, session: Session, vp
+) -> None:
+    task = planned(session, vp, "Contended")
+    claim(session, task=task.id)
+    card_id = card(session, task).id
+    released: list[Any] = []
+
+    def release() -> None:
+        with Session(db, expire_on_commit=False) as own:
+            released.append(
+                claims.release_task(own, ADMIN, task.id, RUNNER, ReleaseOutcome.RELEASED)
+            )
+
+    with Session(db) as editor:
+        editor.execute(
+            text("select id from board_cards where id = :id for update"), {"id": card_id}
+        )
+        worker = threading.Thread(target=release)
+        worker.start()
+        time.sleep(0.5)
+        edited_at = now()
+        editor.execute(
+            text("update board_cards set updated_at = :at where id = :id"),
+            {"at": edited_at, "id": card_id},
+        )
+        editor.commit()
+    worker.join(timeout=30)
+
+    assert len(released) == 1
+    assert released[0].updated_at > edited_at
+
+
 def test_taking_a_claimed_task_off_the_board_frees_its_holder(session: Session, vp) -> None:
     task = planned(session, vp, "Taken off")
     claim(session)
@@ -776,6 +870,38 @@ def test_taking_a_claimed_task_off_the_board_frees_its_holder(session: Session, 
     ideas.mark_ready(session, ADMIN, task.id)
     board.update_card(session, ADMIN, task.id, column=BoardColumn.PLANNED)
     assert claimed_key(claim(session, OTHER)) == "VP-1"
+
+
+def test_denying_a_claimed_task_ends_the_claim(session: Session, vp) -> None:
+    task = planned(session, vp, "Denied midway")
+    claim(session)
+
+    ideas.update_idea(session, ADMIN, task.id, status="denied")
+
+    denied = card(session, task)
+    assert (denied.column, denied.claimed_at, denied.assignee) == (
+        BoardColumn.PLANNED,
+        None,
+        None,
+    )
+    assert ideas.get_idea(session, ADMIN, task.id).assignee is None
+    assert history.list_task_history(session, ADMIN, task.id)[0].message == (
+        f"Claim by {RUNNER} ended: the task was denied"
+    )
+    with pytest.raises(Conflict, match="it is not claimed"):
+        claims.hand_over_task(session, ADMIN, task.id, RUNNER)
+    assert claim(session).claimed is False
+
+
+def test_events_written_together_keep_their_order_in_the_history(session: Session, vp) -> None:
+    task = planned(session, vp, "Failed, claimed again, then moved by hand")
+    claim(session)
+    claims.release_task(session, ADMIN, task.id, RUNNER, ReleaseOutcome.FAILED)
+    claim(session)
+
+    board.move_card(session, ADMIN, card(session, task).id, BoardColumn.PLANNED)
+
+    assert kinds(session, task)[:2] == [TaskEventKind.UNBLOCKED, TaskEventKind.CLAIM_ENDED]
 
 
 def test_a_lease_setting_out_of_range_fails_at_startup(monkeypatch) -> None:

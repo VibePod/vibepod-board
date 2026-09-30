@@ -46,3 +46,28 @@ class TaskEventKind(StrEnum):
 
 
 BOARD_COLUMNS: tuple[BoardColumn, ...] = tuple(BoardColumn)
+
+
+class WorkerStatus(StrEnum):
+    """What a worker reports about itself."""
+
+    IDLE = "idle"
+    WORKING = "working"
+    # Not taking work, such as after reaching a usage limit; the reason says why.
+    PAUSED = "paused"
+
+
+class WorkerState(StrEnum):
+    """What the board shows: the reported status, or offline when the heartbeats stopped."""
+
+    IDLE = "idle"
+    WORKING = "working"
+    PAUSED = "paused"
+    OFFLINE = "offline"
+
+
+class WorkerStep(StrEnum):
+    PREPARING_WORKSPACE = "preparing_workspace"
+    AGENT_RUNNING = "agent_running"
+    VERIFYING = "verifying"
+    HANDING_OVER = "handing_over"
