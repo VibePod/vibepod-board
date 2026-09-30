@@ -826,6 +826,39 @@ def test_a_dependency_added_after_the_work_order_was_read_stops_the_claim(
     assert card(session, task).column == BoardColumn.PLANNED
 
 
+def test_a_release_waiting_behind_an_edit_is_stamped_after_it(
+    db: Engine, session: Session, vp
+) -> None:
+    task = planned(session, vp, "Contended")
+    claim(session, task=task.id)
+    card_id = card(session, task).id
+    released: list[Any] = []
+
+    def release() -> None:
+        with Session(db, expire_on_commit=False) as own:
+            released.append(
+                claims.release_task(own, ADMIN, task.id, RUNNER, ReleaseOutcome.RELEASED)
+            )
+
+    with Session(db) as editor:
+        editor.execute(
+            text("select id from board_cards where id = :id for update"), {"id": card_id}
+        )
+        worker = threading.Thread(target=release)
+        worker.start()
+        time.sleep(0.5)
+        edited_at = now()
+        editor.execute(
+            text("update board_cards set updated_at = :at where id = :id"),
+            {"at": edited_at, "id": card_id},
+        )
+        editor.commit()
+    worker.join(timeout=30)
+
+    assert len(released) == 1
+    assert released[0].updated_at > edited_at
+
+
 def test_taking_a_claimed_task_off_the_board_frees_its_holder(session: Session, vp) -> None:
     task = planned(session, vp, "Taken off")
     claim(session)

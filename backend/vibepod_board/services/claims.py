@@ -341,7 +341,6 @@ def release_task(
         ReleaseOutcome(outcome),
         note,
         max_attempts or default_max_attempts,
-        now(),
     )
     return decorate_card(session, card_from_row(card))
 
@@ -354,16 +353,18 @@ def apply_release(
     outcome: ReleaseOutcome,
     note: str | None,
     max_attempts: int,
-    timestamp: datetime,
+    timestamp: datetime | None = None,
 ) -> BoardCardRow:
     """The release inside the caller's transaction, so signing a worker off can release the
-    claims it still holds in the same write."""
+    claims it still holds in the same write. Without a timestamp it is taken once the locks are
+    held, so a release that waited behind an edit is never stamped older than that edit."""
     note = (note or "").strip()
     if outcome == ReleaseOutcome.BLOCKED and not note:
         raise BadRequest("A note is required to block a task: it is the reason shown on the card")
     if max_attempts < 1:
         raise BadRequest("maxAttempts must be at least 1")
     idea, card = _held(session, access, reference, holder)
+    timestamp = timestamp or now()
     _end_claim(card, idea, timestamp)
     card.column_name = BoardColumn.PLANNED
     suffix = f": {note}" if note else ""
