@@ -31,6 +31,7 @@ const columns = (ready: BoardCard[], done: BoardCard[]): BoardColumns => ({
   planned: [],
   in_progress: [],
   review: [],
+  pr_ready: [],
   done,
 });
 
@@ -121,4 +122,15 @@ describe("filterColumnsByAssignee", () => {
     expect(filtered.ready.map((entry) => entry.id)).toEqual(["free"]);
     expect(filtered.done).toEqual([]);
   });
+});
+
+it("filters cards in PR ready by assignee", () => {
+  const board = columns([], []);
+  board.pr_ready = [
+    { ...card("pr-ada", ada), column: "pr_ready" },
+    { ...card("pr-grace", grace), column: "pr_ready" },
+  ];
+  expect(
+    filterColumnsByAssignee(board, ada).pr_ready.map((card) => card.id),
+  ).toEqual(["pr-ada"]);
 });

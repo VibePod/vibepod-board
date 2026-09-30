@@ -45,6 +45,7 @@ const columns: BoardColumns = {
   planned: [],
   in_progress: [],
   review: [],
+  pr_ready: [],
   done: [],
 };
 

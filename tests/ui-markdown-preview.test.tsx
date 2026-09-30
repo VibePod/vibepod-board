@@ -119,6 +119,7 @@ const renderTasksView = async (section: "tasks" | "board" = "tasks") => {
           planned: [],
           in_progress: [],
           review: [],
+          pr_ready: [],
           done: [],
         },
       });

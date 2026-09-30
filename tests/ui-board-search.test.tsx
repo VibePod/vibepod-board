@@ -89,6 +89,7 @@ const columns = {
     }),
   ],
   review: [],
+  pr_ready: [],
   done: [],
 };
 

@@ -2,7 +2,7 @@
 
 An agent that cannot go on asks a question: its runner releases the task as `needs_input`,
 which blocks the card with the question (see `claims.apply_release`). Answering puts the task
-back in Planned, and a reviewer sends a task from Review back to Planned with feedback. The
+back in Planned, and a reviewer sends a task from Review or PR ready back with feedback. The
 question, the answer and the feedback stay in the task history, where the next run reads them;
 a task sent back keeps its branch, so the next run continues the work there.
 """
@@ -75,16 +75,16 @@ def answer_question(
 def request_rework(
     session: Session, access: AccessContext, reference: str, feedback: str
 ) -> BoardCard:
-    """Sends a task from Review back to Planned with a reviewer's feedback. The card keeps
-    its branch, so the next run continues the work there."""
+    """Sends a task from Review or PR ready back to Planned with a reviewer's feedback.
+    The card keeps its branch, so the next run continues the work there."""
     feedback = (feedback or "").strip()
     if not feedback:
         raise BadRequest("Feedback is required to send a task back")
     idea, card = _locked_card(session, access, reference)
     key = task_keys(session, [idea.id]).get(idea.id, idea.id)
-    if card.column_name != BoardColumn.REVIEW:
+    if card.column_name not in (BoardColumn.REVIEW, BoardColumn.PR_READY):
         column = card.column_name.replace("_", " ")
-        raise Conflict(f"Task {key} is in {column}; only tasks in review are sent back")
+        raise Conflict(f"Task {key} is in {column}; only tasks in review or PR ready are sent back")
     timestamp = now()
     actor = actor_for(session, access)
     add_task_event(session, idea.id, TaskEventKind.FEEDBACK, feedback, actor, timestamp)
