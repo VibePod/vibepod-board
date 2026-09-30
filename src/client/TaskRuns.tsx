@@ -62,13 +62,17 @@ const RunReport = ({ run }: { run: TaskRun }) => (
           <MarkdownText>{run.summary}</MarkdownText>
         </div>
       )}
-      {run.commits.length > 0 && (
+      {(run.commits.length > 0 || run.branchName) && (
         <Stack gap={2} className="task-run-commits">
           <Text size="xs" fw={700} c="dimmed">
-            {run.commits.length === 1
-              ? "1 commit"
-              : `${run.commits.length} commits`}
-            {run.branchName ? ` on ${run.branchName}` : ""}
+            {run.commits.length === 0
+              ? `No commits on ${run.branchName}`
+              : run.commits.length === 1
+                ? "1 commit"
+                : `${run.commits.length} commits`}
+            {run.commits.length > 0 && run.branchName
+              ? ` on ${run.branchName}`
+              : ""}
           </Text>
           {run.commits.map((commit) => (
             <Group key={commit.sha} gap={6} wrap="nowrap">

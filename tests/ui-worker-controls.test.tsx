@@ -103,6 +103,7 @@ const runs: TaskRun[] = [
     outcome: "usage_limit",
     summary: "",
     commits: [],
+    branchName: "vp-1",
     verifyExitCode: 2,
     verifyOutput: "Quota exhausted",
     verifyOutputTruncated: false,
@@ -349,6 +350,8 @@ describe("worker controls", () => {
     expect(within(earlier).getByText("(command not reported)")).toBeTruthy();
     expect(within(earlier).getByText("exit 2")).toBeTruthy();
     expect(within(earlier).getByText("Quota exhausted")).toBeTruthy();
+    // A run that made no commits still shows its branch.
+    expect(within(earlier).getByText("No commits on vp-1")).toBeTruthy();
     expect(
       within(view).getByRole("button", { name: "Cancel run" }),
     ).toBeTruthy();
