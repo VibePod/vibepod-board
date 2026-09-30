@@ -262,6 +262,16 @@ def test_run_reports_keep_the_history_of_attempts(session: Session, vp) -> None:
     assert second.verify_output_truncated is False
 
 
+def test_a_report_from_a_registered_worker_carries_its_name(session: Session, vp) -> None:
+    worker, task = working(session, vp)
+
+    report = runs.add_run_report(
+        session, ADMIN, task.id, RunOutcome.DONE, worker_id=worker.id, worker_name="impostor"
+    )
+
+    assert report.worker_name == NAME
+
+
 def test_long_verify_output_keeps_its_head_and_tail(session: Session, vp) -> None:
     task = planned(session, vp, "Noisy tests")
     output = "HEAD" + "x" * 50_000 + "TAIL: 3 failed"

@@ -85,7 +85,8 @@ def add_run_report(
         worker = require_worker(session, access, worker_id)
         if worker.project_id != idea.project_id:
             raise BadRequest("The worker belongs to another project")
-        worker_name = worker_name or worker.name
+        # The registered worker names the report, whatever name the caller sent along.
+        worker_name = worker.name
         agent = agent or worker.agent or None
     output, truncated = (
         truncate_middle(verify_output, VERIFY_OUTPUT_HEAD, VERIFY_OUTPUT_TAIL)
