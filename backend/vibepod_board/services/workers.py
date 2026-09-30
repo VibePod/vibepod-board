@@ -165,6 +165,11 @@ def register_worker(
         raise BadRequest("Worker name is required")
     project_id = resolve_project_id(session, project)
     assert_can_access_project(access, project_id)
+    # Registrations of a project take turns, so two starting under one name never both stay
+    # connected: the second one sees and replaces the first.
+    project_row = session.exec(
+        select(ProjectRow).where(ProjectRow.id == project_id).with_for_update()
+    ).one()
     timestamp = now()
     session.execute(
         delete(WorkerRow).where(
@@ -200,9 +205,9 @@ def register_worker(
         last_seen_at=timestamp,
     )
     session.add(row)
-    project_row = session.get(ProjectRow, project_id)
-    key = project_row.key if project_row else project_id
-    add_activity(session, "worker.registered", f"Worker {name} connected to {key}", timestamp)
+    add_activity(
+        session, "worker.registered", f"Worker {name} connected to {project_row.key}", timestamp
+    )
     return _session_reply(session, row, timing)
 
 

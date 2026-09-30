@@ -1,6 +1,7 @@
 """Workers: runners register with a project, report what they do in heartbeats that keep
 their claims alive, and sign off; silent workers show as offline."""
 
+import threading
 import time
 from datetime import timedelta
 from typing import Any
@@ -209,6 +210,36 @@ def test_registering_a_connected_name_replaces_the_old_registration(session: Ses
     assert (old.id, WorkerState.OFFLINE) in names
     with pytest.raises(Conflict):
         workers.heartbeat(session, ADMIN, old.id, WorkerStatus.IDLE)
+
+
+def test_concurrent_registrations_of_one_name_leave_one_connected(
+    db: Engine, session: Session, vp
+) -> None:
+    runners = 8
+    barrier = threading.Barrier(runners)
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            with Session(db, expire_on_commit=False) as own:
+                barrier.wait(timeout=10)
+                register(own)
+        except BaseException as error:  # noqa: BLE001 - surfaced by the assert below
+            errors.append(error)
+
+    threads = [threading.Thread(target=run) for _ in range(runners)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert errors == []
+    live = session.execute(
+        text("select count(*) from workers where name = :name and stopped_at is null"),
+        {"name": NAME},
+    ).scalar_one()
+    assert live == 1
+    assert [worker.status for worker in listed(session)].count(WorkerState.IDLE) == 1
 
 
 def test_workers_are_visible_only_within_the_token_projects(session: Session, vp) -> None:
