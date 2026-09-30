@@ -277,6 +277,9 @@ const emptyProjectDraft = (): ProjectDraft => ({
 
 /** How often the workers of the open project are polled while the page is visible. */
 const workerPollMs = 5000;
+// While a worker is online the board also reloads this often: a claim and a
+// hand-over can both happen between two worker polls and leave no trace in them.
+const activeBoardRefreshMs = 30_000;
 
 /** Matches the import body limit of the server, so oversized files fail early. */
 const maxProjectBundleBytes = 10 * 1024 * 1024;
@@ -663,7 +666,7 @@ const App = () => {
 
   // Workers of the open project: their status, and the live indicator on the
   // cards they work on. When what they do changes, automation moved cards, so
-  // the board reloads too.
+  // the board reloads too, and it reloads regularly while any worker is online.
   useEffect(() => {
     // Another project's workers must not show while this one's load.
     setWorkers([]);
@@ -672,6 +675,11 @@ const App = () => {
     }
     let cancelled = false;
     let signature: string | null = null;
+    let lastReload = Date.now();
+    const reload = () => {
+      lastReload = Date.now();
+      void loadStateRef.current({ background: true }).catch(() => undefined);
+    };
     const poll = async () => {
       try {
         const response = await api<{ items: Worker[] }>(
@@ -680,10 +688,13 @@ const App = () => {
         if (cancelled) return;
         setWorkers(response.items);
         const next = workerActivitySignature(response.items);
+        const active = response.items.some(
+          (worker) => worker.status !== "offline",
+        );
         if (signature !== null && next !== signature) {
-          void loadStateRef
-            .current({ background: true })
-            .catch(() => undefined);
+          reload();
+        } else if (active && Date.now() - lastReload >= activeBoardRefreshMs) {
+          reload();
         }
         signature = next;
       } catch {

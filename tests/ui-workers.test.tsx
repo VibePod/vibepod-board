@@ -369,4 +369,41 @@ describe("connected workers", () => {
     expect(screen.getByText("Newest snapshot")).toBeTruthy();
     expect(screen.queryByText("Stale snapshot")).toBeNull();
   });
+
+  it("reloads the board regularly only while a worker is online", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const boardLoads = (fetchMock: ReturnType<typeof boardApi>) =>
+        fetchMock.mock.calls.filter(([input]) => String(input) === "/api/board")
+          .length;
+
+      const online = await renderBoard({
+        workers: [worker({ status: "idle" })],
+        columns: inProgress(),
+      });
+      const before = boardLoads(online);
+      await vi.advanceTimersByTimeAsync(31_000);
+      await waitFor(() => expect(boardLoads(online)).toBeGreaterThan(before));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves the board alone while every worker is offline", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const fetchMock = await renderBoard({
+        workers: [worker({ status: "offline" })],
+        columns: inProgress(),
+      });
+      const boardLoads = () =>
+        fetchMock.mock.calls.filter(([input]) => String(input) === "/api/board")
+          .length;
+      const before = boardLoads();
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(boardLoads()).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
