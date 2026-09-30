@@ -554,6 +554,25 @@ def test_exports_leave_automation_state_behind(session: Session, vp) -> None:
     assert all("attempts" not in card for card in cards)
 
 
+def test_exports_a_claimed_task_as_planned_and_unheld(session: Session, vp) -> None:
+    planned(session, vp, "Claimed")
+    kept = planned(session, vp, "Held by a person", assignee="Alice")
+    claim(session)
+
+    bundle = transfer.export_project(session, vp.id).model_dump(mode="json")
+    cards = {card["title"]: card for card in bundle["boardCards"]}
+    tasks = {task["title"]: task for task in bundle["ideas"]}
+
+    assert cards["Claimed"]["column"] == "planned"
+    assert cards["Claimed"].get("assignee") is None
+    assert tasks["Claimed"].get("assignee") is None
+    assert cards["Held by a person"]["assignee"] == "Alice"
+    assert tasks["Held by a person"]["assignee"] == "Alice"
+    assert card(session, kept).assignee == "Alice"
+    # The live board keeps the claim; only the bundle leaves it behind.
+    assert board.get_card(session, ADMIN, "VP-1").assignee == RUNNER
+
+
 # --- REST ----------------------------------------------------------------------------
 
 

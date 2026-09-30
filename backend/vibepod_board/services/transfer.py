@@ -6,6 +6,7 @@ from sqlmodel import Session, col, select
 
 from vibepod_board.access import token_access
 from vibepod_board.bundle import ProjectBundle, parse_project_bundle
+from vibepod_board.enums import BoardColumn
 from vibepod_board.errors import Conflict
 from vibepod_board.github import normalize_repository
 from vibepod_board.schemas import ImportProjectResult, Project, format_timestamp, now
@@ -55,6 +56,16 @@ def export_project(session: Session, project_id: str) -> ProjectBundle:
     project = project_from_row(require_project(session, project_id))
     access = token_access("project-export", [project.id])
     ideas = list_ideas(session, access, project.id)
+    cards = list_cards(session, access, project.id)
+    # A claimed task leaves as planned work nobody holds: its runner's claim does not come
+    # along, so the imported task must not stay in progress under a holder that is gone.
+    claimed = {card.idea_id: card.assignee for card in cards if card.claimed_at and card.idea_id}
+    for index, card in enumerate(cards):
+        if card.claimed_at:
+            cards[index] = card.model_copy(update={"column": BoardColumn.PLANNED, "assignee": None})
+    for index, idea in enumerate(ideas):
+        if idea.id in claimed and idea.assignee == claimed[idea.id]:
+            ideas[index] = idea.model_copy(update={"assignee": None})
     return parse_project_bundle(
         {
             "bundleVersion": 3,
@@ -62,8 +73,7 @@ def export_project(session: Session, project_id: str) -> ProjectBundle:
             "project": project.model_dump(mode="json"),
             "ideas": [idea.model_dump(mode="json") for idea in ideas],
             "boardCards": [
-                card.model_dump(mode="json", exclude=AUTOMATION_CARD_FIELDS)
-                for card in list_cards(session, access, project.id)
+                card.model_dump(mode="json", exclude=AUTOMATION_CARD_FIELDS) for card in cards
             ],
             "readinessEvents": [
                 event.model_dump(mode="json")
