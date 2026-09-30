@@ -3,10 +3,10 @@ attempts. Long text is cut down to fit: the verify output keeps its head and its
 test runners print their summary."""
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
-from sqlmodel import Session, col, select
+from sqlmodel import Session, col, func, select
 
 from vibepod_board.access import AccessContext, assert_can_access_project
 from vibepod_board.enums import RunOutcome
@@ -98,6 +98,13 @@ def add_run_report(
         else (None, False)
     )
     timestamp = now()
+    # Reports of a task keep the order they came in: one sent within the same millisecond as
+    # the task's latest report lands just after it (as in the task history).
+    latest = session.exec(
+        select(func.max(TaskRunRow.created_at)).where(TaskRunRow.idea_id == idea.id)
+    ).one()
+    if latest is not None and timestamp <= latest:
+        timestamp = latest + timedelta(milliseconds=1)
     row = TaskRunRow(
         id=new_id(),
         idea_id=idea.id,

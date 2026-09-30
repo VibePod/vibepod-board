@@ -314,6 +314,20 @@ def test_a_report_stores_the_resolved_worker_id(session: Session, vp) -> None:
     assert report.worker_id == worker.id
 
 
+def test_reports_in_the_same_millisecond_keep_their_order(
+    monkeypatch, session: Session, vp
+) -> None:
+    task = planned(session, vp, "Reported twice at once")
+    frozen = now()
+    monkeypatch.setattr(runs, "now", lambda: frozen)
+
+    first = runs.add_run_report(session, ADMIN, task.id, RunOutcome.FAILED, summary="first")
+    second = runs.add_run_report(session, ADMIN, task.id, RunOutcome.DONE, summary="second")
+
+    listed = runs.list_run_reports(session, ADMIN, task.id)
+    assert [report.id for report in listed] == [second.id, first.id]
+
+
 def test_long_verify_output_keeps_its_head_and_tail(session: Session, vp) -> None:
     task = planned(session, vp, "Noisy tests")
     output = "HEAD" + "x" * 50_000 + "TAIL: 3 failed"
