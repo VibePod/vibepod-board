@@ -46,8 +46,10 @@ def task_run_from_row(row: TaskRunRow) -> TaskRun:
 
 
 def _commits(commits: Sequence[Any]) -> list[dict[str, str]]:
+    if len(commits) > COMMIT_LIMIT:
+        raise BadRequest(f"A run report takes at most {COMMIT_LIMIT} commits")
     normalized = []
-    for commit in list(commits)[:COMMIT_LIMIT]:
+    for commit in commits:
         data = commit if isinstance(commit, dict) else commit.model_dump()
         sha = str(data.get("sha", "")).strip()
         if not sha:

@@ -296,6 +296,9 @@ def test_run_reports_validate_their_input(session: Session, vp) -> None:
         runs.add_run_report(session, ADMIN, task.id, RunOutcome.DONE, duration_seconds=-1)
     with pytest.raises(NotFound):
         runs.add_run_report(session, token_access("t", [other.id]), task.id, RunOutcome.DONE)
+    too_many = [{"sha": f"{index:08x}"} for index in range(runs.COMMIT_LIMIT + 1)]
+    with pytest.raises(BadRequest, match="at most"):
+        runs.add_run_report(session, ADMIN, task.id, RunOutcome.DONE, commits=too_many)
 
 
 # --- REST ----------------------------------------------------------------------------
@@ -376,6 +379,11 @@ def test_rest_records_and_lists_run_reports(api: TestClient) -> None:
         == 400
     )
     assert api.post("/api/ideas/VP-1/runs", json={"outcome": "maybe"}).status_code == 400
+    too_many = [{"sha": f"{index:08x}"} for index in range(201)]
+    assert (
+        api.post("/api/ideas/VP-1/runs", json={"outcome": "done", "commits": too_many}).status_code
+        == 400
+    )
 
 
 # --- MCP -----------------------------------------------------------------------------
@@ -415,6 +423,15 @@ async def test_mcp_steers_workers_and_reports_runs(server_url: str, session: Ses
         workerId=worker.id,
     )
     assert report["item"]["workerName"] == NAME
+    with pytest.raises(ToolError):
+        await call(
+            server_url,
+            token,
+            "add_run_report",
+            id="VP-1",
+            outcome="done",
+            commits=[{"sha": f"{index:08x}"} for index in range(201)],
+        )
     reports = await call(server_url, token, "list_run_reports", id=task.id)
     assert [item["outcome"] for item in reports["items"]] == ["cancelled"]
 

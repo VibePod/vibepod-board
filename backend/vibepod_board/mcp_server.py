@@ -54,6 +54,7 @@ from vibepod_board.services import (
 )
 from vibepod_board.services.claims import MAX_LEASE_SECONDS, MIN_LEASE_SECONDS
 from vibepod_board.services.listing import BATCH_LIMIT
+from vibepod_board.services.runs import COMMIT_LIMIT
 from vibepod_board.services.views import View, project_cards, project_documents, project_ideas
 
 TaskId = Annotated[
@@ -999,7 +1000,7 @@ def create_mcp_server(
         id: TaskId,
         outcome: RunOutcome,
         summary: str | None = None,
-        commits: list[RunCommitInput] | None = None,
+        commits: Annotated[list[RunCommitInput] | None, Field(max_length=COMMIT_LIMIT)] = None,
         branchName: str | None = None,  # noqa: N803
         verifyCommand: str | None = None,  # noqa: N803
         verifyExitCode: int | None = None,  # noqa: N803

@@ -26,6 +26,7 @@ from vibepod_board.enums import (
 from vibepod_board.schemas import ApiModel
 from vibepod_board.services.claims import MAX_LEASE_SECONDS, MIN_LEASE_SECONDS
 from vibepod_board.services.listing import BATCH_LIMIT
+from vibepod_board.services.runs import COMMIT_LIMIT
 
 
 def _required_trimmed(value: str) -> str:
@@ -259,7 +260,9 @@ class RunReportRequest(ApiModel):
     outcome: RunOutcome
     # The agent's own summary of the run.
     summary: StrictStr = ""
-    commits: Annotated[list[RunCommitInput], Field(max_length=1000)] = Field(default_factory=list)
+    commits: Annotated[list[RunCommitInput], Field(max_length=COMMIT_LIMIT)] = Field(
+        default_factory=list
+    )
     branch_name: StrictStr | None = None
     verify_command: StrictStr | None = None
     verify_exit_code: StrictInt | None = None
