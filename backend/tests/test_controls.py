@@ -189,6 +189,21 @@ def test_a_worker_whose_card_was_moved_by_hand_is_told_to_cancel(session: Sessio
     assert reply.instructions[0].reason == f"Claim by {NAME} ended: moved to review"
 
 
+def test_a_worker_whose_lease_lapsed_is_told_to_cancel(session: Session, vp) -> None:
+    worker, task = working(session, vp)
+    card_id = board.get_card(session, ADMIN, task.id).id
+    session.execute(
+        text("update board_cards set claim_expires_at = :at where id = :id"),
+        {"at": now() - timedelta(seconds=1), "id": card_id},
+    )
+    session.commit()
+
+    reply = workers.heartbeat(session, ADMIN, worker.id, WorkerStatus.WORKING, task=task.id)
+
+    assert instruction_types(reply) == ["cancel"]
+    assert reply.instructions[0].reason == "The claim expired before the worker reported again"
+
+
 def test_a_worker_on_its_own_claim_gets_no_cancel(session: Session, vp) -> None:
     worker, task = working(session, vp)
     reply = workers.heartbeat(session, ADMIN, worker.id, WorkerStatus.WORKING, task=task.id)
