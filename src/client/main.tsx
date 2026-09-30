@@ -866,10 +866,14 @@ const App = () => {
       ].find((card) => card.id === taskViewModal.card.id) ?? taskViewModal.card)
     : null;
   // Board cards only link to GitHub; the task view is where the path and remote show.
-  const taskViewRepositoryPath =
-    taskViewIdea?.repositoryLocalPath || taskViewCard?.repositoryLocalPath;
-  const taskViewRepositoryRemote =
-    taskViewIdea?.repositoryRemoteUrl || taskViewCard?.repositoryRemoteUrl;
+  // A card keeps its own repository fields (they can be set, or cleared, on the card
+  // alone), so they win; the task's apply to a task that has no card.
+  const taskViewRepositoryPath = taskViewCard
+    ? taskViewCard.repositoryLocalPath
+    : taskViewIdea?.repositoryLocalPath;
+  const taskViewRepositoryRemote = taskViewCard
+    ? taskViewCard.repositoryRemoteUrl
+    : taskViewIdea?.repositoryRemoteUrl;
   const taskViewRepositoryLink = githubRepositoryLink(taskViewRepositoryRemote);
   // An archived task opens read-only; Unarchive is the way back to the board.
   const isTaskViewArchived = Boolean(taskViewCard?.archivedAt);
