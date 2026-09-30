@@ -13,7 +13,7 @@ its claims back up. The heartbeat reply carries instructions for the worker.
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import delete, update
+from sqlalchemy import delete, func, update
 from sqlmodel import Session, col, select
 
 from vibepod_board.access import AccessContext, AdminAccess, assert_can_access_project
@@ -187,6 +187,15 @@ def register_worker(
             col(WorkerRow.last_seen_at) < timestamp - WORKER_RETENTION,
         )
     )
+    # A stop the board asked of the registration being replaced still applies: the worker
+    # restarted before it heard it, and must not carry on with the claims it takes back up.
+    pending_stop = session.exec(
+        select(func.min(WorkerRow.stop_requested_at)).where(
+            col(WorkerRow.project_id) == project_id,
+            col(WorkerRow.name) == name,
+            col(WorkerRow.stopped_at).is_(None),
+        )
+    ).one()
     # A restarted worker replaces its earlier registration and keeps its claims.
     session.execute(
         update(WorkerRow)
@@ -213,6 +222,7 @@ def register_worker(
         status=WorkerStatus.IDLE,
         started_at=timestamp,
         last_seen_at=timestamp,
+        stop_requested_at=pending_stop,
     )
     session.add(row)
     # A restarted worker takes its claims back up: renew them now rather than at its first

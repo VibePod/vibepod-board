@@ -140,6 +140,25 @@ def test_stopping_an_online_worker_asks_it_to_stop(session: Session, vp) -> None
     assert signed_off.stop_requested_at is None
 
 
+def test_a_pending_stop_survives_a_restart_under_the_same_name(session: Session, vp) -> None:
+    worker, task = working(session, vp)
+    workers.stop_worker(session, ADMIN, worker.id)
+
+    restarted = workers.register_worker(session, ADMIN, "VP", NAME, "claude", "laptop").item
+    reply = workers.heartbeat(session, ADMIN, restarted.id, WorkerStatus.WORKING, task=task.id)
+
+    assert instruction_types(reply) == ["stop"]
+
+
+def test_a_restart_without_a_pending_stop_gets_none(session: Session, vp) -> None:
+    worker, task = working(session, vp)
+
+    restarted = workers.register_worker(session, ADMIN, "VP", NAME, "claude", "laptop").item
+    reply = workers.heartbeat(session, ADMIN, restarted.id, WorkerStatus.WORKING, task=task.id)
+
+    assert reply.instructions == []
+
+
 def test_stopping_an_offline_worker_signs_it_off_at_once(db: Engine, session: Session, vp) -> None:
     worker, task = working(session, vp)
     with db.begin() as connection:
