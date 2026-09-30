@@ -12,7 +12,8 @@ from vibepod_board.services.common import (
     require_project,
     transactional,
 )
-from vibepod_board.services.open_reviews import validate_review_settings
+from vibepod_board.services.history import actor_for
+from vibepod_board.services.open_reviews import promote_approved, validate_review_settings
 from vibepod_board.services.references import resolve_project_id
 from vibepod_board.tables import ProjectRow
 
@@ -80,6 +81,9 @@ def update_project(
     row = require_project(session, project_id)
     validate_review_settings(required_approvals, max_review_rounds)
     _apply_review_settings(row, required_approvals, max_review_rounds)
+    timestamp = now()
+    if required_approvals is not None:
+        promote_approved(session, row.id, row.required_approvals, timestamp, None)
     if key is not None:
         key = normalize_project_key(key)
         _assert_key_available(session, key, row.id)
@@ -89,7 +93,6 @@ def update_project(
         row.title = title.strip()
     if summary is not None:
         row.summary = summary.strip()
-    timestamp = now()
     row.updated_at = timestamp
     session.flush()
     add_activity(session, "project.updated", f"Updated project: {row.title}", timestamp)
@@ -116,7 +119,8 @@ def update_project_settings(
     """Changes how review workers treat the project's tasks: the approvals a task needs for
     its head commit, and the rework verdicts in a row after which it is blocked. Unlike the
     rest of the project, any caller with access to the project may change them. A new
-    requirement applies from the next verdict on."""
+    requirement applies from the next verdict on, except that a task in Review whose head
+    commit already has the approvals a lowered requirement asks for moves to PR ready now."""
     validate_review_settings(required_approvals, max_review_rounds)
     project_id = resolve_project_id(session, project)
     assert_can_access_project(access, project_id)
@@ -128,6 +132,10 @@ def update_project_settings(
     ).one()
     _apply_review_settings(row, required_approvals, max_review_rounds)
     timestamp = now()
+    if required_approvals is not None:
+        promote_approved(
+            session, row.id, row.required_approvals, timestamp, actor_for(session, access)
+        )
     row.updated_at = timestamp
     session.flush()
     add_activity(session, "project.updated", f"Updated review settings of {row.key}", timestamp)

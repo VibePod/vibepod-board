@@ -500,6 +500,32 @@ def test_an_approval_to_pr_ready_resets_the_rounds(session: Session, vp) -> None
     assert card(session, task).review_rounds == 0
 
 
+def test_lowering_the_requirement_promotes_cards_it_already_approved(session: Session, vp) -> None:
+    require(session, 3)
+    task = in_review(session, vp, "Approved enough")
+    waiting = in_review(session, vp, "Approved once, then asked")
+    review(session, CLAUDE, task=task.id)
+    review(session, CODEX, task=task.id)
+    review(session, THIRD, task=task.id)
+    verdict(session, task, CLAUDE, ReviewVerdict.APPROVE)
+    verdict(session, task, CODEX, ReviewVerdict.APPROVE)
+    review(session, CLAUDE, task=waiting.id)
+    review(session, CODEX, task=waiting.id)
+    verdict(session, waiting, CLAUDE, ReviewVerdict.APPROVE)
+    verdict(session, waiting, CODEX, ReviewVerdict.NEEDS_INPUT, note="Which API?")
+
+    require(session, 1)
+
+    state = reviews.review_state(session, ADMIN, task.id)
+    assert (state.column, state.approvals, state.open_reviews) == (BoardColumn.PR_READY, 2, 0)
+    assert card(session, task).review_rounds == 0
+    assert kinds(session, task)[:2] == [TaskEventKind.REVIEW_ENDED, TaskEventKind.APPROVED]
+    # The blocked card waits for its answer, and then moves on too.
+    assert card(session, waiting).column == BoardColumn.REVIEW
+    answered = conversation.answer_question(session, ADMIN, waiting.id, "The new one")
+    assert (answered.column, answered.blocked_at) == (BoardColumn.PR_READY, None)
+
+
 # --- lease, cancel and moves ---------------------------------------------------------
 
 

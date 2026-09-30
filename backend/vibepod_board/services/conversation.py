@@ -23,11 +23,12 @@ from vibepod_board.services.common import (
     assert_unchanged,
     card_from_row,
     lock,
+    require_project,
     transactional,
 )
 from vibepod_board.services.dependencies import decorate_card
 from vibepod_board.services.history import actor_for, add_task_event
-from vibepod_board.services.open_reviews import end_open_reviews
+from vibepod_board.services.open_reviews import end_open_reviews, promote_if_approved
 from vibepod_board.services.references import require_card_ref, task_keys
 from vibepod_board.tables import BoardCardRow, IdeaRow
 
@@ -83,6 +84,9 @@ def answer_question(
         card.question = None
         card.updated_at = timestamp
         idea.updated_at = timestamp
+        # The requirement may have dropped to the approvals it has while it waited.
+        project = require_project(session, idea.project_id)
+        promote_if_approved(session, idea, card, project.required_approvals, timestamp, actor)
     else:
         _replan(card, idea, timestamp)
     add_activity(session, "task.answered", f"{actor} answered the question of {key}", timestamp)

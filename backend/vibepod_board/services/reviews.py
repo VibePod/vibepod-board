@@ -51,8 +51,11 @@ from vibepod_board.services.conversation import apply_rework
 from vibepod_board.services.history import actor_for, add_task_event
 from vibepod_board.services.ideas import work_order
 from vibepod_board.services.open_reviews import (
+    _at_head,
+    approvers,
     end_open_reviews,
     end_review,
+    move_to_pr_ready,
     open_reviews,
     short_sha,
 )
@@ -63,33 +66,6 @@ NOTHING_TO_REVIEW = "No task in review can be claimed for a review"
 # Verdicts that settle a reviewer's view of a head commit: it is not handed that commit again.
 # A released review or a question leaves the reviewer free to look again.
 SETTLED = (ReviewVerdict.APPROVE, ReviewVerdict.REWORK, ReviewVerdict.FAILED)
-
-
-def _at_head(card: BoardCardRow) -> list:
-    """Conditions matching the reviews of the card's current head commit. Without a known
-    commit, the reviews since the last hand-over stand in for it."""
-    if card.head_sha:
-        return [TaskReviewRow.head_sha == card.head_sha]
-    conditions = [col(TaskReviewRow.head_sha).is_(None)]
-    if card.handed_over_at is not None:
-        conditions.append(col(TaskReviewRow.created_at) >= card.handed_over_at)
-    return conditions
-
-
-def approvers(session: Session, card: BoardCardRow) -> list[str]:
-    """Distinct reviewers that approved the card's current head commit, first approval first."""
-    if not card.idea_id:
-        return []
-    rows = session.exec(
-        select(TaskReviewRow.reviewer)
-        .where(
-            TaskReviewRow.idea_id == card.idea_id,
-            TaskReviewRow.verdict == ReviewVerdict.APPROVE,
-            *_at_head(card),
-        )
-        .order_by(col(TaskReviewRow.ended_at))
-    ).all()
-    return list(dict.fromkeys(rows))
 
 
 def _settled_by(session: Session, card: BoardCardRow, reviewer: str) -> bool:
@@ -390,17 +366,7 @@ def submit_review(
         message = f"Approved by {holder} at {commit} ({count})" + (f": {note}" if note else "")
         add_task_event(session, idea.id, TaskEventKind.APPROVED, message, holder, timestamp)
         if len(approved) >= project.required_approvals:
-            end_open_reviews(session, idea.id, timestamp, "the task is ready for a PR", holder)
-            card.column_name = BoardColumn.PR_READY
-            card.review_rounds = 0
-            card.blocked_at = None
-            card.blocked_reason = None
-            card.question = None
-            card.updated_at = timestamp
-            idea.updated_at = timestamp
-            add_activity(
-                session, "board.approved", f"{key} is ready for a PR ({count} approvals)", timestamp
-            )
+            move_to_pr_ready(session, idea, card, key, count, timestamp, holder)
         else:
             add_activity(session, "board.approved", f"{holder} approved {key} ({count})", timestamp)
     elif verdict == ReviewVerdict.REWORK:
