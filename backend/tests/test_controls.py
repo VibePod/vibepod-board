@@ -1,6 +1,8 @@
 """Controls from the board (pause, stop, cancel) reach workers in their heartbeat reply, and
 every automated run leaves a report on its task."""
 
+import threading
+import time
 from datetime import timedelta
 from typing import Any
 
@@ -345,6 +347,36 @@ def test_reports_in_the_same_millisecond_keep_their_order(
 
     listed = runs.list_run_reports(session, ADMIN, task.id)
     assert [report.id for report in listed] == [second.id, first.id]
+
+
+def test_reports_arriving_together_take_turns_for_their_timestamp(
+    db: Engine, monkeypatch, session: Session, vp
+) -> None:
+    task = planned(session, vp, "Reported twice at once")
+    frozen = now()
+    monkeypatch.setattr(runs, "now", lambda: frozen)
+    reported: list[Any] = []
+
+    def report(summary: str) -> None:
+        with Session(db, expire_on_commit=False) as own:
+            reported.append(
+                runs.add_run_report(own, ADMIN, task.id, RunOutcome.DONE, summary=summary)
+            )
+
+    with Session(db) as holder:
+        # Both reports reach the task while it is held, so they would pick their timestamps
+        # at the same moment unless they take turns.
+        holder.execute(text("select id from ideas where id = :id for update"), {"id": task.id})
+        threads = [threading.Thread(target=report, args=(name,)) for name in ("a", "b")]
+        for thread in threads:
+            thread.start()
+        time.sleep(0.5)
+        holder.commit()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert len(reported) == 2
+    assert len({report.created_at for report in reported}) == 2
 
 
 def test_long_verify_output_keeps_its_head_and_tail(session: Session, vp) -> None:

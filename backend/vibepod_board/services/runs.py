@@ -14,13 +14,14 @@ from vibepod_board.errors import BadRequest
 from vibepod_board.schemas import TaskRun, now
 from vibepod_board.services.common import (
     add_activity,
+    lock,
     new_id,
     normalize_optional_text,
     transactional,
 )
 from vibepod_board.services.references import require_idea_ref, task_keys
 from vibepod_board.services.workers import require_worker
-from vibepod_board.tables import TaskRunRow
+from vibepod_board.tables import IdeaRow, TaskRunRow
 
 VERIFY_OUTPUT_HEAD = 2_000
 VERIFY_OUTPUT_TAIL = 14_000
@@ -97,9 +98,11 @@ def add_run_report(
         if verify_output
         else (None, False)
     )
-    timestamp = now()
     # Reports of a task keep the order they came in: one sent within the same millisecond as
-    # the task's latest report lands just after it (as in the task history).
+    # the task's latest report lands just after it (as in the task history). The task is
+    # locked first, so two reports arriving together take turns picking their timestamp.
+    lock(session, IdeaRow, idea.id)
+    timestamp = now()
     latest = session.exec(
         select(func.max(TaskRunRow.created_at)).where(TaskRunRow.idea_id == idea.id)
     ).one()
