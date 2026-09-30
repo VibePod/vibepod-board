@@ -81,7 +81,14 @@ const ideas = [
     title: "Linked PR task",
     repositoryRemoteUrl: githubRemote,
   }),
+  idea({
+    id: "idea-6",
+    taskNumber: 6,
+    title: "Cleared remote task",
+    repositoryRemoteUrl: githubRemote,
+  }),
 ];
+const cardPath = "/srv/card-checkout";
 
 const pullRequest = (number: number): Partial<BoardCard> => ({
   githubPrUrl: `https://github.com/VibePod/vibepod-board/pull/${number}`,
@@ -150,6 +157,11 @@ beforeEach(() => {
             ready: [
               ...ideas.slice(0, 3).map((source) => card(source)),
               card(ideas[4], pullRequest(29)),
+              // The card's remote was cleared, and its path set, on the card alone.
+              card(ideas[5], {
+                repositoryRemoteUrl: undefined,
+                repositoryLocalPath: cardPath,
+              }),
             ],
             planned: [],
             in_progress: [],
@@ -226,14 +238,29 @@ describe("board card GitHub link", () => {
     );
   });
 
-  it("links a pull request rather than the repository when there is no issue", async () => {
+  it("links the repository, not an earlier pull request, outside PR ready", async () => {
     await renderBoard();
 
     const links = within(boardCard("Linked PR task")).getAllByRole("link");
     expect(links).toHaveLength(1);
     expect(links[0].getAttribute("href")).toBe(
-      "https://github.com/VibePod/vibepod-board/pull/29",
+      "https://github.com/VibePod/vibepod-board",
     );
+  });
+
+  it("follows the card's own repository fields", async () => {
+    await renderBoard();
+
+    // The remote was cleared on the card: no link, although the task has one.
+    expect(
+      within(boardCard("Cleared remote task")).queryAllByRole("link"),
+    ).toEqual([]);
+
+    fireEvent.click(boardCard("Cleared remote task"));
+    const view = await screen.findByRole("dialog");
+    expect(within(view).getByText(cardPath)).toBeTruthy();
+    expect(within(view).queryByText(localPath)).toBeNull();
+    expect(within(view).queryByText(githubRemote)).toBeNull();
   });
 
   it("opens GitHub without opening the task", async () => {
