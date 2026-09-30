@@ -10,6 +10,7 @@ from vibepod_board.api.models import (
     IdeaUpdate,
     ReadinessRequest,
     ReadyRequest,
+    RunReportRequest,
 )
 from vibepod_board.api.queries import (
     Assignee,
@@ -35,9 +36,10 @@ from vibepod_board.schemas import (
     KeyedIdea,
     ReadinessEvent,
     TaskEvent,
+    TaskRun,
     TaskWorkOrder,
 )
-from vibepod_board.services import board, dependencies, history, ideas, readiness
+from vibepod_board.services import board, dependencies, history, ideas, readiness, runs
 from vibepod_board.services.views import View, project_ideas
 
 router = APIRouter(prefix="/api", tags=["ideas"])
@@ -175,6 +177,31 @@ def list_idea_readiness(
 def task_history(idea_id: str, session: SessionDep, access: AccessDep) -> Items[TaskEvent]:
     """What happened to the task under automation, newest first."""
     return Items(items=history.list_task_history(session, access, idea_id))
+
+
+@router.post("/ideas/{idea_id}/runs", status_code=status.HTTP_201_CREATED)
+def add_run_report(
+    idea_id: str, body: RunReportRequest, session: SessionDep, access: AccessDep
+) -> Item[TaskRun]:
+    """Adds the report of an automated run to the task. Long verify output is cut down to
+    its head and tail."""
+    return Item(
+        item=runs.add_run_report(session, access, idea_id, **body.model_dump(by_alias=False))
+    )
+
+
+@router.get("/ideas/{idea_id}/runs")
+def list_run_reports(
+    idea_id: str,
+    session: SessionDep,
+    access: AccessDep,
+    limit: Annotated[int | None, Query(ge=1, le=runs.RUNS_PAGE_MAX)] = None,
+    before: Annotated[str | None, Query(description="nextCursor of the previous page.")] = None,
+) -> ItemsPage[TaskRun]:
+    """The task's automated runs, newest first, a page at a time (20 by default). Pass the
+    page's nextCursor back as `before` for older runs."""
+    page = runs.list_run_reports(session, access, idea_id, limit=limit, before=before)
+    return ItemsPage(items=page.items, next_cursor=page.next_cursor)
 
 
 @router.get("/readiness")

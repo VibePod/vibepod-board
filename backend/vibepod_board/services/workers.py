@@ -13,13 +13,21 @@ its claims back up. The heartbeat reply carries instructions for the worker.
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import delete, update
+from sqlalchemy import delete, func, update
 from sqlmodel import Session, col, select
 
 from vibepod_board.access import AccessContext, AdminAccess, assert_can_access_project
-from vibepod_board.enums import ReleaseOutcome, WorkerState, WorkerStatus, WorkerStep
+from vibepod_board.enums import (
+    InstructionType,
+    ReleaseOutcome,
+    TaskEventKind,
+    WorkerState,
+    WorkerStatus,
+    WorkerStep,
+)
 from vibepod_board.errors import BadRequest, Conflict, NotFound
 from vibepod_board.schemas import Worker, WorkerInstruction, WorkerSession, now
+from vibepod_board.services.automation import pause_reason
 from vibepod_board.services.claims import DEFAULT_LEASE_SECONDS, apply_release, lease_for
 from vibepod_board.services.common import (
     add_activity,
@@ -27,13 +35,14 @@ from vibepod_board.services.common import (
     normalize_optional_text,
     transactional,
 )
+from vibepod_board.services.history import actor_for
 from vibepod_board.services.listing import list_scope, scoped
 from vibepod_board.services.references import (
     require_idea_ref,
     resolve_project_id,
     task_keys,
 )
-from vibepod_board.tables import BoardCardRow, IdeaRow, ProjectRow, WorkerRow
+from vibepod_board.tables import BoardCardRow, IdeaRow, ProjectRow, TaskEventRow, WorkerRow
 
 # Workers not seen for this long are left out of the list, and pruned after the retention.
 WORKER_LIST_WINDOW = timedelta(hours=24)
@@ -82,6 +91,7 @@ def workers_from_rows(
             started_at=row.started_at,
             last_seen_at=row.last_seen_at,
             stopped_at=row.stopped_at,
+            stop_requested_at=row.stop_requested_at,
         )
         for row in rows
     ]
@@ -177,6 +187,15 @@ def register_worker(
             col(WorkerRow.last_seen_at) < timestamp - WORKER_RETENTION,
         )
     )
+    # A stop the board asked of the registration being replaced still applies: the worker
+    # restarted before it heard it, and must not carry on with the claims it takes back up.
+    pending_stop = session.exec(
+        select(func.min(WorkerRow.stop_requested_at)).where(
+            col(WorkerRow.project_id) == project_id,
+            col(WorkerRow.name) == name,
+            col(WorkerRow.stopped_at).is_(None),
+        )
+    ).one()
     # A restarted worker replaces its earlier registration and keeps its claims.
     session.execute(
         update(WorkerRow)
@@ -203,8 +222,12 @@ def register_worker(
         status=WorkerStatus.IDLE,
         started_at=timestamp,
         last_seen_at=timestamp,
+        stop_requested_at=pending_stop,
     )
     session.add(row)
+    # A restarted worker takes its claims back up: renew them now rather than at its first
+    # heartbeat, which may come after they would have lapsed.
+    _renew_claims(session, row, timestamp + timedelta(seconds=timing.lease_seconds))
     add_activity(
         session, "worker.registered", f"Worker {name} connected to {project_row.key}", timestamp
     )
@@ -227,9 +250,56 @@ def _renew_claims(session: Session, row: WorkerRow, expires_at: datetime) -> Non
     )
 
 
+def _lost_claim_reason(session: Session, idea_id: str) -> str:
+    """Why the worker's task is no longer its own: the latest word in the task history."""
+    event = session.exec(
+        select(TaskEventRow)
+        .where(TaskEventRow.idea_id == idea_id)
+        .order_by(col(TaskEventRow.created_at).desc(), col(TaskEventRow.id).desc())
+        .limit(1)
+    ).first()
+    if event is not None and event.kind != TaskEventKind.CLAIMED:
+        return event.message
+    return "The task is no longer claimed by this worker"
+
+
 def instructions_for(session: Session, row: WorkerRow) -> list[WorkerInstruction]:
-    """What the board asks of the worker. Nothing yet; the heartbeat reply carries them."""
-    return []
+    """What the board asks of the worker, in every heartbeat reply until it no longer
+    applies: pause while automation of the project is paused, stop once asked to, and cancel
+    the run of a task that is no longer claimed by the worker, such as a run cancelled from
+    the board."""
+    instructions: list[WorkerInstruction] = []
+    project = session.get(ProjectRow, row.project_id)
+    if project is not None and project.automation_paused_at is not None:
+        instructions.append(
+            WorkerInstruction(type=InstructionType.PAUSE, reason=pause_reason(project))
+        )
+    if row.stop_requested_at is not None:
+        instructions.append(
+            WorkerInstruction(type=InstructionType.STOP, reason="Stopped from the board")
+        )
+    if row.status == WorkerStatus.WORKING and row.idea_id:
+        card = session.exec(select(BoardCardRow).where(BoardCardRow.idea_id == row.idea_id)).first()
+        # A lease that ran out is lost too, even before the sweep ends it (see `claims._held`):
+        # the task may be handed to another runner at any moment.
+        lapsed = card is not None and (
+            card.claim_expires_at is None or card.claim_expires_at <= now()
+        )
+        if card is None or card.claimed_at is None or card.assignee != row.name or lapsed:
+            reason = (
+                "The claim expired before the worker reported again"
+                if lapsed and card is not None and card.claimed_at is not None
+                else _lost_claim_reason(session, row.idea_id)
+            )
+            instructions.append(
+                WorkerInstruction(
+                    type=InstructionType.CANCEL,
+                    reason=reason,
+                    task_id=row.idea_id,
+                    task_key=task_keys(session, [row.idea_id]).get(row.idea_id),
+                )
+            )
+    return instructions
 
 
 @transactional
@@ -251,16 +321,22 @@ def heartbeat(
     row = require_worker(session, access, worker_id, for_update=True)
     if row.stopped_at is not None:
         raise Conflict(f"Worker {row.name} is signed off; register again to reconnect")
+    reason = normalize_optional_text(status_reason)
+    if status == WorkerStatus.PAUSED and not reason:
+        raise BadRequest("A paused worker must say why: statusReason is required")
     timestamp = now()
     idea = None
+    vanished: str | None = None
     if status == WorkerStatus.WORKING:
         if not task:
             raise BadRequest("A working worker must name its task")
         try:
             idea = require_idea_ref(session, access, task)
         except NotFound:
-            # Deleted while the worker was on it: the worker is not working on anything.
+            # Deleted while the worker was on it: it is not working on anything, and it is
+            # told to stop the run.
             status = WorkerStatus.IDLE
+            vanished = task
     if idea is not None:
         if idea.project_id != row.project_id:
             raise BadRequest(f"Task {task} is not in the worker's project")
@@ -273,10 +349,17 @@ def heartbeat(
         row.step = None
         row.task_started_at = None
     row.status = status
-    row.status_reason = normalize_optional_text(status_reason)
+    row.status_reason = reason
     row.last_seen_at = timestamp
     _renew_claims(session, row, timestamp + lease)
-    return _session_reply(session, row, timing, instructions_for(session, row))
+    instructions = instructions_for(session, row)
+    if vanished is not None:
+        instructions.append(
+            WorkerInstruction(
+                type=InstructionType.CANCEL, reason="The task was deleted", task_id=vanished
+            )
+        )
+    return _session_reply(session, row, timing, instructions)
 
 
 @transactional
@@ -293,6 +376,17 @@ def sign_off(
     timing = timing or WorkerTiming()
     row = require_worker(session, access, worker_id, for_update=True)
     timestamp = now()
+    _sign_off(session, access, row, max_attempts, timestamp)
+    return workers_from_rows(session, [row], timing, timestamp)[0]
+
+
+def _sign_off(
+    session: Session,
+    access: AccessContext,
+    row: WorkerRow,
+    max_attempts: int,
+    timestamp: datetime,
+) -> None:
     live = row.stopped_at is None
     if live:
         row.stopped_at = timestamp
@@ -301,9 +395,10 @@ def sign_off(
     row.idea_id = None
     row.step = None
     row.task_started_at = None
+    row.stop_requested_at = None
     if not live:
         session.flush()
-        return workers_from_rows(session, [row], timing, timestamp)[0]
+        return
     held = session.exec(
         select(BoardCardRow.id).where(
             BoardCardRow.project_id == row.project_id,
@@ -321,9 +416,37 @@ def sign_off(
                 ReleaseOutcome.RELEASED,
                 f"Worker {row.name} signed off",
                 max_attempts,
+                allow_lapsed=True,
             )
         except Conflict:
             # The claim ended since it was listed, such as by a cancel from the board.
             continue
+    session.flush()
+
+
+@transactional
+def stop_worker(
+    session: Session,
+    access: AccessContext,
+    worker_id: str,
+    max_attempts: int = 3,
+    timing: WorkerTiming | None = None,
+) -> Worker:
+    """Asks a worker to stop: its next heartbeat reply tells it to give its task back and
+    sign off. A worker that is already offline cannot hear it, so it is signed off here."""
+    timing = timing or WorkerTiming()
+    row = require_worker(session, access, worker_id, for_update=True)
+    timestamp = now()
+    if row.stopped_at is None:
+        if _state(row, timestamp, timing) == WorkerState.OFFLINE:
+            _sign_off(session, access, row, max_attempts, timestamp)
+        elif row.stop_requested_at is None:
+            row.stop_requested_at = timestamp
+        add_activity(
+            session,
+            "worker.stopped",
+            f"{actor_for(session, access)} stopped worker {row.name}",
+            timestamp,
+        )
     session.flush()
     return workers_from_rows(session, [row], timing, timestamp)[0]

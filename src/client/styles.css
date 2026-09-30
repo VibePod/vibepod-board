@@ -1231,3 +1231,24 @@ body {
   border-radius: var(--mantine-radius-sm);
   background: var(--mantine-color-green-light);
 }
+
+.task-run-verify summary {
+  cursor: pointer;
+}
+
+.task-run-verify-output {
+  max-height: 320px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 8px;
+  border-radius: var(--mantine-radius-sm);
+  background: var(--mantine-color-default-hover);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Run summaries read at the size of the rest of the report. */
+.task-run-summary {
+  font-size: var(--mantine-font-size-sm);
+}

@@ -1,0 +1,270 @@
+import { Badge, Button, Code, Group, Paper, Stack, Text } from "@mantine/core";
+import { useEffect, useState } from "react";
+import type { TaskRun } from "../shared/types.js";
+import { api } from "./api.js";
+import {
+  formatDuration,
+  runOutcomeColors,
+  runOutcomeLabels,
+} from "./automationUtils.js";
+import { MarkdownText } from "./Markdown.js";
+
+/** A report can arrive without anything else on the board changing. */
+export const RUNS_POLL_MS = 15_000;
+
+type RunsPage = { items?: TaskRun[]; nextCursor?: string | null };
+
+/** Whether run `a` comes after run `b` in the list, which is newest first. */
+const isOlder = (a: TaskRun, b: TaskRun) =>
+  a.createdAt < b.createdAt || (a.createdAt === b.createdAt && a.id < b.id);
+
+/**
+ * The newest page just fetched, followed by the older runs already loaded
+ * beyond it, so a poll refreshes the top without dropping what was loaded.
+ */
+export const mergeNewestPage = (
+  loaded: { runs: TaskRun[]; nextCursor: string | null } | null,
+  page: RunsPage,
+): { runs: TaskRun[]; nextCursor: string | null } => {
+  const items = page.items ?? [];
+  const last = items.at(-1);
+  const pageIds = new Set(items.map((run) => run.id));
+  const older =
+    loaded && last
+      ? loaded.runs.filter((run) => !pageIds.has(run.id) && isOlder(run, last))
+      : [];
+  return {
+    runs: [...items, ...older],
+    nextCursor:
+      older.length > 0
+        ? (loaded?.nextCursor ?? null)
+        : (page.nextCursor ?? null),
+  };
+};
+
+type TaskRunsProps = {
+  ideaId: string;
+  /** Reloads the reports when it changes, such as the card's `updatedAt`. */
+  reloadKey?: string;
+};
+
+const formatRunTime = (value: string) =>
+  new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
+
+const RunReport = ({ run }: { run: TaskRun }) => (
+  <Paper className="task-run" withBorder radius="md" p="sm">
+    <Stack gap="xs">
+      <Group gap="xs" justify="space-between" align="flex-start">
+        <Group gap="xs">
+          <Badge
+            className="task-run-outcome"
+            variant="light"
+            color={runOutcomeColors[run.outcome] ?? "gray"}
+          >
+            {runOutcomeLabels[run.outcome] ?? run.outcome}
+          </Badge>
+          <Text size="sm" fw={600}>
+            {[run.workerName, run.agent].filter(Boolean).join(" · ") ||
+              "Runner"}
+          </Text>
+        </Group>
+        <Text size="xs" c="dimmed">
+          {[
+            formatRunTime(run.startedAt ?? run.createdAt),
+            run.durationSeconds !== undefined
+              ? formatDuration(run.durationSeconds)
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </Text>
+      </Group>
+      {run.failureReason && (
+        <Text size="sm" c="red" className="task-run-failure">
+          {run.failureReason}
+        </Text>
+      )}
+      {run.summary && (
+        <div className="overview-markdown task-run-summary">
+          <MarkdownText>{run.summary}</MarkdownText>
+        </div>
+      )}
+      {(run.commits.length > 0 || run.branchName) && (
+        <Stack gap={2} className="task-run-commits">
+          <Text size="xs" fw={700} c="dimmed">
+            {run.commits.length === 0
+              ? `No commits on ${run.branchName}`
+              : run.commits.length === 1
+                ? "1 commit"
+                : `${run.commits.length} commits`}
+            {run.commits.length > 0 && run.branchName
+              ? ` on ${run.branchName}`
+              : ""}
+          </Text>
+          {run.commits.map((commit) => (
+            <Group key={commit.sha} gap={6} wrap="nowrap">
+              <Code>{commit.sha.slice(0, 8)}</Code>
+              <Text size="sm" truncate>
+                {commit.subject}
+              </Text>
+            </Group>
+          ))}
+        </Stack>
+      )}
+      {(run.verifyCommand ||
+        run.verifyExitCode !== undefined ||
+        run.verifyOutput) && (
+        <details className="task-run-verify">
+          <summary>
+            <Text component="span" size="sm">
+              Verify{" "}
+              {run.verifyCommand ? (
+                <Code>{run.verifyCommand}</Code>
+              ) : (
+                <Text component="span" size="sm" c="dimmed">
+                  (command not reported)
+                </Text>
+              )}{" "}
+              {run.verifyExitCode !== undefined && (
+                <Badge
+                  size="xs"
+                  variant="light"
+                  color={run.verifyExitCode === 0 ? "teal" : "red"}
+                >
+                  exit {run.verifyExitCode}
+                </Badge>
+              )}
+              {run.verifyOutputTruncated ? " (output shortened)" : ""}
+            </Text>
+          </summary>
+          {run.verifyOutput && (
+            <pre className="task-run-verify-output">{run.verifyOutput}</pre>
+          )}
+        </details>
+      )}
+    </Stack>
+  </Paper>
+);
+
+/**
+ * Every automated run of a task, newest first: the history of its attempts.
+ * Hidden while the task has none.
+ */
+export const TaskRuns = ({ ideaId, reloadKey }: TaskRunsProps) => {
+  // Kept with the task they belong to, so switching tasks never shows the last
+  // task's runs while the new ones load.
+  const [loaded, setLoaded] = useState<{
+    ideaId: string;
+    runs: TaskRun[];
+    nextCursor: string | null;
+  } | null>(null);
+  const [error, setError] = useState("");
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const current = loaded?.ideaId === ideaId ? loaded : null;
+  const runs = current ? current.runs : null;
+  const [poll, setPoll] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") setPoll((count) => count + 1);
+    }, RUNS_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  // Polls only the newest page; older runs stay as loaded.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reloadKey and poll only trigger a refetch
+  useEffect(() => {
+    let cancelled = false;
+    setError("");
+    api<RunsPage>(`/api/ideas/${ideaId}/runs`)
+      .then((page) => {
+        if (cancelled) return;
+        setLoaded((previous) => ({
+          ideaId,
+          ...mergeNewestPage(
+            previous?.ideaId === ideaId ? previous : null,
+            page,
+          ),
+        }));
+      })
+      .catch((requestError: Error) => {
+        if (!cancelled) setError(requestError.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ideaId, reloadKey, poll]);
+
+  const loadOlder = async () => {
+    if (!current?.nextCursor) return;
+    setLoadingOlder(true);
+    try {
+      const page = await api<RunsPage>(
+        `/api/ideas/${ideaId}/runs?before=${encodeURIComponent(current.nextCursor)}`,
+      );
+      setLoaded((previous) =>
+        previous?.ideaId === ideaId
+          ? {
+              ideaId,
+              runs: [
+                ...previous.runs,
+                ...(page.items ?? []).filter(
+                  (run) => !previous.runs.some((known) => known.id === run.id),
+                ),
+              ],
+              nextCursor: page.nextCursor ?? null,
+            }
+          : previous,
+      );
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Failed to load older runs",
+      );
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
+
+  if (error) {
+    return (
+      <Text size="sm" c="dimmed">
+        Run reports unavailable: {error}
+      </Text>
+    );
+  }
+  if (!runs || runs.length === 0) {
+    return null;
+  }
+  return (
+    <Paper className="overview-section task-runs" withBorder radius="md" p="md">
+      <Group justify="space-between" mb="xs">
+        <Text size="xs" fw={700} tt="uppercase" c="dimmed">
+          Automated Runs
+        </Text>
+        <Badge variant="light" color="gray">
+          {current?.nextCursor ? `${runs.length}+` : runs.length}
+        </Badge>
+      </Group>
+      <Stack gap="sm">
+        {runs.map((run) => (
+          <RunReport key={run.id} run={run} />
+        ))}
+        {current?.nextCursor && (
+          <Button
+            variant="subtle"
+            size="xs"
+            onClick={loadOlder}
+            loading={loadingOlder}
+          >
+            Show older runs
+          </Button>
+        )}
+      </Stack>
+    </Paper>
+  );
+};

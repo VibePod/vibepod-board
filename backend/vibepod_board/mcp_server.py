@@ -22,7 +22,7 @@ from sqlmodel import Session
 from vibepod_board.access import AccessContext, require_admin, token_access
 from vibepod_board.api.deps import worker_timing
 from vibepod_board.api.github import github_client
-from vibepod_board.api.models import BoardCardBatchItem, IdeaBatchItem
+from vibepod_board.api.models import BoardCardBatchItem, IdeaBatchItem, RunCommitInput
 from vibepod_board.config import Settings
 from vibepod_board.db import get_engine
 from vibepod_board.enums import (
@@ -30,12 +30,14 @@ from vibepod_board.enums import (
     DocumentKind,
     IdeaStatus,
     ReleaseOutcome,
+    RunOutcome,
     WorkerStatus,
     WorkerStep,
 )
 from vibepod_board.errors import BoardError
 from vibepod_board.github import GitHubClient
 from vibepod_board.services import (
+    automation,
     board,
     claims,
     dependencies,
@@ -45,12 +47,14 @@ from vibepod_board.services import (
     ideas,
     projects,
     readiness,
+    runs,
     state,
     tokens,
     workers,
 )
 from vibepod_board.services.claims import MAX_LEASE_SECONDS, MIN_LEASE_SECONDS
 from vibepod_board.services.listing import BATCH_LIMIT
+from vibepod_board.services.runs import COMMIT_LIMIT
 from vibepod_board.services.views import View, project_cards, project_documents, project_ideas
 
 TaskId = Annotated[
@@ -715,6 +719,14 @@ def create_mcp_server(
             int | None,
             Field(ge=1, le=10, description="Only tasks whose readiness score is at least this."),
         ] = None,
+        exclude: Annotated[
+            list[Annotated[str, Field(min_length=1)]] | None,
+            Field(
+                max_length=BATCH_LIMIT,
+                description="Tasks (ids or keys) to pass over, such as one whose run was "
+                "just cancelled.",
+            ),
+        ] = None,
         leaseSeconds: LeaseSeconds = None,  # noqa: N803
     ) -> dict[str, Any]:
         return run(
@@ -726,6 +738,7 @@ def create_mcp_server(
                 task=task,
                 labels=labels,
                 min_readiness=minReadiness,
+                exclude=exclude,
                 lease_seconds=leaseSeconds,
                 default_lease_seconds=settings.claim_lease_seconds,
                 max_attempts=settings.claim_max_attempts,
@@ -837,9 +850,16 @@ def create_mcp_server(
         annotations=READ_ONLY,
     )
     def list_workers(projectId: ProjectFilter = None) -> dict[str, Any]:  # noqa: N803
-        return run(
-            lambda s, a: {"items": workers.list_workers(s, a, projectId, worker_timing(settings))}
-        )
+        def operation(session: Session, access: AccessContext) -> dict[str, Any]:
+            timing = worker_timing(settings)
+            result: dict[str, Any] = {
+                "items": workers.list_workers(session, access, projectId, timing)
+            }
+            if projectId:
+                result["automation"] = automation.get_automation(session, access, projectId)
+            return result
+
+        return run(operation)
 
     @mcp.tool(
         title="Register Worker",
@@ -909,6 +929,130 @@ def create_mcp_server(
                 )
             }
         )
+
+    @mcp.tool(
+        title="Pause Automation",
+        description="Pause automation of a project: claims are refused and every worker of the "
+        "project is told to pause with its next heartbeat reply. Runs in progress finish; "
+        "use cancel_task_run to stop one.",
+    )
+    def pause_automation(
+        projectId: Annotated[  # noqa: N803
+            str, Field(min_length=1, description="Project id, key or title.")
+        ],
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        return run(lambda s, a: automation.pause_automation(s, a, projectId, reason))
+
+    @mcp.tool(
+        title="Resume Automation",
+        description="Resume automation of a paused project: claims are accepted again and "
+        "workers stop being told to pause.",
+    )
+    def resume_automation(
+        projectId: Annotated[  # noqa: N803
+            str, Field(min_length=1, description="Project id, key or title.")
+        ],
+    ) -> dict[str, Any]:
+        return run(lambda s, a: automation.resume_automation(s, a, projectId))
+
+    @mcp.tool(
+        title="Stop Worker",
+        description="Stop a worker: its next heartbeat reply tells it to give its task back and "
+        "sign off. A worker that is already offline is signed off at once.",
+    )
+    def stop_worker(
+        id: Annotated[str, Field(min_length=1, description="Worker id from list_workers.")],
+    ) -> dict[str, Any]:
+        return run(
+            lambda s, a: {
+                "item": workers.stop_worker(
+                    s, a, id, settings.claim_max_attempts, worker_timing(settings)
+                )
+            }
+        )
+
+    @mcp.tool(
+        title="Cancel Task Run",
+        description="Stop the automated run of a claimed task: it returns to Planned without "
+        "counting a failed attempt, and the worker is told to cancel with its next heartbeat "
+        "reply.",
+    )
+    def cancel_task_run(
+        id: CardId,
+        reason: str | None = None,
+        expectedUpdatedAt: ExpectedUpdatedAt = None,  # noqa: N803
+        view: ViewArg = None,
+    ) -> dict[str, Any]:
+        return run(
+            lambda s, a: echo_card(s, claims.cancel_run(s, a, id, reason, expectedUpdatedAt), view)
+        )
+
+    @mcp.tool(
+        title="Add Run Report",
+        description="Add the report of an automated run to its task: outcome (done, failed, "
+        "timed_out, cancelled, usage_limit), the agent's summary, the commits made, the verify "
+        "command with its exit code and output, the duration and the failure reason. Long "
+        "verify output is cut down to its head and tail. Reports accumulate as the task's "
+        "history of attempts.",
+    )
+    def add_run_report(
+        id: TaskId,
+        outcome: RunOutcome,
+        summary: str | None = None,
+        commits: Annotated[list[RunCommitInput] | None, Field(max_length=COMMIT_LIMIT)] = None,
+        branchName: str | None = None,  # noqa: N803
+        verifyCommand: str | None = None,  # noqa: N803
+        verifyExitCode: int | None = None,  # noqa: N803
+        verifyOutput: str | None = None,  # noqa: N803
+        durationSeconds: Annotated[int | None, Field(ge=0)] = None,  # noqa: N803
+        failureReason: str | None = None,  # noqa: N803
+        startedAt: AwareDatetime | None = None,  # noqa: N803
+        finishedAt: AwareDatetime | None = None,  # noqa: N803
+        workerId: str | None = None,  # noqa: N803
+        workerName: str | None = None,  # noqa: N803
+        agent: str | None = None,
+    ) -> dict[str, Any]:
+        return run(
+            lambda s, a: {
+                "item": runs.add_run_report(
+                    s,
+                    a,
+                    id,
+                    outcome,
+                    summary=summary,
+                    commits=commits or [],
+                    branch_name=branchName,
+                    verify_command=verifyCommand,
+                    verify_exit_code=verifyExitCode,
+                    verify_output=verifyOutput,
+                    duration_seconds=durationSeconds,
+                    failure_reason=failureReason,
+                    started_at=startedAt,
+                    finished_at=finishedAt,
+                    worker_id=workerId,
+                    worker_name=workerName,
+                    agent=agent,
+                )
+            }
+        )
+
+    @mcp.tool(
+        title="List Run Reports",
+        description="The automated runs of a task, newest first: the history of its attempts. "
+        "Returns 20 by default; pass nextCursor back as before for older runs.",
+        annotations=READ_ONLY,
+    )
+    def list_run_reports(
+        id: TaskId,
+        limit: Annotated[int | None, Field(ge=1, le=runs.RUNS_PAGE_MAX)] = None,
+        before: Annotated[str | None, Field(description="nextCursor of the previous page.")] = None,
+    ) -> dict[str, Any]:
+        def page(s: Session, a: AccessContext) -> dict[str, Any]:
+            listed = runs.list_run_reports(s, a, id, limit=limit, before=before)
+            return {"items": listed.items, "nextCursor": listed.next_cursor}
+
+        return run(page)
 
     @mcp.tool(
         title="Set Card Readiness",

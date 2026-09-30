@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Column,
     DateTime,
@@ -61,6 +62,9 @@ class ProjectRow(SQLModel, table=True):
     last_task_number: int = Field(
         default=0, sa_column=Column(Integer, nullable=False, server_default=text("0"))
     )
+    # Set while automation is paused: claims are refused and workers are told to pause.
+    automation_paused_at: datetime | None = _timestamp(nullable=True)
+    automation_paused_reason: str | None = _text()
     created_at: datetime = _timestamp()
     updated_at: datetime = _timestamp()
 
@@ -208,6 +212,38 @@ class WorkerRow(SQLModel, table=True):
     started_at: datetime = _timestamp()
     last_seen_at: datetime = _timestamp()
     stopped_at: datetime | None = _timestamp(nullable=True)
+    # Asked from the board to stop; the worker learns it with its next heartbeat.
+    stop_requested_at: datetime | None = _timestamp(nullable=True)
+
+
+class TaskRunRow(SQLModel, table=True):
+    """A report of one automated run of a task: what the agent did and how it ended."""
+
+    __tablename__ = "task_runs"
+    __table_args__ = (Index("task_runs_idea_idx", "idea_id", text("created_at DESC")),)
+
+    id: str = Field(sa_column=Column(Text, primary_key=True))
+    idea_id: str = _foreign_key("ideas.id", "CASCADE")
+    worker_id: str | None = _foreign_key("workers.id", "SET NULL", nullable=True)
+    # Kept by value: workers are pruned, their reports are not.
+    worker_name: str | None = _text()
+    agent: str | None = _text()
+    outcome: str = Field(sa_column=Column(Text, nullable=False))
+    summary: str = _text("")
+    # [{"sha": ..., "subject": ...}] for the commits the run made.
+    commits: list[dict[str, str]] = _json_list()
+    branch_name: str | None = _text()
+    verify_command: str | None = _text()
+    verify_exit_code: int | None = Field(default=None, sa_column=Column(Integer))
+    verify_output: str | None = _text()
+    verify_output_truncated: bool = Field(
+        default=False, sa_column=Column(Boolean, nullable=False, server_default=text("false"))
+    )
+    duration_seconds: int | None = Field(default=None, sa_column=Column(Integer))
+    failure_reason: str | None = _text()
+    started_at: datetime | None = _timestamp(nullable=True)
+    finished_at: datetime | None = _timestamp(nullable=True)
+    created_at: datetime = _timestamp()
 
 
 class DocumentRow(SQLModel, table=True):

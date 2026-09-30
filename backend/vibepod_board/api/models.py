@@ -4,19 +4,29 @@ titles are trimmed, and numbers and booleans must be real JSON numbers and boole
 import re
 from typing import Annotated, Any
 
-from pydantic import AfterValidator, BeforeValidator, Field, StrictBool, StrictInt, StrictStr
+from pydantic import (
+    AfterValidator,
+    AwareDatetime,
+    BeforeValidator,
+    Field,
+    StrictBool,
+    StrictInt,
+    StrictStr,
+)
 
 from vibepod_board.enums import (
     BoardColumn,
     DocumentKind,
     IdeaStatus,
     ReleaseOutcome,
+    RunOutcome,
     WorkerStatus,
     WorkerStep,
 )
 from vibepod_board.schemas import ApiModel
 from vibepod_board.services.claims import MAX_LEASE_SECONDS, MIN_LEASE_SECONDS
 from vibepod_board.services.listing import BATCH_LIMIT
+from vibepod_board.services.runs import COMMIT_LIMIT
 
 
 def _required_trimmed(value: str) -> str:
@@ -156,6 +166,10 @@ class ClaimRequest(ApiModel):
     labels: list[RequiredText] = Field(default_factory=list)
     # Only tasks whose latest readiness score is at least this.
     min_readiness: Annotated[StrictInt, Field(ge=1, le=10)] | None = None
+    # Tasks to pass over, such as a run the runner just saw cancelled.
+    exclude: Annotated[list[RequiredText], Field(max_length=BATCH_LIMIT)] = Field(
+        default_factory=list
+    )
     # How long the claim lasts unless renewed; the server default applies when omitted.
     lease_seconds: LeaseSeconds | None = None
 
@@ -225,3 +239,39 @@ class HeartbeatRequest(ApiModel):
     step: WorkerStep | None = None
     # The lease the worker's claims are renewed by; the server default when omitted.
     lease_seconds: LeaseSeconds | None = None
+
+
+class PauseRequest(ApiModel):
+    reason: StrictStr | None = None
+
+
+class CancelRunRequest(ApiModel):
+    reason: StrictStr | None = None
+    # Refuses the cancel (409) when the card changed since this updatedAt.
+    expected_updated_at: RequiredText | None = None
+
+
+class RunCommitInput(ApiModel):
+    sha: Annotated[StrictStr, Field(pattern=r"^[0-9a-fA-F]{4,64}$")]
+    subject: StrictStr = ""
+
+
+class RunReportRequest(ApiModel):
+    outcome: RunOutcome
+    # The agent's own summary of the run.
+    summary: StrictStr = ""
+    commits: Annotated[list[RunCommitInput], Field(max_length=COMMIT_LIMIT)] = Field(
+        default_factory=list
+    )
+    branch_name: StrictStr | None = None
+    verify_command: StrictStr | None = None
+    verify_exit_code: StrictInt | None = None
+    # Cut down to its head and tail when long.
+    verify_output: StrictStr | None = None
+    duration_seconds: Annotated[StrictInt, Field(ge=0)] | None = None
+    failure_reason: StrictStr | None = None
+    started_at: AwareDatetime | None = None
+    finished_at: AwareDatetime | None = None
+    worker_id: RequiredText | None = None
+    worker_name: StrictStr | None = None
+    agent: StrictStr | None = None

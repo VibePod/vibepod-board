@@ -7,6 +7,7 @@ from vibepod_board.api.models import (
     ArchiveDoneRequest,
     BoardCardBatch,
     BoardCardUpdate,
+    CancelRunRequest,
     ClaimRequest,
     HandoverRequest,
     ReadinessRequest,
@@ -91,6 +92,7 @@ def claim_task(
         task=body.task,
         labels=body.labels,
         min_readiness=body.min_readiness,
+        exclude=body.exclude,
         lease_seconds=body.lease_seconds,
         default_lease_seconds=settings.claim_lease_seconds,
         max_attempts=settings.claim_max_attempts,
@@ -187,6 +189,26 @@ def release_task(
             note=body.note,
             max_attempts=body.max_attempts,
             default_max_attempts=settings.claim_max_attempts,
+        )
+    )
+
+
+@router.post("/{card_id}/cancel")
+def cancel_run(
+    card_id: str,
+    session: SessionDep,
+    access: AccessDep,
+    body: CancelRunRequest | None = None,
+) -> Item[BoardCard]:
+    """Stops the run of a claimed task: it returns to Planned without counting an attempt,
+    and the worker is told to cancel with its next heartbeat reply."""
+    return Item(
+        item=claims.cancel_run(
+            session,
+            access,
+            card_id,
+            body.reason if body else None,
+            body.expected_updated_at if body else None,
         )
     )
 

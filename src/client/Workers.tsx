@@ -1,4 +1,5 @@
 import {
+  Alert,
   Anchor,
   Badge,
   Button,
@@ -7,10 +8,11 @@ import {
   Paper,
   Stack,
   Text,
+  TextInput,
 } from "@mantine/core";
-import { Bot } from "lucide-react";
+import { Bot, Pause, Play, Square } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { Worker } from "../shared/types.js";
+import type { AutomationState, Worker } from "../shared/types.js";
 import {
   elapsedSince,
   formatElapsed,
@@ -67,9 +69,15 @@ export const WorkerActivity = ({ worker }: { worker: Worker }) => {
 type WorkersListProps = {
   workers: Worker[];
   onOpenTask: (taskId: string) => void;
+  /** Asks a worker to stop; omitted where the list is read-only. */
+  onStop?: (worker: Worker) => Promise<void>;
 };
 
-export const WorkersList = ({ workers, onOpenTask }: WorkersListProps) => {
+export const WorkersList = ({
+  workers,
+  onOpenTask,
+  onStop,
+}: WorkersListProps) => {
   const now = useNow();
   return (
     <Stack gap="sm" className="workers-list">
@@ -89,13 +97,39 @@ export const WorkersList = ({ workers, onOpenTask }: WorkersListProps) => {
                   {[worker.agent, worker.machine].filter(Boolean).join(" · ")}
                 </Text>
               </Stack>
-              <Badge
-                className="worker-status"
-                variant="light"
-                color={workerStateColors[worker.status]}
-              >
-                {workerStateLabels[worker.status]}
-              </Badge>
+              <Group gap={6} wrap="nowrap">
+                {worker.stopRequestedAt && worker.status !== "offline" ? (
+                  <Badge className="worker-status" variant="light" color="red">
+                    Stopping
+                  </Badge>
+                ) : (
+                  <Badge
+                    className="worker-status"
+                    variant="light"
+                    color={workerStateColors[worker.status]}
+                  >
+                    {workerStateLabels[worker.status]}
+                  </Badge>
+                )}
+                {/* A silent worker that never signed off still holds its claims; stopping
+                    it signs it off and gives them back, also after an earlier stop request
+                    it went silent without answering. */}
+                {onStop &&
+                  !worker.stoppedAt &&
+                  (!worker.stopRequestedAt || worker.status === "offline") && (
+                    <Button
+                      type="button"
+                      size="compact-xs"
+                      variant="subtle"
+                      color="red"
+                      leftSection={<Square size={10} aria-hidden />}
+                      aria-label={`Stop ${worker.name}`}
+                      onClick={() => void onStop(worker)}
+                    >
+                      Stop
+                    </Button>
+                  )}
+              </Group>
             </Group>
             {worker.status === "paused" && worker.statusReason && (
               <Text size="sm" className="worker-status-reason">
@@ -134,35 +168,110 @@ export const WorkersList = ({ workers, onOpenTask }: WorkersListProps) => {
   );
 };
 
-type WorkersIndicatorProps = WorkersListProps;
+type AutomationControlProps = {
+  automation: AutomationState | null;
+  onPause: (reason: string) => Promise<void>;
+  onResume: () => Promise<void>;
+};
+
+/** Pause or resume automation of the project; runs in progress finish. */
+export const AutomationControl = ({
+  automation,
+  onPause,
+  onResume,
+}: AutomationControlProps) => {
+  const [reason, setReason] = useState("");
+  if (automation?.paused) {
+    return (
+      <Alert
+        className="automation-paused"
+        color="yellow"
+        variant="light"
+        title="Automation paused"
+      >
+        <Stack gap="xs" align="flex-start">
+          <Text size="sm">
+            {automation.reason ??
+              "Workers take no new tasks until automation is resumed."}
+          </Text>
+          <Button
+            type="button"
+            size="xs"
+            variant="light"
+            leftSection={<Play size={14} aria-hidden />}
+            onClick={() => void onResume()}
+          >
+            Resume automation
+          </Button>
+        </Stack>
+      </Alert>
+    );
+  }
+  return (
+    <Group align="flex-end" gap="xs" className="automation-control">
+      <TextInput
+        style={{ flex: 1 }}
+        size="xs"
+        label="Pause reason"
+        placeholder="Optional"
+        value={reason}
+        onChange={(event) => setReason(event.currentTarget.value)}
+      />
+      <Button
+        type="button"
+        size="xs"
+        variant="light"
+        color="yellow"
+        leftSection={<Pause size={14} aria-hidden />}
+        onClick={() => {
+          void onPause(reason.trim());
+          setReason("");
+        }}
+      >
+        Pause automation
+      </Button>
+    </Group>
+  );
+};
+
+type WorkersIndicatorProps = WorkersListProps &
+  AutomationControlProps & {
+    onStop: (worker: Worker) => Promise<void>;
+  };
 
 /**
  * The project's workers in the header: how many are connected and working,
- * with the full list on click. Hidden while no worker has been seen.
+ * with the list and the automation controls on click. Shown before any worker
+ * connects too, so automation can be paused ahead of the first one.
  */
 export const WorkersIndicator = ({
   workers,
+  automation,
   onOpenTask,
+  onStop,
+  onPause,
+  onResume,
 }: WorkersIndicatorProps) => {
   const [opened, setOpened] = useState(false);
-  if (workers.length === 0) {
-    return null;
-  }
+  const paused = Boolean(automation?.paused);
   const online = onlineWorkers(workers);
   const working = online.filter((worker) => worker.status === "working");
-  const label =
+  const counted =
     online.length > 0
       ? `${online.length} ${online.length === 1 ? "worker" : "workers"}${
           working.length > 0 ? ` · ${working.length} working` : ""
         }`
-      : "Workers offline";
+      : workers.length > 0
+        ? "Workers offline"
+        : "No workers";
+  const label = paused ? `Automation paused · ${counted}` : counted;
   return (
     <>
       <Button
         className="workers-indicator"
         type="button"
         variant="light"
-        color={online.length > 0 ? "teal" : "gray"}
+        color={paused ? "yellow" : online.length > 0 ? "teal" : "gray"}
         leftSection={<Bot size={16} aria-hidden />}
         onClick={() => setOpened(true)}
       >
@@ -175,13 +284,27 @@ export const WorkersIndicator = ({
         centered
         size="lg"
       >
-        <WorkersList
-          workers={workers}
-          onOpenTask={(taskId) => {
-            setOpened(false);
-            onOpenTask(taskId);
-          }}
-        />
+        <Stack gap="md">
+          <AutomationControl
+            automation={automation}
+            onPause={onPause}
+            onResume={onResume}
+          />
+          {workers.length === 0 ? (
+            <Text c="dimmed" size="sm">
+              No worker has connected in the last day.
+            </Text>
+          ) : (
+            <WorkersList
+              workers={workers}
+              onStop={onStop}
+              onOpenTask={(taskId) => {
+                setOpened(false);
+                onOpenTask(taskId);
+              }}
+            />
+          )}
+        </Stack>
       </Modal>
     </>
   );

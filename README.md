@@ -95,6 +95,13 @@ GITHUB_REPOSITORY=owner/repo    # optional default; a task's GitHub remote URL w
 - `GET /api/workers/:id`
 - `POST /api/workers/:id/heartbeat`
 - `POST /api/workers/:id/sign-off`
+- `POST /api/workers/:id/stop`
+- `POST /api/board/:id/cancel`
+- `GET /api/projects/:id/automation`
+- `POST /api/projects/:id/automation/pause`
+- `POST /api/projects/:id/automation/resume`
+- `POST /api/ideas/:id/runs`
+- `GET /api/ideas/:id/runs`
 - `POST /api/ideas/:id/readiness`
 - `GET /api/ideas/:id/readiness`
 - `GET /api/readiness`
@@ -171,6 +178,12 @@ Tools:
 - `register_worker`
 - `worker_heartbeat`
 - `sign_off_worker`
+- `stop_worker`
+- `cancel_task_run`
+- `pause_automation`
+- `resume_automation`
+- `add_run_report`
+- `list_run_reports`
 - `list_idea_readiness`
 - `list_readiness`
 - `push_github_issue`
@@ -275,8 +288,9 @@ by *claiming* it. Claims are available over REST and MCP, limited to the caller'
   moves its card to **In Progress** in the same step. The claimed-by value is the task's
   assignee, so the card shows who took it, and `claimedAt` says since when. Narrow the choice
   with `labels` (the task must carry all of them, case-insensitive) or `minReadiness` (its
-  latest readiness score must be at least this), or name one `task`. When nothing can be
-  claimed the answer is `{"claimed": false, "reason": ...}`. Claims in one project are
+  latest readiness score must be at least this), pass over tasks named in `exclude`, or
+  name one `task`. When nothing can be claimed the answer is
+  `{"claimed": false, "reason": ...}`. Claims in one project are
   serialised, so two runners claiming at the same time never get the same task.
 - **Lease.** A claim expires at `claimExpiresAt`, `leaseSeconds` after it was taken or last
   renewed (`POST /api/board/:id/renew`, `renew_task_claim`). An expired claim puts the task
@@ -324,6 +338,37 @@ automating what:
 In the UI, a workers indicator in the project header opens the list, and a card being worked
 on shows the worker, its current step and the elapsed time. The indicator on the card goes
 away when the task moves on or the worker goes offline.
+
+### Controls and Run Reports
+
+People with access to a project steer its workers from the board. Workers receive these
+instructions in their regular heartbeat reply (`instructions`), so they act on them within one
+heartbeat, without another connection:
+
+- **Pause and resume** automation of a project with **Pause automation** in the workers list,
+  `POST /api/projects/:id/automation/pause` (optional `reason`) and `.../resume`
+  (`pause_automation`, `resume_automation`). While paused, claims answer
+  `{"claimed": false, "paused": true}` and every heartbeat reply carries
+  `{"type": "pause", "reason": ...}`; runs in progress finish. `GET /api/projects/:id/automation`
+  and the workers list of one project (`automation`) report the state.
+- **Stop a worker** with **Stop** in the workers list, `POST /api/workers/:id/stop`
+  (`stop_worker`): the reply carries `{"type": "stop"}`, and the worker gives its task back and
+  signs off. A worker that is already offline is signed off at once.
+- **Cancel a run** with **Cancel run** on a claimed card or in the task view,
+  `POST /api/board/:id/cancel` (`cancel_task_run`): the task returns to Planned at once without
+  counting a failed attempt, and the worker holding it is told
+  `{"type": "cancel", "taskId": ..., "reason": ...}`. A worker also gets `cancel` when its task
+  was taken from it any other way, such as a card moved by hand. Since the task is planned
+  again, a worker passes it over in its next claims (`exclude`) so it does not restart the run
+  it was just told to stop; pause automation first to keep every worker away from it.
+
+Every automated run adds a report to its task with `POST /api/ideas/:id/runs`
+(`add_run_report`): the `outcome` (`done`, `failed`, `timed_out`, `cancelled` or
+`usage_limit`), the agent's `summary`, the `commits` made, the `verifyCommand` with its
+`verifyExitCode` and `verifyOutput`, the `durationSeconds` and the `failureReason`. Long verify
+output keeps its first 2,000 and last 14,000 characters (`verifyOutputTruncated`). Reports are
+never replaced: `GET /api/ideas/:id/runs` (`list_run_reports`) and the task view list them as the
+task's history of attempts.
 
 Server settings:
 

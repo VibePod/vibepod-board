@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   failedAttemptsLabel,
   formatClaimedSince,
+  formatDuration,
   isCardBlocked,
   pluralize,
 } from "../src/client/automationUtils.js";
@@ -31,5 +32,15 @@ describe("automation labels", () => {
     expect(formatClaimedSince(claimedAt, now, "en-GB")).toMatch(
       /^since 28 Sept?, 09:30$/,
     );
+  });
+});
+
+describe("run durations", () => {
+  it("reads like a sentence", () => {
+    expect(formatDuration(45)).toBe("45 s");
+    expect(formatDuration(725)).toBe("12 min 5 s");
+    expect(formatDuration(600)).toBe("10 min");
+    expect(formatDuration(7380)).toBe("2 h 3 min");
+    expect(formatDuration(7200)).toBe("2 h");
   });
 });

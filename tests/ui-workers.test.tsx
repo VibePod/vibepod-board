@@ -318,17 +318,64 @@ describe("connected workers", () => {
     }
   });
 
-  it("hides the header indicator when no worker was seen", async () => {
-    const fetchMock = await renderBoard({ workers: [], columns: inProgress() });
+  it("offers Stop for a silent worker that never signed off", async () => {
+    await renderBoard({
+      workers: [
+        worker({ id: "silent", name: "silent@box", status: "offline" }),
+        worker({
+          id: "gone",
+          name: "gone@box",
+          status: "offline",
+          stoppedAt: timestamp,
+        }),
+        worker({
+          id: "unanswered",
+          name: "unanswered@box",
+          status: "offline",
+          stopRequestedAt: timestamp,
+        }),
+        worker({
+          id: "stopping",
+          name: "stopping@box",
+          status: "working",
+          stopRequestedAt: timestamp,
+        }),
+      ],
+      columns: inProgress(),
+    });
 
-    await waitFor(() =>
-      expect(
-        fetchMock.mock.calls.some(([input]) =>
-          String(input).startsWith("/api/workers"),
-        ),
-      ).toBe(true),
+    await userEvent.click(
+      await screen.findByRole("button", { name: /1 worker/ }),
     );
-    expect(document.querySelector(".workers-indicator")).toBeNull();
+    const dialog = await screen.findByRole("dialog", { name: "Workers" });
+    expect(
+      within(dialog).getByRole("button", { name: "Stop silent@box" }),
+    ).toBeTruthy();
+    expect(
+      within(dialog).queryByRole("button", { name: "Stop gone@box" }),
+    ).toBeNull();
+    expect(
+      within(dialog).getByRole("button", { name: "Stop unanswered@box" }),
+    ).toBeTruthy();
+    expect(
+      within(dialog).queryByRole("button", { name: "Stop stopping@box" }),
+    ).toBeNull();
+  });
+
+  it("offers the automation controls before any worker connects", async () => {
+    await renderBoard({ workers: [], columns: inProgress() });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "No workers" }),
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "Workers" });
+    expect(
+      within(dialog).getByRole("button", { name: "Pause automation" }),
+    ).toBeTruthy();
+    expect(
+      within(dialog).getByText("No worker has connected in the last day."),
+    ).toBeTruthy();
   });
 
   it("keeps the newest board when an older reload finishes last", async () => {
@@ -368,5 +415,42 @@ describe("connected workers", () => {
 
     expect(screen.getByText("Newest snapshot")).toBeTruthy();
     expect(screen.queryByText("Stale snapshot")).toBeNull();
+  });
+
+  it("reloads the board regularly only while a worker is online", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const boardLoads = (fetchMock: ReturnType<typeof boardApi>) =>
+        fetchMock.mock.calls.filter(([input]) => String(input) === "/api/board")
+          .length;
+
+      const online = await renderBoard({
+        workers: [worker({ status: "idle" })],
+        columns: inProgress(),
+      });
+      const before = boardLoads(online);
+      await vi.advanceTimersByTimeAsync(31_000);
+      await waitFor(() => expect(boardLoads(online)).toBeGreaterThan(before));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves the board alone while every worker is offline", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const fetchMock = await renderBoard({
+        workers: [worker({ status: "offline" })],
+        columns: inProgress(),
+      });
+      const boardLoads = () =>
+        fetchMock.mock.calls.filter(([input]) => String(input) === "/api/board")
+          .length;
+      const before = boardLoads();
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(boardLoads()).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
