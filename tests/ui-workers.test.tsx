@@ -362,17 +362,20 @@ describe("connected workers", () => {
     ).toBeNull();
   });
 
-  it("hides the header indicator when no worker was seen", async () => {
-    const fetchMock = await renderBoard({ workers: [], columns: inProgress() });
+  it("offers the automation controls before any worker connects", async () => {
+    await renderBoard({ workers: [], columns: inProgress() });
 
-    await waitFor(() =>
-      expect(
-        fetchMock.mock.calls.some(([input]) =>
-          String(input).startsWith("/api/workers"),
-        ),
-      ).toBe(true),
+    await userEvent.click(
+      await screen.findByRole("button", { name: "No workers" }),
     );
-    expect(document.querySelector(".workers-indicator")).toBeNull();
+
+    const dialog = await screen.findByRole("dialog", { name: "Workers" });
+    expect(
+      within(dialog).getByRole("button", { name: "Pause automation" }),
+    ).toBeTruthy();
+    expect(
+      within(dialog).getByText("No worker has connected in the last day."),
+    ).toBeTruthy();
   });
 
   it("keeps the newest board when an older reload finishes last", async () => {

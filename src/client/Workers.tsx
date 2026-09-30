@@ -241,8 +241,8 @@ type WorkersIndicatorProps = WorkersListProps &
 
 /**
  * The project's workers in the header: how many are connected and working,
- * with the list and the automation controls on click. Hidden while no worker
- * has been seen and automation is not paused.
+ * with the list and the automation controls on click. Shown before any worker
+ * connects too, so automation can be paused ahead of the first one.
  */
 export const WorkersIndicator = ({
   workers,
@@ -254,9 +254,6 @@ export const WorkersIndicator = ({
 }: WorkersIndicatorProps) => {
   const [opened, setOpened] = useState(false);
   const paused = Boolean(automation?.paused);
-  if (workers.length === 0 && !paused) {
-    return null;
-  }
   const online = onlineWorkers(workers);
   const working = online.filter((worker) => worker.status === "working");
   const counted =
@@ -264,7 +261,9 @@ export const WorkersIndicator = ({
       ? `${online.length} ${online.length === 1 ? "worker" : "workers"}${
           working.length > 0 ? ` · ${working.length} working` : ""
         }`
-      : "Workers offline";
+      : workers.length > 0
+        ? "Workers offline"
+        : "No workers";
   const label = paused ? `Automation paused · ${counted}` : counted;
   return (
     <>
