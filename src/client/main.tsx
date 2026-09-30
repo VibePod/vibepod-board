@@ -121,6 +121,7 @@ import {
   projectSelectorOptions,
   shouldShowProjectSidebar,
 } from "./layoutNavigation.js";
+import { createLoadOrder } from "./loadOrder.js";
 import { InlineMarkdown, MarkdownText } from "./Markdown.js";
 import {
   CriteriaPreview,
@@ -420,13 +421,14 @@ const App = () => {
   );
   const [workers, setWorkers] = useState<Worker[]>([]);
 
-  // Loads overlap (a worker poll reloads while a move reloads too); only the
-  // latest one may commit, so an older snapshot never replaces a newer one.
-  const loadGeneration = useRef(0);
+  // Loads overlap (a worker poll reloads while a move reloads too): an older
+  // snapshot never replaces a newer one, but a newer load that fails does not
+  // throw away an older one that succeeded.
+  const loadOrder = useRef(createLoadOrder()).current;
 
   /** A background reload keeps the error banner: the user has not read it yet. */
   const loadState = async ({ background = false } = {}) => {
-    const generation = ++loadGeneration.current;
+    const ticket = loadOrder.start();
     if (!background) setError("");
     const [projects, ideas, board, archived, documents, github] =
       await Promise.all([
@@ -440,7 +442,7 @@ const App = () => {
         // Sync buttons stay disabled when the status cannot be read.
         api<GitHubStatus>("/api/github").catch(() => null),
       ]);
-    if (generation !== loadGeneration.current) return;
+    if (!loadOrder.apply(ticket)) return;
     setGitHubStatus(github);
     setState((prev) => ({
       projects: projects.items,
