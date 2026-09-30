@@ -4,6 +4,7 @@ import {
   CircleDot,
   CloudDownload,
   CloudUpload,
+  Github,
 } from "lucide-react";
 import { useState } from "react";
 import type { Idea } from "../shared/types.js";
@@ -14,6 +15,7 @@ import {
   isStaleSyncError,
   issueLinkForIdea,
 } from "./githubIssue.js";
+import type { GitHubRepositoryLink } from "./repositoryUtils.js";
 
 /** Opens the linked issue in a new tab; green while open, violet once closed. */
 export const GitHubIssueBadge = ({
@@ -48,6 +50,33 @@ export const GitHubIssueBadge = ({
     </Badge>
   );
 };
+
+/** Opens the task's GitHub repository in a new tab, labelled `owner/repo`. */
+export const GitHubRepositoryBadge = ({
+  link,
+  size = "sm",
+}: {
+  link: GitHubRepositoryLink;
+  size?: "xs" | "sm";
+}) => (
+  <Badge
+    component="a"
+    href={link.url}
+    target="_blank"
+    rel="noopener noreferrer"
+    variant="light"
+    color="gray"
+    size={size}
+    leftSection={<Github size={12} aria-hidden />}
+    title={`Open ${link.name} on GitHub`}
+    aria-label={`Open GitHub repository ${link.name} in a new tab`}
+    style={{ cursor: "pointer", textTransform: "none" }}
+    // Cards open the task on click; following the link must not do that too.
+    onClick={(event) => event.stopPropagation()}
+  >
+    {link.name}
+  </Badge>
+);
 
 type SyncAction = "push" | "pull";
 
