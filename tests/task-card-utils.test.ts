@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   isCardReadinessStale,
   isReadinessStale,
+  plannedManyNotice,
   plannedNotice,
   readinessColor,
   taskListCardView,
@@ -144,6 +145,26 @@ describe("plannedNotice", () => {
     );
     expect(plannedNotice("VP-12", ["VP-8", "VP-9", "VP-10"])).toBe(
       "Planned VP-12; it waits for VP-8, VP-9 and VP-10.",
+    );
+  });
+});
+
+describe("plannedManyNotice", () => {
+  it("says workers pick up tasks with nothing to wait for", () => {
+    expect(plannedManyNotice(1, [])).toBe(
+      "Planned 1 ready task: a worker will pick it up.",
+    );
+    expect(plannedManyNotice(3, [])).toBe(
+      "Planned 3 ready tasks: workers will pick them up.",
+    );
+  });
+
+  it("names the tasks that wait for dependencies", () => {
+    expect(plannedManyNotice(3, ["VP-4"])).toBe(
+      "Planned 3 ready tasks; VP-4 waits for its dependencies.",
+    );
+    expect(plannedManyNotice(3, ["VP-4", "VP-5"])).toBe(
+      "Planned 3 ready tasks; VP-4 and VP-5 wait for their dependencies.",
     );
   });
 });

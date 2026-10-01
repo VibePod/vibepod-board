@@ -112,6 +112,22 @@ const boardApi = ({ stale = false } = {}) => {
       target.updatedAt = "2026-10-01T09:00:00.000Z";
       return jsonResponse({ item: target });
     }
+    if (path === "/api/board/batch" && method === "POST") {
+      if (stale) {
+        return jsonResponse(
+          { error: `Batch item 1 (card-1) failed: ${conflict}` },
+          409,
+        );
+      }
+      const body = JSON.parse(String(init?.body)) as {
+        items: { id: string; column: BoardCard["column"] }[];
+      };
+      for (const item of body.items) {
+        const written = cards.find((each) => each.id === item.id);
+        if (written) written.column = item.column;
+      }
+      return jsonResponse({ items: cards });
+    }
     return jsonResponse({ error: "Not found" }, 404);
   });
 };
@@ -303,5 +319,90 @@ describe("planning a card from Ready", () => {
         `${conflict}. The board was reloaded; check the card again.`,
       ),
     ).toBeTruthy();
+  });
+});
+
+describe("planning every Ready card", () => {
+  it("plans the Ready column in one guarded batch after confirming", async () => {
+    const fetchMock = await renderBoard();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Plan all ready tasks" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Plan Ready Tasks",
+    });
+    expect(within(dialog).getByText("2 ready tasks")).toBeTruthy();
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Plan Tasks" }),
+    );
+
+    expect(
+      await screen.findByText(
+        "Planned 2 ready tasks; VP-4 waits for its dependencies.",
+      ),
+    ).toBeTruthy();
+    const batches = fetchMock.mock.calls
+      .filter(([input]) => String(input) === "/api/board/batch")
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+    expect(batches).toEqual([
+      {
+        items: [
+          { id: "card-1", column: "planned", expectedUpdatedAt: timestamp },
+          { id: "card-4", column: "planned", expectedUpdatedAt: timestamp },
+        ],
+      },
+    ]);
+    await waitFor(() => expect(columnOf(cardFor("Free work"))).toBe("Planned"));
+    expect(columnOf(cardFor("Waiting work"))).toBe("Planned");
+    expect(
+      screen.queryByRole("button", { name: "Plan all ready tasks" }),
+    ).toBeNull();
+  });
+
+  it("plans nothing when the confirmation is cancelled", async () => {
+    const fetchMock = await renderBoard();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Plan all ready tasks" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Plan Ready Tasks",
+    });
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Cancel" }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Plan Ready Tasks" }),
+      ).toBeNull(),
+    );
+    expect(
+      fetchMock.mock.calls.some(
+        ([input]) => String(input) === "/api/board/batch",
+      ),
+    ).toBe(false);
+  });
+
+  it("refuses the whole batch when the view is stale", async () => {
+    await renderBoard({ stale: true });
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Plan all ready tasks" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Plan Ready Tasks",
+    });
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Plan Tasks" }),
+    );
+
+    expect(
+      await screen.findByText(
+        `Batch item 1 (card-1) failed: ${conflict}. The board was reloaded; check the cards again.`,
+      ),
+    ).toBeTruthy();
+    expect(columnOf(cardFor("Free work"))).toBe("Ready");
   });
 });

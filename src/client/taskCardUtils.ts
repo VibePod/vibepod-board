@@ -63,3 +63,14 @@ export const plannedNotice = (task: string, waitingFor: string[]): string =>
   waitingFor.length === 0
     ? `Planned ${task}: a worker will pick it up.`
     : `Planned ${task}; it waits for ${listing(waitingFor)}.`;
+
+/** The notice after planning many tasks at once; `waiting` names those with unfinished dependencies. */
+export const plannedManyNotice = (count: number, waiting: string[]): string => {
+  const planned = `Planned ${count} ready task${count === 1 ? "" : "s"}`;
+  if (waiting.length === 0) {
+    return `${planned}: ${count === 1 ? "a worker" : "workers"} will pick ${count === 1 ? "it" : "them"} up.`;
+  }
+  return waiting.length === 1
+    ? `${planned}; ${waiting[0]} waits for its dependencies.`
+    : `${planned}; ${listing(waiting)} wait for their dependencies.`;
+};

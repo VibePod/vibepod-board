@@ -165,6 +165,11 @@ import {
   SuggestedPullRequest,
 } from "./PullRequest.js";
 import {
+  PlanReadyDialog,
+  type PlanReadyTarget,
+  planReadyLimit,
+} from "./PlanReadyDialog.js";
+import {
   downloadResponse,
   parseProjectBundleText,
   projectBundlePreview,
@@ -179,6 +184,7 @@ import { TaskRuns } from "./TaskRuns.js";
 import {
   isCardReadinessStale,
   isReadinessStale,
+  plannedManyNotice,
   plannedNotice,
   readinessColor,
   taskListCardView,
@@ -455,6 +461,8 @@ const App = () => {
   >(null);
   const [archiveDoneTarget, setArchiveDoneTarget] =
     useState<ArchiveDoneTarget | null>(null);
+  const [planReadyTarget, setPlanReadyTarget] =
+    useState<PlanReadyTarget | null>(null);
   const [createdToken, setCreatedToken] = useState<CreatedTokenState>(null);
   const [tokenDraft, setTokenDraft] = useState<CreateApiTokenInput>(
     emptyTokenDraft(),
@@ -1725,6 +1733,64 @@ const App = () => {
   const archivedCardForRow = (row: ArchivedTaskRow) =>
     state.archivedCards.find((card) => card.id === row.cardId);
 
+  /** A card's task key and the keys of the unfinished tasks it depends on. */
+  const planningOf = (card: BoardCard) => {
+    const project = state.projects.find((item) => item.id === card.projectId);
+    const idea = card.ideaId ? ideaById.get(card.ideaId) : undefined;
+    return {
+      task:
+        project && idea
+          ? formatTaskId(project.key, idea.taskNumber)
+          : card.title,
+      waitingFor: dependencyLinks(
+        card.blockedBy,
+        ideaById,
+        project?.key ?? "",
+      ).map((link) => link.taskId),
+    };
+  };
+
+  /**
+   * Plans the Ready cards the dialog was opened for in one all-or-nothing batch,
+   * each guarded by the card the board showed. A stale card refuses the whole
+   * batch: the dialog closes and the board reloads, so the column is checked
+   * again. Other errors are thrown for the dialog.
+   */
+  const confirmPlanReady = async ({ cards }: PlanReadyTarget) => {
+    const batch = cards.slice(0, planReadyLimit);
+    try {
+      await api("/api/board/batch", {
+        method: "POST",
+        body: JSON.stringify({
+          items: batch.map((card) => ({
+            id: card.id,
+            column: "planned",
+            expectedUpdatedAt: card.updatedAt,
+          })),
+        }),
+      });
+    } catch (err) {
+      if (!isConflict(err)) throw err;
+      setPlanReadyTarget(null);
+      await loadState().catch(() => undefined);
+      setError(
+        `${err.message}. The board was reloaded; check the cards again.`,
+      );
+      return;
+    }
+    setPlanReadyTarget(null);
+    const waiting = batch
+      .map(planningOf)
+      .filter((planning) => planning.waitingFor.length > 0)
+      .map((planning) => planning.task);
+    setNotice(plannedManyNotice(batch.length, waiting));
+    try {
+      await loadState();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load board");
+    }
+  };
+
   /** Pass `expectedUpdatedAt` to refuse the move when the card changed meanwhile. */
   const moveCard = async (
     card: BoardCard,
@@ -1746,15 +1812,7 @@ const App = () => {
    */
   const planCard = async (card: BoardCard) => {
     setNotice("");
-    const project = state.projects.find((item) => item.id === card.projectId);
-    const idea = card.ideaId ? ideaById.get(card.ideaId) : undefined;
-    const task =
-      project && idea ? formatTaskId(project.key, idea.taskNumber) : card.title;
-    const waitingFor = dependencyLinks(
-      card.blockedBy,
-      ideaById,
-      project?.key ?? "",
-    ).map((link) => link.taskId);
+    const { task, waitingFor } = planningOf(card);
     try {
       await moveCard(card, "planned", card.updatedAt);
       setNotice(plannedNotice(task, waitingFor));
@@ -2620,6 +2678,24 @@ const App = () => {
                       {columnLabels[column]}
                     </Title>
                     <Group gap={6} wrap="nowrap">
+                      {column === "ready" &&
+                        (projectColumns.ready?.length ?? 0) > 0 && (
+                          <ActionIcon
+                            variant="subtle"
+                            color="gray"
+                            size="sm"
+                            aria-label="Plan all ready tasks"
+                            title="Plan all ready tasks"
+                            onClick={() =>
+                              setPlanReadyTarget({
+                                projectTitle: selectedProject.title,
+                                cards: projectColumns.ready,
+                              })
+                            }
+                          >
+                            <Send size={16} />
+                          </ActionIcon>
+                        )}
                       {column === "done" &&
                         (projectColumns.done?.length ?? 0) > 0 && (
                           <ActionIcon
@@ -4102,6 +4178,11 @@ const App = () => {
         target={archiveDoneTarget}
         onCancel={() => setArchiveDoneTarget(null)}
         onConfirm={confirmArchiveDone}
+      />
+      <PlanReadyDialog
+        target={planReadyTarget}
+        onCancel={() => setPlanReadyTarget(null)}
+        onConfirm={confirmPlanReady}
       />
 
       <Modal
