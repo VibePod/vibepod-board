@@ -49,3 +49,17 @@ export const isCardReadinessStale = (
   const contentUpdatedAt = linkedIdea?.updatedAt ?? card.updatedAt;
   return contentUpdatedAt > card.readinessEvaluatedAt;
 };
+
+const listing = (items: string[]): string =>
+  items.length <= 1
+    ? (items[0] ?? "")
+    : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+
+/**
+ * What happens to a task once it is planned: a worker picks it up, or it waits
+ * for the dependencies that are not finished yet.
+ */
+export const plannedNotice = (task: string, waitingFor: string[]): string =>
+  waitingFor.length === 0
+    ? `Planned ${task}: a worker will pick it up.`
+    : `Planned ${task}; it waits for ${listing(waitingFor)}.`;

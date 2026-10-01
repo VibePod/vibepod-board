@@ -60,6 +60,7 @@ import {
   Plus,
   RefreshCcw,
   Save,
+  Send,
   Sun,
   Trash2,
   Upload,
@@ -178,6 +179,7 @@ import { TaskRuns } from "./TaskRuns.js";
 import {
   isCardReadinessStale,
   isReadinessStale,
+  plannedNotice,
   readinessColor,
   taskListCardView,
 } from "./taskCardUtils.js";
@@ -1723,13 +1725,48 @@ const App = () => {
   const archivedCardForRow = (row: ArchivedTaskRow) =>
     state.archivedCards.find((card) => card.id === row.cardId);
 
-  const moveCard = async (card: BoardCard, column: BoardColumn) => {
+  /** Pass `expectedUpdatedAt` to refuse the move when the card changed meanwhile. */
+  const moveCard = async (
+    card: BoardCard,
+    column: BoardColumn,
+    expectedUpdatedAt?: string,
+  ) => {
     setError("");
     await api(`/api/board/${card.id}`, {
       method: "PATCH",
-      body: JSON.stringify({ column }),
+      body: JSON.stringify({ column, expectedUpdatedAt }),
     });
     await loadState();
+  };
+
+  /**
+   * Hands a Ready card to the workers by putting it in Planned, the way a drop
+   * does. Guarded by the card this board shows, and the notice says whether a
+   * worker picks it up or which unfinished dependencies it waits for.
+   */
+  const planCard = async (card: BoardCard) => {
+    setNotice("");
+    const project = state.projects.find((item) => item.id === card.projectId);
+    const idea = card.ideaId ? ideaById.get(card.ideaId) : undefined;
+    const task =
+      project && idea ? formatTaskId(project.key, idea.taskNumber) : card.title;
+    const waitingFor = dependencyLinks(
+      card.blockedBy,
+      ideaById,
+      project?.key ?? "",
+    ).map((link) => link.taskId);
+    try {
+      await moveCard(card, "planned", card.updatedAt);
+      setNotice(plannedNotice(task, waitingFor));
+    } catch (err) {
+      // Reload first: a reload clears the error.
+      await loadState().catch(() => undefined);
+      setError(
+        err instanceof Error
+          ? `${err.message}. The board was reloaded; check the card again.`
+          : "Failed to plan card",
+      );
+    }
   };
 
   /**
@@ -2977,6 +3014,7 @@ const App = () => {
                               </Group>
                             )}
                             {(cardTaskId ||
+                              column === "ready" ||
                               column === "done" ||
                               column === "review" ||
                               column === "pr_ready") && (
@@ -3023,6 +3061,26 @@ const App = () => {
                                     }
                                   >
                                     Request changes
+                                  </Button>
+                                )}
+                                {column === "ready" && (
+                                  <Button
+                                    type="button"
+                                    variant="subtle"
+                                    color="blue"
+                                    size="compact-xs"
+                                    mr="auto"
+                                    leftSection={<Send size={12} aria-hidden />}
+                                    aria-label={`Plan ${card.title}`}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void planCard(card);
+                                    }}
+                                    onKeyDown={(event) =>
+                                      event.stopPropagation()
+                                    }
+                                  >
+                                    Plan
                                   </Button>
                                 )}
                                 {column === "done" && (
@@ -3655,6 +3713,21 @@ const App = () => {
                     onClick={() => setReworkTarget(taskViewCard)}
                   >
                     Request changes
+                  </Button>
+                )}
+                {taskViewCard?.column === "ready" && (
+                  <Button
+                    type="button"
+                    variant="light"
+                    leftSection={<Send size={16} aria-hidden />}
+                    aria-label={`Plan ${taskViewCard.title}`}
+                    onClick={() => {
+                      // The notice and a conflict show on the board.
+                      setTaskViewModal(null);
+                      void planCard(taskViewCard);
+                    }}
+                  >
+                    Plan
                   </Button>
                 )}
                 <Button

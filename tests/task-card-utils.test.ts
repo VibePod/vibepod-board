@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   isCardReadinessStale,
   isReadinessStale,
+  plannedNotice,
   readinessColor,
   taskListCardView,
 } from "../src/client/taskCardUtils.js";
@@ -127,5 +128,22 @@ describe("task card utilities", () => {
     expect(
       isCardReadinessStale({ updatedAt: "x", ideaId: "idea-1" }, ideaById),
     ).toBe(false);
+  });
+});
+
+describe("plannedNotice", () => {
+  it("says a worker picks up a task with nothing to wait for", () => {
+    expect(plannedNotice("VP-12", [])).toBe(
+      "Planned VP-12: a worker will pick it up.",
+    );
+  });
+
+  it("names the unfinished dependencies a task waits for", () => {
+    expect(plannedNotice("VP-12", ["VP-10"])).toBe(
+      "Planned VP-12; it waits for VP-10.",
+    );
+    expect(plannedNotice("VP-12", ["VP-8", "VP-9", "VP-10"])).toBe(
+      "Planned VP-12; it waits for VP-8, VP-9 and VP-10.",
+    );
   });
 });
