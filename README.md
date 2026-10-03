@@ -47,9 +47,20 @@ Tasks can be linked to a GitHub issue. The link, the issue state (open/closed) a
 Push and Pull need a token on the server:
 
 ```bash
-GITHUB_TOKEN=ghp_xxx            # fine-grained token with Issues read/write
+GITHUB_TOKEN=ghp_xxx            # fine-grained token with Issues read/write, Pull requests
+                                # read/write and Contents read
 GITHUB_REPOSITORY=owner/repo    # optional default; a task's GitHub remote URL wins
 ```
+
+## Pull Requests
+
+A card in **PR ready** can open its pull request on GitHub, or link one opened by hand. The PR's number, state (open/closed/merged) and other details are stored on the card and shown as a badge that opens the PR in a new tab.
+
+- **Open PR** in the task view (also `GET`/`POST /api/board/:id/pull-request`, MCP `open_pull_request`): a dialog prefilled from the task — its title as the PR title, the repository's default branch as the base (or, for stacked work, the branch of a dependency's open PR), a generated body with summary, acceptance criteria, `Closes #<n>` when the linked issue is in the same repository, review approvals and the latest run — plus a draft toggle. The PR is created with the card's branch as head; the branch must already be on GitHub (the board never pushes), and a PR that already exists for that branch is linked instead of failing.
+- **Link PR** takes a `https://github.com/owner/repo/pull/123` URL for PRs opened by hand (also `POST /api/board/:id/pull-request/link`, MCP `link_pull_request`); an empty URL unlinks.
+- History records when a PR was opened or linked and by whom. Keeping the stored PR state in sync afterwards is a follow-up.
+
+Opening and reading pull requests uses the same `GITHUB_TOKEN` as issue sync (see above).
 
 ## API
 

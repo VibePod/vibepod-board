@@ -197,6 +197,24 @@ describe("project bundle validation", () => {
     );
   });
 
+  it("rejects any pull request field before version 4", () => {
+    for (const field of [
+      { githubPrUrl: "https://github.com/o/r/pull/5" },
+      { githubPrNumber: 5 },
+      { githubPrRepository: "o/r" },
+      { githubPrState: "open" as const },
+    ]) {
+      const bundle = validBundle();
+      expect(() =>
+        parseProjectBundle({
+          ...bundle,
+          bundleVersion: 3,
+          boardCards: [{ ...bundle.boardCards[0], ...field }],
+        }),
+      ).toThrow("Linked pull requests require bundleVersion 4");
+    }
+  });
+
   it("accepts archived board cards in version 3 bundles only", () => {
     const archived = (bundleVersion: 1 | 2 | 3, column: "done" | "review") => {
       const bundle = validBundle();

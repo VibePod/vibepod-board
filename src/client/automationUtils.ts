@@ -49,9 +49,17 @@ export const taskEventLabels: Record<TaskEventKind, string> = {
   question: "Question",
   answer: "Answer",
   feedback: "Review feedback",
+  approved: "Approved",
+  pr_opened: "PR opened",
+  pr_linked: "PR linked",
+  pr_unlinked: "PR unlinked",
 };
 
 export const taskEventColors: Record<TaskEventKind, string> = {
+  approved: "green",
+  pr_opened: "green",
+  pr_linked: "blue",
+  pr_unlinked: "gray",
   claimed: "grape",
   handed_over: "teal",
   failed: "orange",

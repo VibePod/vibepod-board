@@ -221,7 +221,7 @@ def test_archived_cards_survive_export_and_import(session: Session, project) -> 
     archived = board.archive_card(session, ADMIN, card.id)
 
     bundle = transfer.export_project(session, project.id)
-    assert bundle.bundle_version == 3
+    assert bundle.bundle_version == 4
     assert bundle.board_cards[0].archived_at == archived.archived_at
 
     transfer.import_project(session, bundle, replace_existing=True)

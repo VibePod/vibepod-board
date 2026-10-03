@@ -188,6 +188,23 @@ def test_accepts_archived_cards_in_version_3_only() -> None:
         parse_project_bundle(bundle)
 
 
+@pytest.mark.parametrize(
+    "field", ["githubPrUrl", "githubPrNumber", "githubPrRepository", "githubPrState"]
+)
+def test_rejects_any_pull_request_field_before_version_4(field: str) -> None:
+    values = {
+        "githubPrUrl": "https://github.com/o/r/pull/5",
+        "githubPrNumber": 5,
+        "githubPrRepository": "o/r",
+        "githubPrState": "open",
+    }
+    bundle = valid_bundle()
+    bundle["bundleVersion"] = 3
+    bundle["boardCards"][0][field] = values[field]
+    with pytest.raises(ValidationError, match="Linked pull requests require bundleVersion 4"):
+        parse_project_bundle(bundle)
+
+
 def test_rejects_archived_cards_outside_the_done_column() -> None:
     bundle = valid_bundle()
     bundle["bundleVersion"] = 3

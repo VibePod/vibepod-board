@@ -280,7 +280,7 @@ def _apply_manual_move(
 ARCHIVED_MESSAGE = "Board card is archived; unarchive it first"
 
 
-def _require_active_card(session: Session, access: AccessContext, reference: str) -> BoardCardRow:
+def require_active_card(session: Session, access: AccessContext, reference: str) -> BoardCardRow:
     card = require_card_ref(session, access, reference)
     assert_can_access_project(access, card.project_id)
     if card.archived_at is not None:
@@ -303,7 +303,7 @@ def _apply_card_update(
 ) -> tuple[BoardCardRow, bool]:
     """One card write without its own transaction or activity row, so a batch can apply
     many of them atomically. Also says whether the column actually changed."""
-    found = _require_active_card(session, access, reference)
+    found = require_active_card(session, access, reference)
     # Task before card, the order every write takes, so two writes never wait on each other.
     if found.idea_id:
         lock(session, IdeaRow, found.idea_id)
@@ -311,9 +311,19 @@ def _apply_card_update(
     assert_unchanged("Board card", expected_updated_at, card.updated_at)
     moved = column is not None and column != card.column_name
     if column is not None:
-        _apply_manual_move(
-            session, card, BoardColumn(column), timestamp, actor_for(session, access)
-        )
+        actor = actor_for(session, access)
+        _apply_manual_move(session, card, BoardColumn(column), timestamp, actor)
+        # Moving a card on from Review is the reviewer's approval; its PR body lists them.
+        if card.column_name == BoardColumn.REVIEW and column == BoardColumn.PR_READY:
+            if card.idea_id:
+                add_task_event(
+                    session,
+                    card.idea_id,
+                    TaskEventKind.APPROVED,
+                    f"Review approved by {actor}",
+                    actor,
+                    timestamp,
+                )
         card.column_name = column
     if isinstance(branch_name, str):
         card.branch_name = normalize_optional_text(branch_name)

@@ -70,6 +70,13 @@ export type BoardCard = {
   ideaId?: string;
   githubIssueUrl?: string;
   githubIssueNumber?: number;
+  githubPrUrl?: string;
+  githubPrNumber?: number;
+  githubPrRepository?: string;
+  githubPrState?: "open" | "closed" | "merged";
+  githubPrDraft?: boolean;
+  githubPrBase?: string;
+  githubPrSyncedAt?: string;
   repositoryLocalPath?: string;
   repositoryRemoteUrl?: string;
   labels: string[];
@@ -114,6 +121,10 @@ export const taskEventKinds = [
   "question",
   "answer",
   "feedback",
+  "approved",
+  "pr_opened",
+  "pr_linked",
+  "pr_unlinked",
 ] as const;
 
 export type TaskEventKind = (typeof taskEventKinds)[number];
@@ -252,10 +263,10 @@ export type BoardData = {
 
 export type ProjectBundle = {
   /**
-   * 2 adds GitHub sync state on tasks, 3 archived board cards; older bundles are
-   * still accepted.
+   * 2 adds GitHub sync state on tasks, 3 archived board cards, 4 linked pull
+   * requests on board cards; older bundles are still accepted.
    */
-  bundleVersion: 1 | 2 | 3;
+  bundleVersion: 1 | 2 | 3 | 4;
   exportedAt: string;
   project: Project;
   ideas: Idea[];

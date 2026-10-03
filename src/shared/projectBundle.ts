@@ -75,6 +75,13 @@ const boardCardSchema = z
     ideaId: optionalTextSchema,
     githubIssueUrl: optionalTextSchema,
     githubIssueNumber: optionalIntegerSchema,
+    githubPrUrl: optionalTextSchema,
+    githubPrNumber: optionalIntegerSchema,
+    githubPrRepository: optionalTextSchema,
+    githubPrState: z.enum(["open", "closed", "merged"]).optional(),
+    githubPrDraft: z.boolean().optional(),
+    githubPrBase: optionalTextSchema,
+    githubPrSyncedAt: timestampSchema.optional(),
     repositoryLocalPath: optionalTextSchema,
     repositoryRemoteUrl: optionalTextSchema,
     assignee: optionalTextSchema,
@@ -142,6 +149,17 @@ const duplicateValues = <T>(values: T[]): Set<T> => {
 const cyclicIdeaIds = (bundle: ProjectBundle): string[] =>
   findCyclicTaskIds(dependencyMap(bundle.ideas));
 
+/** Fields added by bundle version 4: a card's linked pull request. */
+const pullRequestFields = [
+  "githubPrUrl",
+  "githubPrNumber",
+  "githubPrRepository",
+  "githubPrState",
+  "githubPrDraft",
+  "githubPrBase",
+  "githubPrSyncedAt",
+] as const;
+
 /** Fields added by bundle version 2. */
 const githubSyncFields = [
   "githubRepository",
@@ -186,6 +204,16 @@ const validateRelationships = (bundle: ProjectBundle, ctx: z.RefinementCtx) => {
     });
   }
   bundle.boardCards.forEach((card, index) => {
+    if (
+      bundle.bundleVersion < 4 &&
+      pullRequestFields.some((field) => card[field] !== undefined)
+    ) {
+      addIssue(
+        ctx,
+        ["boardCards", index, "githubPrUrl"],
+        "Linked pull requests require bundleVersion 4",
+      );
+    }
     if (card.archivedAt === undefined) {
       return;
     }
@@ -299,7 +327,12 @@ const validateRelationships = (bundle: ProjectBundle, ctx: z.RefinementCtx) => {
 
 export const projectBundleSchema = z
   .object({
-    bundleVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    bundleVersion: z.union([
+      z.literal(1),
+      z.literal(2),
+      z.literal(3),
+      z.literal(4),
+    ]),
     exportedAt: timestampSchema,
     project: projectSchema,
     ideas: z.array(ideaSchema),

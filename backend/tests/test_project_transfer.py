@@ -118,7 +118,7 @@ def test_exports_one_self_contained_project(store: Store) -> None:
     bundle = export_project(s, project.id)
     data = dump(bundle)
 
-    match_object(data, {"bundleVersion": 3, "project": {"id": project.id, "key": "APP"}})
+    match_object(data, {"bundleVersion": 4, "project": {"id": project.id, "key": "APP"}})
     assert len(bundle.ideas) == 2
     assert [idea.project_id for idea in bundle.ideas] == [project.id, project.id]
     assert next(idea for idea in bundle.ideas if idea.id == feature.id).depends_on == [
@@ -188,6 +188,30 @@ def test_imports_a_bundle_as_a_new_project(store: Store, column: BoardColumn) ->
         dump(list_activity(s, admin)[0]),
         {"type": "project.imported", "message": "Imported project: Application"},
     )
+
+
+def test_normalises_the_pull_request_repository_on_import(store: Store) -> None:
+    s = store.session
+    project = create_project(s, key="APP", title="Application", summary="")
+    idea = create_idea(s, admin, project_id=project.id, title="Linked")
+    mark_ready(s, admin, idea.id)
+    bundle = export_project(s, project.id)
+    card = bundle.board_cards[0].model_copy(
+        update={
+            "github_pr_url": "https://github.com/Example/App/pull/5",
+            "github_pr_number": 5,
+            "github_pr_repository": "Example/App",
+            "github_pr_state": "open",
+        }
+    )
+    bundle = bundle.model_copy(update={"board_cards": [card]})
+
+    store.reset()
+    s = store.session
+    import_project(s, bundle, replace_existing=False)
+
+    [imported] = list_cards(s, admin, project.id)
+    assert imported.github_pr_repository == "example/app"
 
 
 def test_requires_confirmation_and_replaces_a_project_while_retaining_its_identity(

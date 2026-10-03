@@ -107,6 +107,13 @@ class BoardCard(ApiModel):
     idea_id: str | None = None
     github_issue_url: str | None = None
     github_issue_number: int | None = None
+    github_pr_url: str | None = None
+    github_pr_number: int | None = None
+    github_pr_repository: str | None = None
+    github_pr_state: str | None = None
+    github_pr_draft: bool | None = None
+    github_pr_base: str | None = None
+    github_pr_synced_at: Timestamp | None = None
     repository_local_path: str | None = None
     repository_remote_url: str | None = None
     assignee: str | None = None
