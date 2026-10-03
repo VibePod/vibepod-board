@@ -264,3 +264,38 @@ def test_0006_leaves_existing_cards_unclaimed_and_unblocked(empty_db: Engine) ->
     assert [tuple(row) for row in rows] == [(None, None, 0, None)]
     assert "task_events" in table_names(empty_db)
     assert revision(empty_db) == HEAD
+
+
+def test_0011_leaves_existing_cards_without_a_suggested_pull_request(empty_db: Engine) -> None:
+    from alembic import command
+
+    from vibepod_board.db import alembic_config
+
+    config = alembic_config()
+    with empty_db.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "0010")
+        connection.execute(
+            text(
+                "insert into projects (id, key, title, created_at, updated_at) "
+                "values ('p1', 'APP', 'App', now(), now())"
+            )
+        )
+        connection.execute(
+            text(
+                "insert into board_cards (id, project_id, title, column_name, created_at, "
+                "updated_at) values ('c1', 'p1', 'Reviewed work', 'review', now(), now())"
+            )
+        )
+
+    migrate(empty_db)
+
+    with empty_db.connect() as connection:
+        rows = connection.execute(
+            text(
+                "select suggested_pr_title, suggested_pr_body, suggested_pr_by, "
+                "suggested_pr_at from board_cards"
+            )
+        ).all()
+    assert [tuple(row) for row in rows] == [(None, None, None, None)]
+    assert revision(empty_db) == HEAD

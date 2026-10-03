@@ -81,6 +81,11 @@ export type BoardCard = {
   githubPrDraft?: boolean;
   githubPrBase?: string;
   githubPrSyncedAt?: string;
+  /** The pull request title and markdown description suggested at hand-over. */
+  suggestedPrTitle?: string;
+  suggestedPrBody?: string;
+  suggestedPrBy?: string;
+  suggestedPrAt?: string;
   repositoryLocalPath?: string;
   repositoryRemoteUrl?: string;
   labels: string[];
@@ -280,9 +285,10 @@ export type BoardData = {
 export type ProjectBundle = {
   /**
    * 2 adds GitHub sync state on tasks, 3 archived board cards, 4 linked pull
-   * requests on board cards; older bundles are still accepted.
+   * requests on board cards, 5 suggested pull requests on board cards; older
+   * bundles are still accepted.
    */
-  bundleVersion: 1 | 2 | 3 | 4;
+  bundleVersion: 1 | 2 | 3 | 4 | 5;
   exportedAt: string;
   project: Project;
   ideas: Idea[];

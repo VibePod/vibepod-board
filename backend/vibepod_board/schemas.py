@@ -120,6 +120,11 @@ class BoardCard(ApiModel):
     github_pr_draft: bool | None = None
     github_pr_base: str | None = None
     github_pr_synced_at: Timestamp | None = None
+    # The pull request title and markdown description the agent suggests at hand-over.
+    suggested_pr_title: str | None = None
+    suggested_pr_body: str | None = None
+    suggested_pr_by: str | None = None
+    suggested_pr_at: Timestamp | None = None
     repository_local_path: str | None = None
     repository_remote_url: str | None = None
     assignee: str | None = None

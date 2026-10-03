@@ -73,6 +73,22 @@ def normalize_optional_text(value: str | None) -> str | None:
     return value.strip() or None
 
 
+def suggest_pull_request(
+    card: BoardCardRow,
+    title: str | None,
+    body: str | None,
+    actor: str,
+    timestamp: datetime,
+) -> None:
+    """Stores the pull request title and description suggested for the card. Blank values
+    clear; with neither left, who suggested it is cleared too."""
+    card.suggested_pr_title = normalize_optional_text(title)
+    card.suggested_pr_body = normalize_optional_text(body)
+    suggested = card.suggested_pr_title or card.suggested_pr_body
+    card.suggested_pr_by = actor if suggested else None
+    card.suggested_pr_at = timestamp if suggested else None
+
+
 def assert_title(title: str | None, entity: str) -> None:
     if not title or not title.strip():
         raise BadRequest(f"{entity} title is required")

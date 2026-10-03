@@ -1,4 +1,4 @@
-"""Project export/import bundle (versions 1 to 4).
+"""Project export/import bundle (versions 1 to 5).
 
 Port of `src/shared/projectBundle.ts`: strict shapes (unknown fields are rejected) plus the
 relationship rules that keep a bundle self-contained. The client validates with the TS copy
@@ -107,6 +107,10 @@ class BundleBoardCard(BundleModel):
     github_pr_draft: StrictBool | None = None
     github_pr_base: StrictStr | None = None
     github_pr_synced_at: BundleTimestamp | None = None
+    suggested_pr_title: StrictStr | None = None
+    suggested_pr_body: StrictStr | None = None
+    suggested_pr_by: StrictStr | None = None
+    suggested_pr_at: BundleTimestamp | None = None
     repository_local_path: StrictStr | None = None
     repository_remote_url: StrictStr | None = None
     assignee: StrictStr | None = None
@@ -152,6 +156,13 @@ PULL_REQUEST_FIELDS = (
     "github_pr_base",
     "github_pr_synced_at",
 )
+# Fields added by bundle version 5: the pull request a card suggests.
+SUGGESTED_PULL_REQUEST_FIELDS = (
+    "suggested_pr_title",
+    "suggested_pr_body",
+    "suggested_pr_by",
+    "suggested_pr_at",
+)
 GITHUB_SYNC_FIELDS = (
     "github_repository",
     "github_issue_state",
@@ -166,8 +177,8 @@ def _duplicates[T](values: Iterable[T]) -> list[T]:
 
 class ProjectBundle(BundleModel):
     # 2 adds GitHub sync state on tasks, 3 archived board cards, 4 linked pull requests on
-    # board cards; older bundles are still accepted.
-    bundle_version: Literal[1, 2, 3, 4]
+    # board cards, 5 suggested pull requests on board cards; older bundles are still accepted.
+    bundle_version: Literal[1, 2, 3, 4, 5]
     exported_at: BundleTimestamp
     project: BundleProject
     ideas: list[BundleIdea]
@@ -216,6 +227,12 @@ def relationship_issues(bundle: ProjectBundle) -> list[str]:
             "Linked pull requests require bundleVersion 4"
             for card in bundle.board_cards
             if any(getattr(card, field) is not None for field in PULL_REQUEST_FIELDS)
+        ][:1]
+    if bundle.bundle_version < 5:
+        issues += [
+            "Suggested pull requests require bundleVersion 5"
+            for card in bundle.board_cards
+            if any(getattr(card, field) is not None for field in SUGGESTED_PULL_REQUEST_FIELDS)
         ][:1]
     if bundle.bundle_version == 1:
         issues += [

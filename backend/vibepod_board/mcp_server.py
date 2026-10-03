@@ -510,10 +510,12 @@ def create_mcp_server(
         title="Open Pull Request",
         description="Open the GitHub pull request for a card in PR ready, with the card's "
         "branch as head. The branch must already be on GitHub; the board never pushes. "
-        "Title, base and body default to what the board generates: the task title, the "
-        "branch of a dependency's open PR (else the default branch), and a body with the "
-        "summary, acceptance criteria, closing issue, approvals and latest run. When a PR "
-        "for the branch is already open, that one is linked instead.",
+        "Title, base and body default to the card's suggested pull request (from "
+        "hand_over_task or update_board_card) and the branch of a dependency's open PR (else "
+        "the default branch). Without a suggestion the title is the task title and the body "
+        "the task summary. The default body closes the linked issue (Closes #n) when it is in "
+        "the same repository and the suggestion does not close it yet. When a PR for the branch is "
+        "already open, that one is linked instead.",
     )
     def open_pull_request(
         id: CardId,
@@ -717,8 +719,10 @@ def create_mcp_server(
         title="Update Board Card",
         description="Edit one board card, moving and editing in the same call. Accepts a card "
         "id or the key of its task such as VP-236. Only provided fields change. A claim "
-        "written here also lands on the task. Pass expectedUpdatedAt to refuse a stale write. "
-        "Echoes a compact record unless view says otherwise.",
+        "written here also lands on the task. suggestedPrTitle and suggestedPrBody edit the "
+        "pull request the card suggests for Open PR; an empty string clears one. Pass "
+        "expectedUpdatedAt to refuse a stale write. Echoes a compact record unless view says "
+        "otherwise.",
         annotations=IDEMPOTENT,
     )
     def update_board_card(
@@ -729,6 +733,8 @@ def create_mcp_server(
         repositoryLocalPath: str | None = None,  # noqa: N803
         repositoryRemoteUrl: str | None = None,  # noqa: N803
         assignee: Assignee = None,
+        suggestedPrTitle: str | None = None,  # noqa: N803
+        suggestedPrBody: str | None = None,  # noqa: N803
         expectedUpdatedAt: ExpectedUpdatedAt = None,  # noqa: N803
         view: ViewArg = None,
     ) -> dict[str, Any]:
@@ -736,6 +742,8 @@ def create_mcp_server(
             "column": column,
             "details": details,
             "assignee": assignee,
+            "suggested_pr_title": suggestedPrTitle,
+            "suggested_pr_body": suggestedPrBody,
             "expected_updated_at": expectedUpdatedAt,
             **{
                 key: value
@@ -831,8 +839,16 @@ def create_mcp_server(
     @mcp.tool(
         title="Hand Over Task",
         description="Move a task you claimed to Review with the branch that holds the work, "
+<<<<<<< HEAD
         "ending the claim. A note is recorded in the task history. headSha is the commit the "
         "branch ends at: reviews and approvals are bound to it.",
+=======
+        "ending the claim. A note is recorded in the task history. Pass prTitle and prBody to "
+        "suggest the pull request for the work; Open PR starts from them. Describe the change, "
+        "not the task: what changed and why, notable decisions, how it was tested, in a few "
+        "short markdown lines, without repeating the spec or a log of the run. A later "
+        "hand-over with either field replaces the suggestion; without them it is kept.",
+>>>>>>> b2dabf5 (Store the pull request an agent suggests at hand-over and prefill Open PR from it)
     )
     def hand_over_task(
         id: CardId,
@@ -842,7 +858,21 @@ def create_mcp_server(
         ] = None,
         note: str | None = None,
         expectedUpdatedAt: ExpectedUpdatedAt = None,  # noqa: N803
+<<<<<<< HEAD
         headSha: HeadSha = None,  # noqa: N803
+=======
+        prTitle: Annotated[  # noqa: N803
+            str | None,
+            Field(description="Suggested pull request title: short, imperative, about the change."),
+        ] = None,
+        prBody: Annotated[  # noqa: N803
+            str | None,
+            Field(
+                description="Suggested pull request description in markdown: what changed and "
+                "why, notable decisions, how it was tested. Closes #n is added when opening."
+            ),
+        ] = None,
+>>>>>>> b2dabf5 (Store the pull request an agent suggests at hand-over and prefill Open PR from it)
         view: ViewArg = None,
     ) -> dict[str, Any]:
         return run(
@@ -856,7 +886,12 @@ def create_mcp_server(
                     branch_name=branchName,
                     note=note,
                     expected_updated_at=expectedUpdatedAt,
+<<<<<<< HEAD
                     head_sha=headSha,
+=======
+                    pr_title=prTitle,
+                    pr_body=prBody,
+>>>>>>> b2dabf5 (Store the pull request an agent suggests at hand-over and prefill Open PR from it)
                 ),
                 view,
             )
