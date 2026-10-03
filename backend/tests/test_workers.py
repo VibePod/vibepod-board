@@ -656,3 +656,55 @@ def test_registration_uses_the_configured_offline_window(session: Session, vp) -
     with pytest.raises(Conflict, match="is connected"):
         register(session, timing=workers.WorkerTiming(offline_seconds=120))
     assert register(session, timing=workers.WorkerTiming(offline_seconds=60)).item.id != old.id
+
+
+def test_a_new_heartbeat_makes_an_offline_name_live_again(session: Session, vp) -> None:
+    from vibepod_board.tables import WorkerRow
+
+    old = register(session).item
+    row = session.get(WorkerRow, old.id)
+    row.last_seen_at = now() - timedelta(seconds=61)
+    session.commit()
+    assert workers.get_worker(session, ADMIN, old.id).status == WorkerState.OFFLINE
+
+    workers.heartbeat(session, ADMIN, old.id, WorkerStatus.IDLE)
+
+    with pytest.raises(Conflict, match="is connected"):
+        register(session)
+    assert workers.get_worker(session, ADMIN, old.id).status == WorkerState.IDLE
+
+
+def test_rest_replaces_an_offline_name_without_the_replace_flag(
+    api: TestClient, session: Session
+) -> None:
+    body = {"projectId": "VP", "name": NAME}
+    old = api.post("/api/workers", json=body).json()["item"]
+    session.execute(
+        text("update workers set last_seen_at = :at where id = :id"),
+        {"at": now() - timedelta(seconds=61), "id": old["id"]},
+    )
+    session.commit()
+
+    new = api.post("/api/workers", json=body)
+
+    assert new.status_code == 201
+    assert new.json()["item"]["id"] != old["id"]
+    assert api.get(f"/api/workers/{old['id']}").json()["item"]["stoppedAt"] is not None
+
+
+async def test_mcp_replaces_an_offline_name_without_the_replace_flag(
+    server_url: str, session: Session, vp
+) -> None:
+    token = tokens.create_token(session, "Runner", [vp.id]).token
+    args = {"projectId": "VP", "name": NAME}
+    old = await call(server_url, token, "register_worker", **args)
+    session.execute(
+        text("update workers set last_seen_at = :at where id = :id"),
+        {"at": now() - timedelta(seconds=61), "id": old["item"]["id"]},
+    )
+    session.commit()
+
+    new = await call(server_url, token, "register_worker", **args)
+
+    assert new["item"]["id"] != old["item"]["id"]
+    assert workers.get_worker(session, ADMIN, old["item"]["id"]).stopped_at is not None
