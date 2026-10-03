@@ -45,3 +45,19 @@ export const githubRemoteToHttpsUrl = (
   const repoPath = normalizeGitHubPath(parsed.pathname);
   return repoPath ? `https://github.com/${repoPath}` : undefined;
 };
+
+export type GitHubRepositoryLink = {
+  url: string;
+  /** `owner/repo`. */
+  name: string;
+};
+
+/** The GitHub repository a remote points at, or undefined for other remotes. */
+export const githubRepositoryLink = (
+  remoteUrl: string | undefined,
+): GitHubRepositoryLink | undefined => {
+  const url = remoteUrl ? githubRemoteToHttpsUrl(remoteUrl) : undefined;
+  return url
+    ? { url, name: url.slice("https://github.com/".length) }
+    : undefined;
+};
