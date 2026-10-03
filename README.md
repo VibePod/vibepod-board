@@ -56,7 +56,8 @@ GITHUB_REPOSITORY=owner/repo    # optional default; a task's GitHub remote URL w
 
 A card in **PR ready** can open its pull request on GitHub, or link one opened by hand. The PR's number, state (open/closed/merged) and other details are stored on the card and shown as a badge that opens the PR in a new tab.
 
-- **Open PR** in the task view (also `GET`/`POST /api/board/:id/pull-request`, MCP `open_pull_request`): a dialog prefilled from the task — its title as the PR title, the repository's default branch as the base (or, for stacked work, the branch of a dependency's open PR), a generated body with summary, acceptance criteria, `Closes #<n>` when the linked issue is in the same repository, review approvals and the latest run — plus a draft toggle. The PR is created with the card's branch as head; the branch must already be on GitHub (the board never pushes), and a PR that already exists for that branch is linked instead of failing.
+- **Open PR** in the task view (also `GET`/`POST /api/board/:id/pull-request`, MCP `open_pull_request`): a dialog prefilled from the card's suggested pull request — the title and description the agent wrote when it handed the task over — with the repository's default branch as the base (or, for stacked work, the branch of a dependency's open PR), plus a draft toggle. Without a suggestion the title is the task title and the body the task summary. `Closes #<n>` is appended when the linked issue is in the same repository and the body does not close it yet. The PR is created with the card's branch as head; the branch must already be on GitHub (the board never pushes), and a PR that already exists for that branch is linked instead of failing.
+- **Suggested pull request**: `hand_over_task` takes optional `prTitle` and `prBody` (markdown), stored on the card as `suggestedPrTitle`/`suggestedPrBody` with who suggested them and when. A later hand-over with either field replaces the suggestion, so it follows the head of the branch on rework. The task view shows it in a **Pull request** section with edit and preview, and `PATCH /api/board/:id` / `update_board_card` take `suggestedPrTitle` and `suggestedPrBody` (an empty string clears).
 - **Link PR** takes a `https://github.com/owner/repo/pull/123` URL for PRs opened by hand (also `POST /api/board/:id/pull-request/link`, MCP `link_pull_request`); an empty URL unlinks.
 - History records when a PR was opened or linked and by whom. Keeping the stored PR state in sync afterwards is a follow-up.
 
@@ -326,6 +327,7 @@ by *claiming* it. Claims are available over REST and MCP, limited to the caller'
   back in Planned and counts a failed attempt. Renewing does not change `updatedAt`.
 - **Hand over** with `POST /api/board/:id/handover` (`hand_over_task`): the card moves to
   **Review** with its `branchName`, the claim ends and the failed attempts are cleared.
+  `prTitle` and `prBody` suggest the pull request for the work (see Pull Requests).
 - **Release** with `POST /api/board/:id/release` (`release_task`) and a `note`, by `outcome`:
   `failed` (the default) returns the task to Planned and counts an attempt; `blocked` blocks
   it with the note as its reason; `released` returns it without counting anything.

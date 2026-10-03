@@ -4,6 +4,7 @@ import {
   Button,
   Group,
   Modal,
+  Paper,
   Select,
   Stack,
   Switch,
@@ -12,10 +13,13 @@ import {
   TextInput,
   Tooltip,
 } from "@mantine/core";
-import { GitPullRequest, Link, Link2 } from "lucide-react";
+import { GitPullRequest, Link, Link2, Pencil } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import type { BoardCard } from "../shared/types.js";
 import { api } from "./api.js";
+import { MarkdownText } from "./Markdown.js";
+import { MarkdownField, MarkdownPreview } from "./MarkdownField.js";
+import type { MarkdownFieldMode } from "./markdownField.js";
 
 /** Opens the linked pull request in a new tab; green while open, violet once merged. */
 export const PullRequestBadge = ({
@@ -381,5 +385,152 @@ export const PullRequestPanel = ({
         />
       )}
     </Group>
+  );
+};
+
+const formatSuggestedAt = (value: string) =>
+  new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
+
+/**
+ * The pull request title and description suggested for the card, usually by the
+ * agent at hand-over. Open PR starts from them; they can be edited here.
+ */
+export const SuggestedPullRequest = ({
+  card,
+  editable,
+  onChange,
+}: {
+  card: BoardCard;
+  editable: boolean;
+  onChange: () => Promise<void>;
+}) => {
+  const [isEditing, setIsEditing] = useState(false);
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [bodyMode, setBodyMode] = useState<MarkdownFieldMode>("edit");
+  const [error, setError] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const hasSuggestion = Boolean(card.suggestedPrTitle || card.suggestedPrBody);
+
+  const edit = () => {
+    setTitle(card.suggestedPrTitle ?? "");
+    setBody(card.suggestedPrBody ?? "");
+    setBodyMode("edit");
+    setError("");
+    setIsEditing(true);
+  };
+
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    setIsSaving(true);
+    setError("");
+    try {
+      await api<{ item: BoardCard }>(`/api/board/${card.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          suggestedPrTitle: title,
+          suggestedPrBody: body,
+          expectedUpdatedAt: card.updatedAt,
+        }),
+      });
+      await onChange();
+      setIsEditing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Request failed");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <Paper className="overview-section" withBorder radius="md" p="md">
+      <Group align="center" justify="space-between" mb="xs">
+        <Text size="xs" fw={700} tt="uppercase" c="dimmed">
+          Pull request
+        </Text>
+        {editable && !isEditing && (
+          <Button
+            type="button"
+            size="xs"
+            variant="subtle"
+            leftSection={<Pencil size={14} aria-hidden />}
+            onClick={edit}
+          >
+            {hasSuggestion ? "Edit" : "Add"}
+          </Button>
+        )}
+      </Group>
+      {isEditing ? (
+        <form onSubmit={(event) => void save(event)}>
+          <Stack gap="sm">
+            {error && (
+              <Alert color="red" variant="light">
+                {error}
+              </Alert>
+            )}
+            <TextInput
+              label="Title"
+              value={title}
+              onChange={(event) => setTitle(event.currentTarget.value)}
+              data-autofocus
+            />
+            <MarkdownField
+              label="Description"
+              mode={bodyMode}
+              onModeChange={setBodyMode}
+              preview={
+                <MarkdownPreview value={body} emptyText="No description." />
+              }
+            >
+              <Textarea
+                aria-label="Description"
+                value={body}
+                onChange={(event) => setBody(event.currentTarget.value)}
+                autosize
+                minRows={6}
+              />
+            </MarkdownField>
+            <Group justify="flex-end">
+              <Button
+                type="button"
+                variant="default"
+                disabled={isSaving}
+                onClick={() => setIsEditing(false)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" loading={isSaving}>
+                Save
+              </Button>
+            </Group>
+          </Stack>
+        </form>
+      ) : hasSuggestion ? (
+        <Stack gap="xs">
+          {card.suggestedPrTitle && (
+            <Text fw={600}>{card.suggestedPrTitle}</Text>
+          )}
+          {card.suggestedPrBody && (
+            <div className="overview-markdown">
+              <MarkdownText>{card.suggestedPrBody}</MarkdownText>
+            </div>
+          )}
+          {card.suggestedPrBy && card.suggestedPrAt && (
+            <Text size="xs" c="dimmed">
+              Suggested by {card.suggestedPrBy} on{" "}
+              {formatSuggestedAt(card.suggestedPrAt)}
+            </Text>
+          )}
+        </Stack>
+      ) : (
+        <Text c="dimmed" size="sm">
+          No suggested description yet. The agent suggests one when it hands the
+          task over; Open PR starts from it.
+        </Text>
+      )}
+    </Paper>
   );
 };
