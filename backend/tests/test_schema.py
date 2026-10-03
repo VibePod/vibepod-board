@@ -8,7 +8,7 @@ from sqlmodel import SQLModel
 
 from vibepod_board.db import migrate
 
-HEAD = "0013"
+HEAD = "0014"
 LEGACY_SCHEMA = (Path(__file__).parent / "legacy_schema.sql").read_text()
 # The first TS schema, before repository, readiness and dependency support.
 ORIGINAL_SCHEMA = LEGACY_SCHEMA.split("alter table board_cards add column", 1)[0]
@@ -298,3 +298,38 @@ def test_0012_keeps_existing_review_run_verdicts(empty_db: Engine) -> None:
             text("SELECT kind, verdict, feedback, verify_output FROM task_runs")
         ).one()
     assert tuple(result) == ("review", "approve", "Looks good", "Tests passed")
+
+
+def test_0014_leaves_existing_cards_without_a_suggested_pull_request(empty_db: Engine) -> None:
+    from alembic import command
+
+    from vibepod_board.db import alembic_config
+
+    config = alembic_config()
+    with empty_db.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "0013")
+        connection.execute(
+            text(
+                "insert into projects (id, key, title, created_at, updated_at) "
+                "values ('p1', 'APP', 'App', now(), now())"
+            )
+        )
+        connection.execute(
+            text(
+                "insert into board_cards (id, project_id, title, column_name, created_at, "
+                "updated_at) values ('c1', 'p1', 'Reviewed work', 'review', now(), now())"
+            )
+        )
+
+    migrate(empty_db)
+
+    with empty_db.connect() as connection:
+        rows = connection.execute(
+            text(
+                "select suggested_pr_title, suggested_pr_body, suggested_pr_by, "
+                "suggested_pr_at from board_cards"
+            )
+        ).all()
+    assert [tuple(row) for row in rows] == [(None, None, None, None)]
+    assert revision(empty_db) == HEAD

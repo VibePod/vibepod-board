@@ -215,6 +215,28 @@ describe("project bundle validation", () => {
     }
   });
 
+  it("accepts suggested pull request fields from version 5 only", () => {
+    for (const field of [
+      { suggestedPrTitle: "Add the thing" },
+      { suggestedPrBody: "Adds the thing." },
+      { suggestedPrBy: "agent" },
+      { suggestedPrAt: "2026-08-14T12:00:00.000Z" },
+    ]) {
+      const bundle = validBundle();
+      const suggested = (bundleVersion: 4 | 5) => ({
+        ...bundle,
+        bundleVersion,
+        boardCards: [{ ...bundle.boardCards[0], ...field }],
+      });
+      expect(() => parseProjectBundle(suggested(4))).toThrow(
+        "Suggested pull requests require bundleVersion 5",
+      );
+      expect(parseProjectBundle(suggested(5)).boardCards[0]).toMatchObject(
+        field,
+      );
+    }
+  });
+
   it("accepts archived board cards in version 3 bundles only", () => {
     const archived = (bundleVersion: 1 | 2 | 3, column: "done" | "review") => {
       const bundle = validBundle();

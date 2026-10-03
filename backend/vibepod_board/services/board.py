@@ -26,6 +26,7 @@ from vibepod_board.services.common import (
     new_id,
     normalize_optional_text,
     require_project,
+    suggest_pull_request,
     transactional,
 )
 from vibepod_board.services.dependencies import decorate_card, decorate_cards
@@ -306,6 +307,8 @@ def _apply_card_update(
     repository_local_path: str | None | object = UNSET,
     repository_remote_url: str | None | object = UNSET,
     assignee: str | None = None,
+    suggested_pr_title: str | None = None,
+    suggested_pr_body: str | None = None,
     expected_updated_at: Any = None,
 ) -> tuple[BoardCardRow, bool]:
     """One card write without its own transaction or activity row, so a batch can apply
@@ -320,7 +323,7 @@ def _apply_card_update(
     if column is not None:
         actor = actor_for(session, access)
         _apply_manual_move(session, card, BoardColumn(column), timestamp, actor)
-        # Moving a card on from Review is the reviewer's approval; its PR body lists them.
+        # Moving a card on from Review is the reviewer's approval; the task history keeps it.
         if card.column_name == BoardColumn.REVIEW and column == BoardColumn.PR_READY:
             if card.idea_id:
                 add_task_event(
@@ -340,6 +343,14 @@ def _apply_card_update(
         card.repository_local_path = normalize_optional_text(repository_local_path)
     if isinstance(repository_remote_url, str):
         card.repository_remote_url = normalize_optional_text(repository_remote_url)
+    if suggested_pr_title is not None or suggested_pr_body is not None:
+        suggest_pull_request(
+            card,
+            card.suggested_pr_title if suggested_pr_title is None else suggested_pr_title,
+            card.suggested_pr_body if suggested_pr_body is None else suggested_pr_body,
+            actor_for(session, access),
+            timestamp,
+        )
     if assignee is not None:
         holder = normalize_optional_text(assignee)
         end_claim_on_holder_change(session, card, holder, timestamp, actor_for(session, access))

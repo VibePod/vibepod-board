@@ -277,6 +277,73 @@ def test_hands_a_task_over_to_review_with_its_branch(session: Session, vp) -> No
     assert events[0].actor == RUNNER
 
 
+def test_a_hand_over_suggests_the_pull_request_and_a_later_one_replaces_it(
+    session: Session, vp
+) -> None:
+    task = planned(session, vp, "Implement")
+    claim(session)
+    handed = claims.hand_over_task(
+        session,
+        ADMIN,
+        "VP-1",
+        RUNNER,
+        branch_name="vp-1",
+        pr_title=" Add the widget ",
+        pr_body="Adds the widget.\n\nTested with pytest.\n",
+    )
+    assert (handed.suggested_pr_title, handed.suggested_pr_body) == (
+        "Add the widget",
+        "Adds the widget.\n\nTested with pytest.",
+    )
+    assert handed.suggested_pr_by == RUNNER
+    assert handed.suggested_pr_at == handed.updated_at
+
+    def rework(**fields: Any):
+        board.update_card(session, ADMIN, task.id, column=BoardColumn.PLANNED)
+        claim(session)
+        return claims.hand_over_task(session, ADMIN, "VP-1", RUNNER, **fields)
+
+    reworked = rework(pr_title="Add the widget, fixed", pr_body="Adds the widget, now fixed.")
+    assert (reworked.suggested_pr_title, reworked.suggested_pr_body) == (
+        "Add the widget, fixed",
+        "Adds the widget, now fixed.",
+    )
+    assert reworked.suggested_pr_at > handed.suggested_pr_at
+
+    # Without either field the suggestion is kept.
+    kept = rework()
+    assert kept.suggested_pr_title == "Add the widget, fixed"
+    assert kept.suggested_pr_at == reworked.suggested_pr_at
+
+    # Either field replaces the suggestion as a whole.
+    replaced = rework(pr_body="Only a body")
+    assert (replaced.suggested_pr_title, replaced.suggested_pr_body) == (None, "Only a body")
+
+
+def test_a_hand_over_without_a_pull_request_suggests_none(session: Session, vp) -> None:
+    planned(session, vp, "Implement")
+    claim(session)
+    handed = claims.hand_over_task(session, ADMIN, "VP-1", RUNNER, branch_name="vp-1")
+    assert handed.suggested_pr_title is None and handed.suggested_pr_body is None
+    assert handed.suggested_pr_by is None and handed.suggested_pr_at is None
+
+
+def test_the_suggested_pull_request_can_be_edited_on_the_card(session: Session, vp) -> None:
+    task = planned(session, vp, "Implement")
+    claim(session)
+    claims.hand_over_task(session, ADMIN, "VP-1", RUNNER, pr_title="Title", pr_body="Body")
+
+    edited = board.update_card(session, ADMIN, task.id, suggested_pr_body="Better body")
+    assert (edited.suggested_pr_title, edited.suggested_pr_body) == ("Title", "Better body")
+    assert edited.suggested_pr_by == "admin"
+
+    cleared = board.update_card(
+        session, ADMIN, task.id, suggested_pr_title="", suggested_pr_body=" "
+    )
+    assert (cleared.suggested_pr_title, cleared.suggested_pr_body) == (None, None)
+    assert cleared.suggested_pr_by is None and cleared.suggested_pr_at is None
+
+
 def test_only_the_holder_reports_back(session: Session, vp) -> None:
     planned(session, vp, "Held")
     planned(session, vp, "Free")
@@ -610,11 +677,25 @@ def test_rest_runs_the_claim_lifecycle(api: TestClient) -> None:
     assert refused.status_code == 409
 
     handed = api.post(
-        "/api/board/VP-1/handover", json={"assignee": RUNNER, "branchName": "vp-1", "note": "Done"}
+        "/api/board/VP-1/handover",
+        json={
+            "assignee": RUNNER,
+            "branchName": "vp-1",
+            "note": "Done",
+            "prTitle": "Add claims",
+            "prBody": "Adds claims.",
+        },
     )
     assert handed.status_code == 200
     assert handed.json()["item"]["column"] == "review"
     assert handed.json()["item"]["branchName"] == "vp-1"
+    assert handed.json()["item"]["suggestedPrTitle"] == "Add claims"
+    assert handed.json()["item"]["suggestedPrBody"] == "Adds claims."
+    assert handed.json()["item"]["suggestedPrBy"] == RUNNER
+
+    edited = api.patch("/api/board/VP-1", json={"suggestedPrTitle": "Add task claims"})
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["item"]["suggestedPrTitle"] == "Add task claims"
 
     events = api.get("/api/ideas/VP-1/history").json()["items"]
     assert [event["kind"] for event in events] == ["handed_over", "claimed"]
@@ -739,10 +820,33 @@ async def test_mcp_hands_over(server_url: str, token: str) -> None:
     with pytest.raises(ToolError, match="is not claimed by"):
         await call(server_url, token, "hand_over_task", id="VP-1", assignee=OTHER)
     handed = await call(
-        server_url, token, "hand_over_task", id="VP-1", assignee=RUNNER, branchName="vp-1"
+        server_url,
+        token,
+        "hand_over_task",
+        id="VP-1",
+        assignee=RUNNER,
+        branchName="vp-1",
+        prTitle="Add claims",
+        prBody="Adds claims.",
+        view="full",
     )
     assert handed["item"]["column"] == "review"
     assert handed["item"]["branchName"] == "vp-1"
+    assert (handed["item"]["suggestedPrTitle"], handed["item"]["suggestedPrBody"]) == (
+        "Add claims",
+        "Adds claims.",
+    )
+
+    edited = await call(
+        server_url,
+        token,
+        "update_board_card",
+        id="VP-1",
+        suggestedPrBody="Adds task claims.",
+        view="full",
+    )
+    assert edited["item"]["suggestedPrBody"] == "Adds task claims."
+    assert edited["item"]["suggestedPrTitle"] == "Add claims"
 
 
 # --- races and edges found in review -------------------------------------------------

@@ -178,6 +178,8 @@ def hand_over_task(
             note=body.note,
             expected_updated_at=body.expected_updated_at,
             head_sha=body.head_sha,
+            pr_title=body.pr_title,
+            pr_body=body.pr_body,
         )
     )
 

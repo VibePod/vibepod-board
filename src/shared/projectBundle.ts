@@ -82,6 +82,10 @@ const boardCardSchema = z
     githubPrDraft: z.boolean().optional(),
     githubPrBase: optionalTextSchema,
     githubPrSyncedAt: timestampSchema.optional(),
+    suggestedPrTitle: optionalTextSchema,
+    suggestedPrBody: optionalTextSchema,
+    suggestedPrBy: optionalTextSchema,
+    suggestedPrAt: timestampSchema.optional(),
     repositoryLocalPath: optionalTextSchema,
     repositoryRemoteUrl: optionalTextSchema,
     assignee: optionalTextSchema,
@@ -160,6 +164,14 @@ const pullRequestFields = [
   "githubPrSyncedAt",
 ] as const;
 
+/** Fields added by bundle version 5: the pull request a card suggests. */
+const suggestedPullRequestFields = [
+  "suggestedPrTitle",
+  "suggestedPrBody",
+  "suggestedPrBy",
+  "suggestedPrAt",
+] as const;
+
 /** Fields added by bundle version 2. */
 const githubSyncFields = [
   "githubRepository",
@@ -212,6 +224,16 @@ const validateRelationships = (bundle: ProjectBundle, ctx: z.RefinementCtx) => {
         ctx,
         ["boardCards", index, "githubPrUrl"],
         "Linked pull requests require bundleVersion 4",
+      );
+    }
+    if (
+      bundle.bundleVersion < 5 &&
+      suggestedPullRequestFields.some((field) => card[field] !== undefined)
+    ) {
+      addIssue(
+        ctx,
+        ["boardCards", index, "suggestedPrTitle"],
+        "Suggested pull requests require bundleVersion 5",
       );
     }
     if (card.archivedAt === undefined) {
@@ -332,6 +354,7 @@ export const projectBundleSchema = z
       z.literal(2),
       z.literal(3),
       z.literal(4),
+      z.literal(5),
     ]),
     exportedAt: timestampSchema,
     project: projectSchema,

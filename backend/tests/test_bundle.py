@@ -205,6 +205,25 @@ def test_rejects_any_pull_request_field_before_version_4(field: str) -> None:
         parse_project_bundle(bundle)
 
 
+@pytest.mark.parametrize(
+    "field", ["suggestedPrTitle", "suggestedPrBody", "suggestedPrBy", "suggestedPrAt"]
+)
+def test_rejects_any_suggested_pull_request_field_before_version_5(field: str) -> None:
+    values = {
+        "suggestedPrTitle": "Add the thing",
+        "suggestedPrBody": "Adds the thing.",
+        "suggestedPrBy": "agent",
+        "suggestedPrAt": STAMP,
+    }
+    bundle = valid_bundle()
+    bundle["bundleVersion"] = 4
+    bundle["boardCards"][0][field] = values[field]
+    with pytest.raises(ValidationError, match="Suggested pull requests require bundleVersion 5"):
+        parse_project_bundle(bundle)
+    bundle["bundleVersion"] = 5
+    assert parse_project_bundle(bundle).board_cards[0].model_dump(by_alias=True)[field] is not None
+
+
 def test_rejects_archived_cards_outside_the_done_column() -> None:
     bundle = valid_bundle()
     bundle["bundleVersion"] = 3
