@@ -4153,7 +4153,7 @@ const hasPullRequest = (card: BoardCard): boolean =>
 
 /**
  * The one GitHub link a board card shows: the linked PR while the card is in PR ready,
- * otherwise the linked issue, then a linked PR, then the repository.
+ * otherwise the linked issue, then the card's own repository.
  * Cards show neither the local path nor a non-GitHub remote; the task view has both.
  */
 const boardCardGitHubLink = (
