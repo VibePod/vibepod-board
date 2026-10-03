@@ -299,3 +299,37 @@ def test_0012_leaves_existing_cards_without_a_suggested_pull_request(empty_db: E
         ).all()
     assert [tuple(row) for row in rows] == [(None, None, None, None)]
     assert revision(empty_db) == HEAD
+
+
+def test_0013_keeps_existing_review_run_verdicts(empty_db: Engine) -> None:
+    from alembic import command
+
+    from vibepod_board.db import alembic_config
+
+    config = alembic_config()
+    with empty_db.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "0012")
+        connection.execute(
+            text("""
+            INSERT INTO projects (id, key, title, created_at, updated_at)
+            VALUES ('p', 'VP', 'VibePod', now(), now());
+            INSERT INTO ideas (id, project_id, task_number, title, status, created_at, updated_at)
+            VALUES ('t', 'p', 1, 'Task', 'ready', now(), now());
+            INSERT INTO workers (id, project_id, name, mode, started_at, last_seen_at)
+            VALUES ('w', 'p', 'Reviewer', 'review', now(), now());
+            INSERT INTO task_reviews (id, idea_id, project_id, reviewer, worker_id,
+                verdict, feedback, lease_expires_at, ended_at, created_at, updated_at)
+            VALUES ('review', 't', 'p', 'Reviewer', 'w', 'approve', 'Looks good', now(),
+                now(), now(), now());
+            INSERT INTO task_runs (id, idea_id, worker_id, outcome, verify_output,
+                started_at, created_at)
+            VALUES ('run', 't', 'w', 'done', 'Tests passed', now(), now());
+        """)
+        )
+    migrate(empty_db)
+    with empty_db.connect() as connection:
+        result = connection.execute(
+            text("SELECT kind, verdict, feedback, verify_output FROM task_runs")
+        ).one()
+    assert tuple(result) == ("review", "approve", "Looks good", "Tests passed")
