@@ -8,7 +8,6 @@ import {
   Button,
   Card,
   Checkbox,
-  Code,
   createTheme,
   Divider,
   FileInput,
@@ -116,7 +115,11 @@ import { failedAttemptsLabel, formatClaimedSince } from "./automationUtils.js";
 import { AnswerDialog, ReworkDialog } from "./ConversationDialogs.js";
 import { CopyableCode } from "./CopyableCode.js";
 import { DeleteTaskDialog, type DeleteTaskTarget } from "./DeleteTaskDialog.js";
-import { GitHubIssueBadge, GitHubSyncPanel } from "./GitHubIssue.js";
+import {
+  GitHubIssueBadge,
+  GitHubRepositoryBadge,
+  GitHubSyncPanel,
+} from "./GitHubIssue.js";
 import { type GitHubStatus, issueLinkForIdea } from "./githubIssue.js";
 import {
   navigationForProjectSelection,
@@ -146,7 +149,7 @@ import {
   projectBundlePreview,
   projectExportFileName,
 } from "./projectTransfer.js";
-import { githubRemoteToHttpsUrl } from "./repositoryUtils.js";
+import { githubRepositoryLink } from "./repositoryUtils.js";
 import { Sidebar } from "./Sidebar.js";
 import { TaskGraph } from "./TaskGraph.js";
 import { TaskHistory } from "./TaskHistory.js";
@@ -862,6 +865,16 @@ const App = () => {
         ...state.archivedCards,
       ].find((card) => card.id === taskViewModal.card.id) ?? taskViewModal.card)
     : null;
+  // Board cards only link to GitHub; the task view is where the path and remote show.
+  // A card keeps its own repository fields (they can be set, or cleared, on the card
+  // alone), so they win; the task's apply to a task that has no card.
+  const taskViewRepositoryPath = taskViewCard
+    ? taskViewCard.repositoryLocalPath
+    : taskViewIdea?.repositoryLocalPath;
+  const taskViewRepositoryRemote = taskViewCard
+    ? taskViewCard.repositoryRemoteUrl
+    : taskViewIdea?.repositoryRemoteUrl;
+  const taskViewRepositoryLink = githubRepositoryLink(taskViewRepositoryRemote);
   // An archived task opens read-only; Unarchive is the way back to the board.
   const isTaskViewArchived = Boolean(taskViewCard?.archivedAt);
   const ideaById = new Map(state.ideas.map((idea) => [idea.id, idea]));
@@ -2455,9 +2468,6 @@ const App = () => {
                             linkedIdea.taskNumber,
                           )
                         : null;
-                      const repositoryUrl = card.repositoryRemoteUrl
-                        ? githubRemoteToHttpsUrl(card.repositoryRemoteUrl)
-                        : undefined;
                       return (
                         <Card
                           className="compact-card"
@@ -2501,13 +2511,12 @@ const App = () => {
                                   }
                                 />
                               )}
-                            {card.ideaId &&
-                              ideaById.has(card.ideaId) &&
-                              githubIssueBadge(
-                                ideaById.get(card.ideaId) as Idea,
-                                "xs",
-                              )}
-                            {pullRequestBadge(card, "xs")}
+                            {boardCardGitHubLink(
+                              card,
+                              card.ideaId
+                                ? ideaById.get(card.ideaId)
+                                : undefined,
+                            )}
                             {card.blockedBy.length > 0 && (
                               <Group
                                 className="board-card-blocked"
@@ -2731,38 +2740,6 @@ const App = () => {
                                   {card.branchName}
                                 </Badge>
                               </Group>
-                            )}
-                            {(card.repositoryLocalPath ||
-                              card.repositoryRemoteUrl) && (
-                              <Stack className="board-card-repository" gap={4}>
-                                {card.repositoryLocalPath && (
-                                  <Code className="board-card-repository-path">
-                                    {card.repositoryLocalPath}
-                                  </Code>
-                                )}
-                                {card.repositoryRemoteUrl &&
-                                  (repositoryUrl ? (
-                                    <Anchor
-                                      className="board-card-repository-link"
-                                      href={repositoryUrl}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      onClick={(event) =>
-                                        event.stopPropagation()
-                                      }
-                                    >
-                                      <ExternalLink size={12} />
-                                      GitHub
-                                    </Anchor>
-                                  ) : (
-                                    <Text
-                                      className="board-card-repository-remote"
-                                      size="xs"
-                                    >
-                                      {card.repositoryRemoteUrl}
-                                    </Text>
-                                  ))}
-                              </Stack>
                             )}
                             {(cardTaskId ||
                               column === "done" ||
@@ -3215,6 +3192,40 @@ const App = () => {
                 <Text c="dimmed">No acceptance criteria yet.</Text>
               )}
             </Paper>
+
+            {(taskViewRepositoryPath || taskViewRepositoryRemote) && (
+              <Paper
+                className="overview-section overview-repository"
+                withBorder
+                radius="md"
+                p="md"
+              >
+                <Text size="xs" fw={700} tt="uppercase" c="dimmed" mb="xs">
+                  Repository
+                </Text>
+                <Stack gap="xs">
+                  {taskViewRepositoryPath && (
+                    <CopyableCode
+                      value={taskViewRepositoryPath}
+                      label="local path"
+                      variant="inline"
+                    />
+                  )}
+                  {taskViewRepositoryRemote && (
+                    <Group gap="xs" wrap="wrap">
+                      <CopyableCode
+                        value={taskViewRepositoryRemote}
+                        label="remote URL"
+                        variant="inline"
+                      />
+                      {taskViewRepositoryLink && (
+                        <GitHubRepositoryBadge link={taskViewRepositoryLink} />
+                      )}
+                    </Group>
+                  )}
+                </Stack>
+              </Paper>
+            )}
 
             {(taskViewBlockedBy.length > 0 || taskViewBlocks.length > 0) && (
               <Paper className="overview-section" withBorder radius="md" p="md">
@@ -4134,6 +4145,35 @@ const pullRequestBadge = (
   card: BoardCard,
   size: "xs" | "sm" = "sm",
 ): ReactNode => <PullRequestBadge card={card} size={size} />;
+
+const hasPullRequest = (card: BoardCard): boolean =>
+  Boolean(card.githubPrUrl) &&
+  card.githubPrNumber !== undefined &&
+  card.githubPrNumber !== null;
+
+/**
+ * The one GitHub link a board card shows: the linked PR while the card is in PR ready,
+ * otherwise the linked issue, then the card's own repository.
+ * Cards show neither the local path nor a non-GitHub remote; the task view has both.
+ */
+const boardCardGitHubLink = (
+  card: BoardCard,
+  idea: Idea | undefined,
+): ReactNode => {
+  if (card.column === "pr_ready" && hasPullRequest(card)) {
+    return pullRequestBadge(card, "xs");
+  }
+  const issue = idea ? issueLinkForIdea(idea) : null;
+  if (issue) {
+    return <GitHubIssueBadge link={issue} size="xs" />;
+  }
+  // Outside PR ready a linked PR is history, such as after a rework; the card's own
+  // remote decides, and a remote cleared on the card shows no link.
+  const repository = githubRepositoryLink(card.repositoryRemoteUrl);
+  return repository ? (
+    <GitHubRepositoryBadge link={repository} size="xs" />
+  ) : null;
+};
 
 const blockedBadge = (blockedByCount: number): ReactNode => (
   <Badge

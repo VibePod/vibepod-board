@@ -382,4 +382,66 @@ describe("board search", () => {
     expect(ids("#85")).toEqual(["linked"]);
     expect(ids("unrelated")).toEqual([]);
   });
+
+  it("matches the card's repository path and remote, which cards no longer show", () => {
+    const ideas = new Map([
+      [
+        "idea-85",
+        task({
+          id: "idea-85",
+          taskNumber: 85,
+          title: "Linked task",
+          repositoryLocalPath: "/root/DEV/old-board",
+          repositoryRemoteUrl: "git@github.com:vibepod/old-board.git",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        }),
+      ],
+      [
+        "idea-86",
+        task({
+          id: "idea-86",
+          taskNumber: 86,
+          title: "Cleared task",
+          repositoryRemoteUrl: "https://github.com/vibepod/cleared.git",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        }),
+      ],
+    ]);
+    const columns: BoardColumns = {
+      ready: [
+        card({
+          id: "linked",
+          ideaId: "idea-85",
+          title: "Linked task",
+          repositoryLocalPath: "/root/DEV/vibepod-board",
+          repositoryRemoteUrl: "git@github.com:vibepod/vibepod-board.git",
+        }),
+        card({ id: "cleared", ideaId: "idea-86", title: "Cleared task" }),
+      ],
+      planned: [
+        card({
+          id: "loose",
+          title: "Loose card",
+          repositoryLocalPath: "/srv/cli",
+          repositoryRemoteUrl: "https://gitlab.com/vibepod/cli.git",
+        }),
+      ],
+      in_progress: [],
+      review: [],
+      pr_ready: [],
+      done: [],
+    };
+    const ids = (search: string) =>
+      Object.values(filterColumnsBySearch(columns, search, "VP", ideas))
+        .flat()
+        .map((item) => item.id);
+
+    expect(ids("DEV/vibepod-board")).toEqual(["linked"]);
+    expect(ids("github.com:vibepod")).toEqual(["linked"]);
+    expect(ids("/srv/cli")).toEqual(["loose"]);
+    expect(ids("gitlab")).toEqual(["loose"]);
+    // The task's repository no longer applies once the card has replaced or cleared it.
+    expect(ids("old-board")).toEqual([]);
+    expect(ids("vibepod/cleared")).toEqual([]);
+  });
 });
