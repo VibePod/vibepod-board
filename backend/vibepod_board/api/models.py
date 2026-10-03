@@ -288,6 +288,9 @@ class RunCommitInput(ApiModel):
 
 
 class RunReportRequest(ApiModel):
+    kind: ClaimMode | None = None
+    verdict: ReviewVerdict | None = None
+    feedback: StrictStr | None = None
     outcome: RunOutcome
     # The agent's own summary of the run.
     summary: StrictStr = ""
@@ -337,3 +340,8 @@ class RenewReviewRequest(ApiModel):
 
 class CancelReviewRequest(ApiModel):
     reason: StrictStr | None = None
+
+
+class ApproveRequest(ApiModel):
+    note: StrictStr | None = None
+    expected_updated_at: RequiredText | None = None

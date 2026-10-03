@@ -10,7 +10,7 @@ from sqlalchemy import tuple_
 from sqlmodel import Session, col, func, select
 
 from vibepod_board.access import AccessContext, assert_can_access_project
-from vibepod_board.enums import RunOutcome
+from vibepod_board.enums import ClaimMode, ReviewVerdict, RunOutcome
 from vibepod_board.errors import BadRequest
 from vibepod_board.schemas import TaskRun, now
 from vibepod_board.services.common import (
@@ -23,7 +23,7 @@ from vibepod_board.services.common import (
 from vibepod_board.services.listing import Page
 from vibepod_board.services.references import require_idea_ref, task_keys
 from vibepod_board.services.workers import require_worker
-from vibepod_board.tables import IdeaRow, TaskRunRow
+from vibepod_board.tables import IdeaRow, TaskReviewRow, TaskRunRow
 
 VERIFY_OUTPUT_HEAD = 2_000
 VERIFY_OUTPUT_TAIL = 14_000
@@ -83,6 +83,9 @@ def add_run_report(
     worker_id: str | None = None,
     worker_name: str | None = None,
     agent: str | None = None,
+    kind: ClaimMode | None = None,
+    verdict: ReviewVerdict | None = None,
+    feedback: str | None = None,
 ) -> TaskRun:
     idea = require_idea_ref(session, access, reference)
     assert_can_access_project(access, idea.project_id)
@@ -98,6 +101,26 @@ def add_run_report(
         # The registered worker names the report, whatever name the caller sent along.
         worker_name = worker.name
         agent = agent or worker.agent or None
+        kind = kind or ClaimMode(worker.mode)
+        if kind == ClaimMode.REVIEW and verdict is None:
+            # The runner submits its review before reporting the run. Capture the verdict
+            # by value so pruning workers cannot change historical reports.
+            query = select(TaskReviewRow).where(
+                TaskReviewRow.idea_id == idea.id, TaskReviewRow.worker_id == worker.id
+            )
+            lower_bound = started_at
+            if lower_bound is None:
+                lower_bound = session.exec(
+                    select(func.max(TaskRunRow.created_at)).where(
+                        TaskRunRow.idea_id == idea.id, TaskRunRow.worker_id == worker.id
+                    )
+                ).one()
+            if lower_bound is not None:
+                query = query.where(TaskReviewRow.updated_at >= lower_bound)
+            review = session.exec(query.order_by(col(TaskReviewRow.updated_at).desc())).first()
+            if review is not None:
+                verdict = review.verdict
+                feedback = feedback if feedback is not None else review.feedback
     output, truncated = (
         truncate_middle(verify_output, VERIFY_OUTPUT_HEAD, VERIFY_OUTPUT_TAIL)
         if verify_output
@@ -119,6 +142,9 @@ def add_run_report(
         worker_id=resolved_worker_id,
         worker_name=normalize_optional_text(worker_name),
         agent=normalize_optional_text(agent),
+        kind=kind or ClaimMode.IMPLEMENT,
+        verdict=verdict,
+        feedback=truncate_end((feedback or "").strip(), SUMMARY_LIMIT) or None,
         outcome=outcome,
         summary=truncate_end((summary or "").strip(), SUMMARY_LIMIT),
         commits=_commits(commits),

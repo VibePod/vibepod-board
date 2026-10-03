@@ -15,7 +15,7 @@ from datetime import datetime
 from sqlmodel import Session
 
 from vibepod_board.access import AccessContext, assert_can_access_project
-from vibepod_board.enums import BoardColumn, TaskEventKind
+from vibepod_board.enums import BoardColumn, IdeaStatus, ReviewVerdict, TaskEventKind
 from vibepod_board.errors import BadRequest, Conflict
 from vibepod_board.schemas import BoardCard, now
 from vibepod_board.services.common import (
@@ -23,14 +23,20 @@ from vibepod_board.services.common import (
     assert_unchanged,
     card_from_row,
     lock,
+    new_id,
     require_project,
     transactional,
 )
 from vibepod_board.services.dependencies import decorate_card
 from vibepod_board.services.history import actor_for, add_task_event
-from vibepod_board.services.open_reviews import end_open_reviews, promote_if_approved
+from vibepod_board.services.open_reviews import (
+    approvers,
+    end_open_reviews,
+    move_to_pr_ready,
+    promote_if_approved,
+)
 from vibepod_board.services.references import require_card_ref, task_keys
-from vibepod_board.tables import BoardCardRow, IdeaRow
+from vibepod_board.tables import BoardCardRow, IdeaRow, TaskReviewRow
 
 
 def _locked_card(
@@ -117,6 +123,16 @@ def request_rework(
     timestamp = now()
     actor = actor_for(session, access)
     end_open_reviews(session, idea.id, timestamp, f"{actor} requested rework", actor)
+    record_manual_review(session, idea, card, actor, ReviewVerdict.REWORK, feedback, timestamp)
+    card.review_rounds += 1
+    add_task_event(
+        session,
+        idea.id,
+        TaskEventKind.REWORK_REQUESTED,
+        f"Rework requested by {actor} (round {card.review_rounds})",
+        actor,
+        timestamp,
+    )
     apply_rework(session, idea, card, feedback, actor, timestamp)
     add_activity(session, "task.rework", f"{actor} sent {key} back for rework", timestamp)
     session.flush()
@@ -135,3 +151,70 @@ def apply_rework(
     a reviewer's rework verdict takes the same path as feedback from the board."""
     add_task_event(session, idea.id, TaskEventKind.FEEDBACK, feedback, actor, timestamp)
     _replan(card, idea, timestamp)
+
+
+def record_manual_review(
+    session: Session,
+    idea: IdeaRow,
+    card: BoardCardRow,
+    actor: str,
+    verdict: ReviewVerdict,
+    note: str | None,
+    timestamp: datetime,
+) -> None:
+    """Record a person's verdict at the locked card's current head."""
+    session.add(
+        TaskReviewRow(
+            id=new_id(),
+            idea_id=idea.id,
+            project_id=idea.project_id,
+            reviewer=actor,
+            head_sha=card.head_sha,
+            verdict=verdict,
+            feedback=note or None,
+            lease_expires_at=timestamp,
+            ended_at=timestamp,
+            created_at=timestamp,
+            updated_at=timestamp,
+        )
+    )
+    session.flush()
+
+
+@transactional
+def approve_review(
+    session: Session,
+    access: AccessContext,
+    reference: str,
+    note: str | None = None,
+    expected_updated_at: str | datetime | None = None,
+) -> BoardCard:
+    idea, card = _locked_card(session, access, reference)
+    assert_unchanged("Board card", expected_updated_at, card.updated_at)
+    if card.column_name != BoardColumn.REVIEW or idea.status == IdeaStatus.DENIED:
+        raise Conflict("Only tasks in Review can be approved")
+    if card.blocked_at is not None:
+        raise Conflict("Answer or unblock the task before approving")
+    actor = actor_for(session, access)
+    timestamp = now()
+    record_manual_review(
+        session, idea, card, actor, ReviewVerdict.APPROVE, (note or "").strip(), timestamp
+    )
+    project = require_project(session, idea.project_id)
+    approvals = len(approvers(session, card))
+    count = f"{approvals} of {project.required_approvals}"
+    add_task_event(
+        session,
+        idea.id,
+        TaskEventKind.APPROVED,
+        f"Approved by {actor} ({count})" + (f": {note.strip()}" if note and note.strip() else ""),
+        actor,
+        timestamp,
+    )
+    card.updated_at = timestamp
+    idea.updated_at = timestamp
+    if approvals >= project.required_approvals:
+        key = task_keys(session, [idea.id]).get(idea.id, idea.id)
+        move_to_pr_ready(session, idea, card, key, count, timestamp, actor)
+    session.flush()
+    return decorate_card(session, card_from_row(card))
