@@ -147,7 +147,9 @@ def test_a_pending_stop_survives_a_restart_under_the_same_name(session: Session,
     worker, task = working(session, vp)
     workers.stop_worker(session, ADMIN, worker.id)
 
-    restarted = workers.register_worker(session, ADMIN, "VP", NAME, "claude", "laptop").item
+    restarted = workers.register_worker(
+        session, ADMIN, "VP", NAME, "claude", "laptop", replace=True
+    ).item
     reply = workers.heartbeat(session, ADMIN, restarted.id, WorkerStatus.WORKING, task=task.id)
 
     assert instruction_types(reply) == ["stop"]
@@ -156,7 +158,9 @@ def test_a_pending_stop_survives_a_restart_under_the_same_name(session: Session,
 def test_a_restart_without_a_pending_stop_gets_none(session: Session, vp) -> None:
     worker, task = working(session, vp)
 
-    restarted = workers.register_worker(session, ADMIN, "VP", NAME, "claude", "laptop").item
+    restarted = workers.register_worker(
+        session, ADMIN, "VP", NAME, "claude", "laptop", replace=True
+    ).item
     reply = workers.heartbeat(session, ADMIN, restarted.id, WorkerStatus.WORKING, task=task.id)
 
     assert reply.instructions == []

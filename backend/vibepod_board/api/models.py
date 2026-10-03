@@ -273,6 +273,7 @@ class WorkerRegistration(ApiModel):
     mode: ClaimMode = ClaimMode.IMPLEMENT
     # A short id of the running worker process, such as its container id.
     instance: StrictStr | None = None
+    replace: StrictBool = False
 
 
 class HeartbeatRequest(ApiModel):

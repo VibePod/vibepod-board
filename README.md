@@ -354,8 +354,10 @@ automating what:
   `name`, its `agent`, its `machine` and optionally its `instance`, a short id of the running
   worker process such as its container id. The worker appears in the board at once. Its name
   is the holder of the claims it takes: claim with `assignee` set to it. Registering a name
-  again replaces and removes the earlier registration, so a restarted worker picks its claims
-  back up and the list does not fill with its old registrations.
+  that is already connected to the project returns a conflict with the machine and start
+  time. Stop it or use another name. An offline registration, or one explicitly replaced with
+  `replace: true`, is replaced and removed, so a restarted worker picks its claims back up and
+  the list does not fill with its old registrations.
 - **Heartbeat** every `heartbeatSeconds` with `POST /api/workers/:id/heartbeat`
   (`worker_heartbeat`): `status` is `idle`, `working` (naming its `task` and `step`:
   `preparing_workspace`, `agent_running`, `verifying` or `handing_over`, and optionally the
