@@ -1112,6 +1112,9 @@ def create_mcp_server(
         workerId: str | None = None,  # noqa: N803
         workerName: str | None = None,  # noqa: N803
         agent: str | None = None,
+        kind: ClaimMode | None = None,
+        verdict: ReviewVerdict | None = None,
+        feedback: str | None = None,
     ) -> dict[str, Any]:
         return run(
             lambda s, a: {
@@ -1133,6 +1136,9 @@ def create_mcp_server(
                     worker_id=workerId,
                     worker_name=workerName,
                     agent=agent,
+                    kind=kind,
+                    verdict=verdict,
+                    feedback=feedback,
                 )
             }
         )

@@ -292,6 +292,9 @@ class TaskRunRow(SQLModel, table=True):
     # Kept by value: workers are pruned, their reports are not.
     worker_name: str | None = _text()
     agent: str | None = _text()
+    kind: str = _text("implement")
+    verdict: str | None = _text()
+    feedback: str | None = _text()
     outcome: str = Field(sa_column=Column(Text, nullable=False))
     summary: str = _text("")
     # [{"sha": ..., "subject": ...}] for the commits the run made.

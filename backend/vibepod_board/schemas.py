@@ -454,6 +454,9 @@ class TaskRun(ApiModel):
     worker_id: str | None = None
     worker_name: str | None = None
     agent: str | None = None
+    kind: ClaimMode = ClaimMode.IMPLEMENT
+    verdict: ReviewVerdict | None = None
+    feedback: str | None = None
     outcome: RunOutcome
     summary: str
     commits: list[RunCommit]
