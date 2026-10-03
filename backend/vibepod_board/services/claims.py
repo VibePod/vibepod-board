@@ -14,8 +14,11 @@ and claims skip it until someone puts it in Planned again (see `board._apply_man
 Claims in one project are serialised on the project row, so two runners claiming at the same
 time never get the same task: the second waits for the first to commit and then sees its card
 in progress.
+
+A claim in review mode takes a task in Review for a review worker instead; see `reviews.py`.
 """
 
+import re
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any
@@ -23,7 +26,13 @@ from typing import Any
 from sqlmodel import Session, col, select
 
 from vibepod_board.access import AccessContext, assert_can_access_project
-from vibepod_board.enums import BoardColumn, IdeaStatus, ReleaseOutcome, TaskEventKind
+from vibepod_board.enums import (
+    BoardColumn,
+    ClaimMode,
+    IdeaStatus,
+    ReleaseOutcome,
+    TaskEventKind,
+)
 from vibepod_board.errors import BadRequest, Conflict, NotFound
 from vibepod_board.schemas import BoardCard, Claim, ClaimResult, now
 from vibepod_board.services.common import (
@@ -38,6 +47,7 @@ from vibepod_board.services.common import (
 from vibepod_board.services.dependencies import decorate_card, decorate_idea
 from vibepod_board.services.history import actor_for, add_task_event
 from vibepod_board.services.ideas import work_order
+from vibepod_board.services.open_reviews import end_review, open_reviews
 from vibepod_board.services.references import (
     require_card_ref,
     require_idea_ref,
@@ -45,13 +55,24 @@ from vibepod_board.services.references import (
     task_keys,
 )
 from vibepod_board.services.views import View, project_cards, project_ideas
-from vibepod_board.tables import BoardCardRow, IdeaRow, ProjectRow
+from vibepod_board.tables import BoardCardRow, IdeaRow, ProjectRow, TaskReviewRow
 
 DEFAULT_LEASE_SECONDS = 15 * 60
 DEFAULT_MAX_ATTEMPTS = 3
 MIN_LEASE_SECONDS = 30
 MAX_LEASE_SECONDS = 24 * 60 * 60
 NOTHING_TO_CLAIM = "No planned task can be claimed"
+SHA_PATTERN = re.compile(r"^[0-9a-f]{4,64}$")
+
+
+def normalize_sha(head_sha: str | None) -> str | None:
+    """A commit SHA in lower case, or None when none is given."""
+    sha = (head_sha or "").strip().lower()
+    if not sha:
+        return None
+    if not SHA_PATTERN.match(sha):
+        raise BadRequest("headSha must be a hexadecimal commit SHA")
+    return sha
 
 
 def lease_for(lease_seconds: int | None, default_seconds: int = DEFAULT_LEASE_SECONDS) -> timedelta:
@@ -211,11 +232,13 @@ def claim_task(
     lease_seconds: int | None = None,
     default_lease_seconds: int = DEFAULT_LEASE_SECONDS,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    mode: ClaimMode = ClaimMode.IMPLEMENT,
 ) -> ClaimResult:
     """Claims the next planned task of a project in the board's work order, or the named
     task. Asking again for a task the caller already holds renews the claim, so a runner
     that restarts under the same name picks its work back up. `exclude` names tasks the next
-    claim passes over, such as a run the runner just saw cancelled from the board."""
+    claim passes over, such as a run the runner just saw cancelled from the board. In review
+    mode it takes a task in Review for a review instead (see `reviews.claim_review`)."""
     holder = _holder(assignee)
     project_id = resolve_project_id(session, project)
     assert_can_access_project(access, project_id)
@@ -228,6 +251,17 @@ def claim_task(
     timestamp = now()
     _expire(session, timestamp, max_attempts, project_id)
     paused = project_row.automation_paused_at is not None
+
+    if ClaimMode(mode) == ClaimMode.REVIEW:
+        if paused:
+            return _paused(project_row)
+        # Imported here: the review flow builds on this module.
+        from vibepod_board.services.reviews import claim_review
+
+        skipped = {_excluded_id(session, access, reference) for reference in exclude or []}
+        return claim_review(
+            session, access, project_row, holder, task, wanted, min_readiness, skipped, lease
+        )
 
     if task:
         idea = require_idea_ref(session, access, task)
@@ -331,10 +365,14 @@ def hand_over_task(
     branch_name: str | None = None,
     note: str | None = None,
     expected_updated_at: str | None = None,
+    head_sha: str | None = None,
 ) -> BoardCard:
     """Moves a claimed task to Review with the branch that holds the work, and ends the
-    claim. A successful run clears the failed attempts."""
+    claim. A successful run clears the failed attempts. `head_sha` is the commit the branch
+    ends at: reviews and their approvals are bound to it, so a hand-over on a new commit
+    starts the approval count over."""
     holder = _holder(assignee)
+    sha = normalize_sha(head_sha)
     idea, card = _held(session, access, reference, holder)
     assert_unchanged("Board card", expected_updated_at, card.updated_at)
     timestamp = now()
@@ -342,11 +380,15 @@ def hand_over_task(
     _end_claim(card, idea, timestamp)
     card.column_name = BoardColumn.REVIEW
     card.attempts = 0
+    card.head_sha = sha
+    card.handed_over_at = timestamp
     if branch:
         card.branch_name = branch
     message = "Handed over to review"
     if branch:
         message += f" on branch {branch}"
+    if sha:
+        message += f" at {sha[:12]}"
     if note and note.strip():
         message += f": {note.strip()}"
     add_task_event(session, idea.id, TaskEventKind.HANDED_OVER, message, holder, timestamp)
@@ -461,7 +503,10 @@ def cancel_run(
     card = lock(session, BoardCardRow, found.id)
     assert_unchanged("Board card", expected_updated_at, card.updated_at)
     if card.claimed_at is None:
-        raise Conflict(f"Task {_key(session, idea)} has no run to cancel: it is not claimed")
+        reviews = open_reviews(session, idea.id, lock=True)
+        if not reviews:
+            raise Conflict(f"Task {_key(session, idea)} has no run to cancel: it is not claimed")
+        return _cancel_reviews(session, access, idea, card, reviews, reason)
     holder = card.assignee
     timestamp = now()
     _end_claim(card, idea, timestamp)
@@ -477,7 +522,34 @@ def cancel_run(
     return decorate_card(session, card_from_row(card))
 
 
-def _locked_or_none[T: IdeaRow | BoardCardRow](
+def _cancel_reviews(
+    session: Session,
+    access: AccessContext,
+    idea: IdeaRow,
+    card: BoardCardRow,
+    reviews: list[TaskReviewRow],
+    reason: str | None,
+) -> BoardCard:
+    """Cancels the open reviews of a card; it stays in Review, and the reviewers are told to
+    cancel with their next heartbeat reply."""
+    timestamp = now()
+    actor = actor_for(session, access)
+    reason = (reason or "").strip()
+    for review in reviews:
+        end_review(
+            session, review, timestamp, "cancelled" + (f": {reason}" if reason else ""), actor
+        )
+    add_activity(
+        session,
+        "board.cancelled",
+        f"{actor} cancelled {_count(len(reviews), 'review')} of {_key(session, idea)}",
+        timestamp,
+    )
+    session.flush()
+    return decorate_card(session, card_from_row(card))
+
+
+def _locked_or_none[T: IdeaRow | BoardCardRow | TaskReviewRow](
     session: Session, table: type[T], row_id: str
 ) -> T | None:
     """Locks a row unless another transaction holds it; the sweep then leaves it for later
@@ -531,7 +603,36 @@ def _expire(
         expired += 1
     if expired:
         add_activity(session, "board.claims_expired", f"Expired {expired} task claims", timestamp)
+    expired += _expire_reviews(session, timestamp, project_id)
     session.flush()
+    return expired
+
+
+def _expire_reviews(session: Session, timestamp: datetime, project_id: str | None) -> int:
+    """Ends lapsed reviews without a verdict; the card stays in Review and no attempt counts."""
+    query = select(TaskReviewRow.id, TaskReviewRow.idea_id).where(
+        col(TaskReviewRow.ended_at).is_(None),
+        col(TaskReviewRow.lease_expires_at) <= timestamp,
+    )
+    if project_id is not None:
+        query = query.where(TaskReviewRow.project_id == project_id)
+    expired = 0
+    for review_id, idea_id in session.exec(query).all():
+        # Task, card, then review: the order the verdicts take.
+        if _locked_or_none(session, IdeaRow, idea_id) is None:
+            continue
+        card = _card_of(session, idea_id)
+        if card is not None and _locked_or_none(session, BoardCardRow, card.id) is None:
+            continue
+        review = _locked_or_none(session, TaskReviewRow, review_id)
+        if review is None or review.ended_at is not None or review.lease_expires_at > timestamp:
+            continue
+        end_review(session, review, timestamp, "the review expired without a verdict", None)
+        expired += 1
+    if expired:
+        add_activity(
+            session, "board.reviews_expired", f"Expired {_count(expired, 'review')}", timestamp
+        )
     return expired
 
 

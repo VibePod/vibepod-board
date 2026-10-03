@@ -71,6 +71,7 @@ Opening and reading pull requests uses the same `GITHUB_TOKEN` as issue sync (se
 - `GET /api/projects`
 - `POST /api/projects`
 - `PATCH /api/projects/:id`
+- `PATCH /api/projects/:id/settings`
 - `GET /api/projects/:id/export`
 - `POST /api/projects/import`
 - `GET /api/ideas`
@@ -109,6 +110,10 @@ Opening and reading pull requests uses the same `GITHUB_TOKEN` as issue sync (se
 - `POST /api/workers/:id/stop`
 - `POST /api/board/:id/cancel`
 - `POST /api/board/:id/answer`
+- `GET /api/board/:id/reviews`
+- `POST /api/board/:id/review`
+- `POST /api/board/:id/review/renew`
+- `POST /api/board/:id/reviews/:reviewId/cancel`
 - `POST /api/board/:id/rework`
 - `GET /api/projects/:id/automation`
 - `POST /api/projects/:id/automation/pause`
@@ -199,6 +204,11 @@ Tools:
 - `list_run_reports`
 - `answer_task_question`
 - `request_task_rework`
+- `submit_review`
+- `renew_task_review`
+- `list_task_reviews`
+- `cancel_task_review`
+- `update_project_settings`
 - `list_idea_readiness`
 - `list_readiness`
 - `push_github_issue`
@@ -411,6 +421,50 @@ CLAIM_SWEEP_SECONDS=15         # how often expired claims are swept; 0 turns the
 WORKER_HEARTBEAT_SECONDS=15    # how often workers are asked to send a heartbeat
 WORKER_OFFLINE_SECONDS=60      # silence after which a worker is shown as offline (at least 2× the heartbeat)
 ```
+
+### Review Workers
+
+A *review worker* is a regular worker started in review mode. It never writes code: it decides
+whether the work on a task's branch needs rework or is ready for a PR. Several review workers,
+such as a Claude and a Codex one, can review the same task at once.
+
+- **Settings.** A project's `requiredApprovals` (1 to 5, default 1) is how many distinct
+  reviewers must approve a task's head commit, and `maxReviewRounds` (1 to 10, default 3) how
+  many rework verdicts in a row send it back before it is blocked for a human. Edit them in the
+  project dialog, with `PATCH /api/projects/:id` (admin) or `PATCH /api/projects/:id/settings`
+  (any caller with access to the project), or `update_project_settings`. They stay out of
+  project exports.
+- **Head commit.** `hand_over_task` takes the `headSha` the branch ends at. Reviews and
+  approvals are bound to it: a hand-over on a new commit starts the approval count over.
+- **Register** with `mode: "review"` (`register_worker`); the workers list shows each worker's
+  `mode`. **Claim** with `mode: "review"` (`POST /api/board/claim`, `claim_next_task`): the
+  board picks the first task in **Review** in the work order, skipping cards without a
+  `branchName`, blocked cards, cards the reviewer already reviewed at their head commit, and
+  cards whose approvals plus open reviews already reach `requiredApprovals`. The card stays in
+  Review and keeps its holder fields; the result's `review` carries the review `id` and the
+  `headSha` to judge. Implementation claims never take cards from Review.
+- **Lease.** A review is leased like a claim: heartbeats renew it (also
+  `POST /api/board/:id/review/renew`, `renew_task_review`). An expired review, one cancelled
+  from the board (`POST /api/board/:id/reviews/:reviewId/cancel`, `cancel_task_review`, or
+  `cancel_task_run` for every open review of the card), and the reviews of a worker that signs
+  off end without a verdict and count no attempt. Moving a card by hand ends its open reviews.
+- **Verdict** with `POST /api/board/:id/review` (`submit_review`), naming the `assignee` that
+  holds the review, the `verdict` and the `headSha` it reviewed. A verdict for another commit
+  is refused (`409`): the branch moved on. Only the holder of the review may submit it.
+  - `approve` (optional `note`) records an approval; the one that reaches `requiredApprovals`
+    moves the task to **PR ready**.
+  - `rework` (`note` is the feedback) sends the task to Planned with the feedback, like
+    **Request changes**, and ends the other open reviews: their verdicts are refused and their
+    workers are told to `cancel`.
+  - `needs_input` (`note` is the question) blocks the card in Review; answering unblocks it
+    there, and the reviewer that asked may review it again. `failed` and `released` end the review without judging the task.
+- **Loop guard.** The card counts rework verdicts in a row (`reviewRounds`). The one that
+  reaches `maxReviewRounds` blocks the task in Review for a human instead of sending it back.
+  An approval to PR ready or moving the card by hand resets the count.
+- **State.** `GET /api/board/:id/reviews` (`list_task_reviews`) lists the task's reviews with
+  their reviewer, `headSha`, verdict and feedback, and its approvals for the current head
+  commit. The history records `review_started`, `approved`, `rework_requested` and
+  `review_ended` events with the reviewer and the commit.
 
 ## Deleting Tasks
 

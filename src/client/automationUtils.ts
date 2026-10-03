@@ -49,14 +49,16 @@ export const taskEventLabels: Record<TaskEventKind, string> = {
   question: "Question",
   answer: "Answer",
   feedback: "Review feedback",
+  review_started: "Review started",
   approved: "Approved",
+  rework_requested: "Rework requested",
+  review_ended: "Review ended",
   pr_opened: "PR opened",
   pr_linked: "PR linked",
   pr_unlinked: "PR unlinked",
 };
 
 export const taskEventColors: Record<TaskEventKind, string> = {
-  approved: "green",
   pr_opened: "green",
   pr_linked: "blue",
   pr_unlinked: "gray",
@@ -72,6 +74,10 @@ export const taskEventColors: Record<TaskEventKind, string> = {
   question: "violet",
   answer: "blue",
   feedback: "orange",
+  review_started: "cyan",
+  approved: "green",
+  rework_requested: "orange",
+  review_ended: "gray",
 };
 
 export const runOutcomeLabels: Record<RunOutcome, string> = {

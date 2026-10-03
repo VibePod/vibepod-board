@@ -5,6 +5,9 @@ which blocks the card with the question (see `claims.apply_release`). Answering 
 back in Planned, and a reviewer sends a task from Review or PR ready back with feedback. The
 question, the answer and the feedback stay in the task history, where the next run reads them;
 a task sent back keeps its branch, so the next run continues the work there.
+
+A review worker asks its question the same way, but the card stays blocked in Review, and the
+answer unblocks it there for the reviewers (see `reviews.py`).
 """
 
 from datetime import datetime
@@ -20,10 +23,12 @@ from vibepod_board.services.common import (
     assert_unchanged,
     card_from_row,
     lock,
+    require_project,
     transactional,
 )
 from vibepod_board.services.dependencies import decorate_card
 from vibepod_board.services.history import actor_for, add_task_event
+from vibepod_board.services.open_reviews import end_open_reviews, promote_if_approved
 from vibepod_board.services.references import require_card_ref, task_keys
 from vibepod_board.tables import BoardCardRow, IdeaRow
 
@@ -72,7 +77,18 @@ def answer_question(
     timestamp = now()
     actor = actor_for(session, access)
     add_task_event(session, idea.id, TaskEventKind.ANSWER, answer, actor, timestamp)
-    _replan(card, idea, timestamp)
+    if card.column_name == BoardColumn.REVIEW:
+        # A reviewer's question: the task waits in Review for the reviewers again.
+        card.blocked_at = None
+        card.blocked_reason = None
+        card.question = None
+        card.updated_at = timestamp
+        idea.updated_at = timestamp
+        # The requirement may have dropped to the approvals it has while it waited.
+        project = require_project(session, idea.project_id)
+        promote_if_approved(session, idea, card, project.required_approvals, timestamp, actor)
+    else:
+        _replan(card, idea, timestamp)
     add_activity(session, "task.answered", f"{actor} answered the question of {key}", timestamp)
     session.flush()
     return decorate_card(session, card_from_row(card))
@@ -100,8 +116,22 @@ def request_rework(
         raise Conflict(f"Task {key} is in {column}; only tasks in review or PR ready are sent back")
     timestamp = now()
     actor = actor_for(session, access)
-    add_task_event(session, idea.id, TaskEventKind.FEEDBACK, feedback, actor, timestamp)
-    _replan(card, idea, timestamp)
+    end_open_reviews(session, idea.id, timestamp, f"{actor} requested rework", actor)
+    apply_rework(session, idea, card, feedback, actor, timestamp)
     add_activity(session, "task.rework", f"{actor} sent {key} back for rework", timestamp)
     session.flush()
     return decorate_card(session, card_from_row(card))
+
+
+def apply_rework(
+    session: Session,
+    idea: IdeaRow,
+    card: BoardCardRow,
+    feedback: str,
+    actor: str | None,
+    timestamp: datetime,
+) -> None:
+    """Sends a locked task back to Planned with feedback, inside the caller's transaction, so
+    a reviewer's rework verdict takes the same path as feedback from the board."""
+    add_task_event(session, idea.id, TaskEventKind.FEEDBACK, feedback, actor, timestamp)
+    _replan(card, idea, timestamp)

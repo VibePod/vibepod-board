@@ -94,7 +94,13 @@ export const WorkersList = ({
               <Stack gap={0}>
                 <Text fw={700}>{worker.name}</Text>
                 <Text size="xs" c="dimmed">
-                  {[worker.agent, worker.machine].filter(Boolean).join(" · ")}
+                  {[
+                    worker.agent,
+                    worker.machine,
+                    worker.mode === "review" ? "reviewer" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
                 </Text>
               </Stack>
               <Group gap={6} wrap="nowrap">

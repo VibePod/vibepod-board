@@ -30,6 +30,7 @@ from vibepod_board.tables import (
     IdeaReadinessEventRow,
     IdeaRow,
     ProjectRow,
+    TaskReviewRow,
 )
 
 ACTIVITY_LIMIT = 100
@@ -168,7 +169,9 @@ def require_projects(session: Session, project_ids: Iterable[str]) -> None:
             raise NotFound(f"Project not found: {project_id}")
 
 
-def lock[T: IdeaRow | BoardCardRow](session: Session, table: type[T], row_id: str) -> T:
+def lock[T: IdeaRow | BoardCardRow | TaskReviewRow](
+    session: Session, table: type[T], row_id: str
+) -> T:
     """Loads a row and holds it for the rest of the transaction. Locking before a
     concurrency guard closes the window between reading `updated_at` and writing."""
     return session.exec(

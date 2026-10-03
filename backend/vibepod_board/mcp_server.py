@@ -27,9 +27,11 @@ from vibepod_board.config import Settings
 from vibepod_board.db import get_engine
 from vibepod_board.enums import (
     BoardColumn,
+    ClaimMode,
     DocumentKind,
     IdeaStatus,
     ReleaseOutcome,
+    ReviewVerdict,
     RunOutcome,
     WorkerStatus,
     WorkerStep,
@@ -49,6 +51,7 @@ from vibepod_board.services import (
     projects,
     pull_requests,
     readiness,
+    reviews,
     runs,
     state,
     tokens,
@@ -56,6 +59,12 @@ from vibepod_board.services import (
 )
 from vibepod_board.services.claims import MAX_LEASE_SECONDS, MIN_LEASE_SECONDS
 from vibepod_board.services.listing import BATCH_LIMIT
+from vibepod_board.services.open_reviews import (
+    MAX_REQUIRED_APPROVALS,
+    MAX_REVIEW_ROUNDS,
+    MIN_REQUIRED_APPROVALS,
+    MIN_REVIEW_ROUNDS,
+)
 from vibepod_board.services.runs import COMMIT_LIMIT
 from vibepod_board.services.views import View, project_cards, project_documents, project_ideas
 
@@ -124,6 +133,17 @@ LeaseSeconds = Annotated[
         ge=MIN_LEASE_SECONDS,
         le=MAX_LEASE_SECONDS,
         description="How long the claim lasts unless renewed; the server default when omitted.",
+    ),
+]
+HeadSha = Annotated[
+    str | None,
+    Field(pattern=r"^\s*[0-9a-fA-F]{4,64}\s*$", description="A commit SHA."),
+]
+Mode = Annotated[
+    ClaimMode,
+    Field(
+        description="implement (default) takes planned tasks to work on; review takes tasks "
+        "in Review to judge."
     ),
 ]
 MCP_LIST_LIMIT = 200
@@ -737,7 +757,11 @@ def create_mcp_server(
         "skipped. Narrow by labels (all must match) or a minimum readiness score, or name one "
         "task. The claim expires unless renewed with renew_task_claim; report back with "
         "hand_over_task or release_task. Returns claimed false with a reason when nothing can "
-        "be claimed, and the full task and card when something was.",
+        "be claimed, and the full task and card when something was. With mode review it takes "
+        "the next task in Review for a review instead: the card stays in Review, and the "
+        "result's review names the headSha to judge. Tasks without a branch, blocked tasks, "
+        "tasks you already reviewed at their head commit and tasks with enough approvals and "
+        "open reviews are skipped. Report the verdict with submit_review.",
     )
     def claim_next_task(
         projectId: Annotated[  # noqa: N803
@@ -765,6 +789,7 @@ def create_mcp_server(
             ),
         ] = None,
         leaseSeconds: LeaseSeconds = None,  # noqa: N803
+        mode: Mode = ClaimMode.IMPLEMENT,
     ) -> dict[str, Any]:
         return run(
             lambda s, a: claims.claim_task(
@@ -779,6 +804,7 @@ def create_mcp_server(
                 lease_seconds=leaseSeconds,
                 default_lease_seconds=settings.claim_lease_seconds,
                 max_attempts=settings.claim_max_attempts,
+                mode=mode,
             )
         )
 
@@ -805,7 +831,8 @@ def create_mcp_server(
     @mcp.tool(
         title="Hand Over Task",
         description="Move a task you claimed to Review with the branch that holds the work, "
-        "ending the claim. A note is recorded in the task history.",
+        "ending the claim. A note is recorded in the task history. headSha is the commit the "
+        "branch ends at: reviews and approvals are bound to it.",
     )
     def hand_over_task(
         id: CardId,
@@ -815,6 +842,7 @@ def create_mcp_server(
         ] = None,
         note: str | None = None,
         expectedUpdatedAt: ExpectedUpdatedAt = None,  # noqa: N803
+        headSha: HeadSha = None,  # noqa: N803
         view: ViewArg = None,
     ) -> dict[str, Any]:
         return run(
@@ -828,6 +856,7 @@ def create_mcp_server(
                     branch_name=branchName,
                     note=note,
                     expected_updated_at=expectedUpdatedAt,
+                    head_sha=headSha,
                 ),
                 view,
             )
@@ -906,7 +935,7 @@ def create_mcp_server(
         "away. Its name is the holder of the claims it takes (use it as the assignee of "
         "claim_next_task). Registering a name that is already connected replaces that "
         "registration. Send worker_heartbeat every heartbeatSeconds, and sign_off_worker when "
-        "done.",
+        "done. A worker in review mode claims with mode review.",
     )
     def register_worker(
         projectId: Annotated[  # noqa: N803
@@ -915,10 +944,11 @@ def create_mcp_server(
         name: Annotated[str, Field(min_length=1)],
         agent: str | None = None,
         machine: str | None = None,
+        mode: Mode = ClaimMode.IMPLEMENT,
     ) -> dict[str, Any]:
         return run(
             lambda s, a: workers.register_worker(
-                s, a, projectId, name, agent, machine, worker_timing(settings)
+                s, a, projectId, name, agent, machine, worker_timing(settings), mode
             )
         )
 
@@ -1015,7 +1045,8 @@ def create_mcp_server(
         title="Cancel Task Run",
         description="Stop the automated run of a claimed task: it returns to Planned without "
         "counting a failed attempt, and the worker is told to cancel with its next heartbeat "
-        "reply.",
+        "reply. On a task in Review it cancels the open reviews instead; the task stays in "
+        "Review.",
     )
     def cancel_task_run(
         id: CardId,
@@ -1095,9 +1126,97 @@ def create_mcp_server(
         return run(page)
 
     @mcp.tool(
+        title="Submit Review",
+        description="End a review you hold (from claim_next_task with mode review) with its "
+        "verdict, naming the headSha you reviewed. approve records an approval, and the task "
+        "moves to PR ready once it has the project's requiredApprovals for its head commit. "
+        "rework (note is the feedback) sends it back to Planned and ends the other open "
+        "reviews; after maxReviewRounds rework verdicts in a row it is blocked for a human "
+        "instead. needs_input (note is the question) blocks it in Review until someone "
+        "answers; failed and released end the review without judging. A verdict for an older "
+        "head commit is refused. Returns the task's approval state.",
+    )
+    def submit_review(
+        id: CardId,
+        assignee: Holder,
+        verdict: ReviewVerdict,
+        headSha: HeadSha = None,  # noqa: N803
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        return run(lambda s, a: reviews.submit_review(s, a, id, assignee, verdict, headSha, note))
+
+    @mcp.tool(
+        title="Renew Task Review",
+        description="Extend a review you hold so it does not expire; worker heartbeats do the "
+        "same.",
+        annotations=IDEMPOTENT,
+    )
+    def renew_task_review(
+        id: CardId,
+        assignee: Holder,
+        leaseSeconds: LeaseSeconds = None,  # noqa: N803
+    ) -> dict[str, Any]:
+        return run(
+            lambda s, a: {
+                "item": reviews.renew_review(
+                    s, a, id, assignee, leaseSeconds, settings.claim_lease_seconds
+                )
+            }
+        )
+
+    @mcp.tool(
+        title="List Task Reviews",
+        description="The reviews of a task, newest first, with their reviewer, head commit, "
+        "verdict and feedback, and its approval state: approvals from distinct reviewers for "
+        "the current head commit against requiredApprovals, open reviews and review rounds.",
+        annotations=READ_ONLY,
+    )
+    def list_task_reviews(id: TaskId) -> dict[str, Any]:
+        return run(lambda s, a: reviews.review_state(s, a, id))
+
+    @mcp.tool(
+        title="Cancel Task Review",
+        description="Cancel one open review of a task: it ends without a verdict, the task "
+        "stays in Review, and the reviewer's worker is told to cancel.",
+    )
+    def cancel_task_review(
+        id: CardId,
+        reviewId: Annotated[str, Field(min_length=1)],  # noqa: N803
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        return run(lambda s, a: reviews.cancel_review(s, a, id, reviewId, reason))
+
+    @mcp.tool(
+        title="Update Project Settings",
+        description="Change the review settings of a project: requiredApprovals, the approvals "
+        "a task needs for its head commit to move to PR ready, and maxReviewRounds, the "
+        "rework verdicts in a row after which it is blocked for a human.",
+    )
+    def update_project_settings(
+        projectId: Annotated[  # noqa: N803
+            str, Field(min_length=1, description="Project id, key or title.")
+        ],
+        requiredApprovals: Annotated[  # noqa: N803
+            int | None, Field(ge=MIN_REQUIRED_APPROVALS, le=MAX_REQUIRED_APPROVALS)
+        ] = None,
+        maxReviewRounds: Annotated[  # noqa: N803
+            int | None, Field(ge=MIN_REVIEW_ROUNDS, le=MAX_REVIEW_ROUNDS)
+        ] = None,
+    ) -> dict[str, Any]:
+        return run(
+            lambda s, a: {
+                "item": projects.update_project_settings(
+                    s, a, projectId, requiredApprovals, maxReviewRounds
+                )
+            }
+        )
+
+    @mcp.tool(
         title="Answer Task Question",
         description="Answer the question a task waits on after its automated run asked for "
-        "input; the task goes back to Planned and the next run gets the answer. Pass the "
+        "input; the task goes back to Planned and the next run gets the answer. A question "
+        "from a reviewer is answered in Review, where the reviewers pick the task up again. "
+        "Pass the "
         "expectedUpdatedAt you read to refuse an answer to a question that has since changed.",
     )
     def answer_task_question(

@@ -15,6 +15,7 @@ import {
   MantineProvider,
   Modal,
   MultiSelect,
+  NumberInput,
   Paper,
   SegmentedControl,
   Select,
@@ -212,6 +213,8 @@ type ProjectDraft = {
   key: string;
   title: string;
   summary: string;
+  requiredApprovals: number;
+  maxReviewRounds: number;
 };
 
 type NoteDraft = {
@@ -283,6 +286,8 @@ const emptyProjectDraft = (): ProjectDraft => ({
   key: "",
   title: "",
   summary: "",
+  requiredApprovals: 1,
+  maxReviewRounds: 3,
 });
 
 /** How often the workers of the open project are polled while the page is visible. */
@@ -1140,6 +1145,8 @@ const App = () => {
         key: project.key,
         title: project.title,
         summary: project.summary,
+        requiredApprovals: project.requiredApprovals ?? 1,
+        maxReviewRounds: project.maxReviewRounds ?? 3,
       },
     });
   };
@@ -1160,6 +1167,8 @@ const App = () => {
       key: projectModal.draft.key,
       title: projectModal.draft.title,
       summary: projectModal.draft.summary,
+      requiredApprovals: projectModal.draft.requiredApprovals,
+      maxReviewRounds: projectModal.draft.maxReviewRounds,
     };
 
     try {
@@ -3019,6 +3028,36 @@ const App = () => {
                 }
                 rows={4}
               />
+              <Group grow align="flex-start">
+                <NumberInput
+                  label="Required approvals"
+                  description="Reviewers that must approve a commit before PR ready"
+                  value={projectModal.draft.requiredApprovals}
+                  onChange={(value) =>
+                    updateProjectDraft({
+                      requiredApprovals: typeof value === "number" ? value : 1,
+                    })
+                  }
+                  min={1}
+                  max={5}
+                  allowDecimal={false}
+                  clampBehavior="strict"
+                />
+                <NumberInput
+                  label="Review rounds"
+                  description="Rework verdicts in a row before a task is blocked"
+                  value={projectModal.draft.maxReviewRounds}
+                  onChange={(value) =>
+                    updateProjectDraft({
+                      maxReviewRounds: typeof value === "number" ? value : 3,
+                    })
+                  }
+                  min={1}
+                  max={10}
+                  allowDecimal={false}
+                  clampBehavior="strict"
+                />
+              </Group>
               <Group justify="flex-end">
                 <Button
                   type="button"

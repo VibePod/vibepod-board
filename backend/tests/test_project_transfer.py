@@ -172,7 +172,9 @@ def test_imports_a_bundle_as_a_new_project(store: Store, column: BoardColumn) ->
     result = import_project(s, bundle, replace_existing=False)
     round_trip = export_project(s, bundle.project.id)
 
-    assert dump(result) == {"item": dump(bundle.project), "replaced": False}
+    # The review settings stay behind, so the new project starts with the defaults.
+    settings = {"requiredApprovals": 1, "maxReviewRounds": 3}
+    assert dump(result) == {"item": {**dump(bundle.project), **settings}, "replaced": False}
     expected = dump(bundle)
     match_object(
         dump(round_trip),

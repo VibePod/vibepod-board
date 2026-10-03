@@ -8,12 +8,15 @@ from vibepod_board.api.models import (
     ArchiveDoneRequest,
     BoardCardBatch,
     BoardCardUpdate,
+    CancelReviewRequest,
     CancelRunRequest,
     ClaimRequest,
     HandoverRequest,
     ReadinessRequest,
     ReleaseRequest,
     RenewClaimRequest,
+    RenewReviewRequest,
+    ReviewRequest,
     ReworkRequest,
 )
 from vibepod_board.api.queries import (
@@ -36,8 +39,10 @@ from vibepod_board.schemas import (
     CompactBoardCard,
     EntityRef,
     KeyedBoardCard,
+    ReviewState,
+    TaskReview,
 )
-from vibepod_board.services import board, claims, conversation, readiness
+from vibepod_board.services import board, claims, conversation, readiness, reviews
 from vibepod_board.services.views import View, project_cards
 
 router = APIRouter(prefix="/api/board", tags=["board"])
@@ -85,7 +90,8 @@ def claim_task(
 ) -> ClaimResult:
     """Claims the next planned task of a project in the work order, or the named task: its
     card moves to In progress and `assignee` becomes its holder. `claimed` is false when
-    nothing can be claimed."""
+    nothing can be claimed. In `review` mode it takes a task in Review for a review instead:
+    the card stays in Review, and `review` carries the review with the `headSha` to judge."""
     return claims.claim_task(
         session,
         access,
@@ -98,6 +104,7 @@ def claim_task(
         lease_seconds=body.lease_seconds,
         default_lease_seconds=settings.claim_lease_seconds,
         max_attempts=settings.claim_max_attempts,
+        mode=body.mode,
     )
 
 
@@ -169,6 +176,7 @@ def hand_over_task(
             branch_name=body.branch_name,
             note=body.note,
             expected_updated_at=body.expected_updated_at,
+            head_sha=body.head_sha,
         )
     )
 
@@ -246,3 +254,52 @@ def set_card_readiness(
     return Item(
         item=readiness.set_card_readiness(session, access, card_id, body.score, body.reason)
     )
+
+
+@router.get("/{card_id}/reviews")
+def review_state(card_id: str, session: SessionDep, access: AccessDep) -> ReviewState:
+    """The reviews of a task, newest first, and its approvals for the current head commit."""
+    return reviews.review_state(session, access, card_id)
+
+
+@router.post("/{card_id}/review")
+def submit_review(
+    card_id: str, body: ReviewRequest, session: SessionDep, access: AccessDep
+) -> ReviewState:
+    """Ends the review `assignee` holds with its verdict: approve, rework (with the feedback
+    as `note`), needs_input (with the question), failed or released."""
+    return reviews.submit_review(
+        session, access, card_id, body.assignee, body.verdict, body.head_sha, body.note
+    )
+
+
+@router.post("/{card_id}/review/renew")
+def renew_review(
+    card_id: str,
+    body: RenewReviewRequest,
+    session: SessionDep,
+    access: AccessDep,
+    settings: SettingsDep,
+) -> Item[TaskReview]:
+    return Item(
+        item=reviews.renew_review(
+            session,
+            access,
+            card_id,
+            body.assignee,
+            body.lease_seconds,
+            settings.claim_lease_seconds,
+        )
+    )
+
+
+@router.post("/{card_id}/reviews/{review_id}/cancel")
+def cancel_review(
+    card_id: str,
+    review_id: str,
+    session: SessionDep,
+    access: AccessDep,
+    body: CancelReviewRequest | None = None,
+) -> ReviewState:
+    """Ends one open review without a verdict; its worker is told to cancel."""
+    return reviews.cancel_review(session, access, card_id, review_id, body.reason if body else None)

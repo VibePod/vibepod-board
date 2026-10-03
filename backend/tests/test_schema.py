@@ -8,7 +8,7 @@ from sqlmodel import SQLModel
 
 from vibepod_board.db import migrate
 
-HEAD = "0010"
+HEAD = "0011"
 LEGACY_SCHEMA = (Path(__file__).parent / "legacy_schema.sql").read_text()
 # The first TS schema, before repository, readiness and dependency support.
 ORIGINAL_SCHEMA = LEGACY_SCHEMA.split("alter table board_cards add column", 1)[0]
@@ -45,6 +45,7 @@ def test_creates_board_and_token_tables(db: Engine) -> None:
         "projects",
         "task_dependencies",
         "task_events",
+        "task_reviews",
         "task_runs",
         "workers",
     ]
