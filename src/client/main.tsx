@@ -123,7 +123,11 @@ import {
   readBoardColumn,
   writeBoardColumn,
 } from "./boardColumnPicker.js";
-import { AnswerDialog, ReworkDialog } from "./ConversationDialogs.js";
+import {
+  AnswerDialog,
+  ApproveDialog,
+  ReworkDialog,
+} from "./ConversationDialogs.js";
 import { CopyableCode } from "./CopyableCode.js";
 import { DeleteTaskDialog, type DeleteTaskTarget } from "./DeleteTaskDialog.js";
 import {
@@ -168,6 +172,7 @@ import { githubRepositoryLink } from "./repositoryUtils.js";
 import { Sidebar } from "./Sidebar.js";
 import { TaskGraph } from "./TaskGraph.js";
 import { TaskHistory } from "./TaskHistory.js";
+import { TaskReviews } from "./TaskReviews.js";
 import { TaskRuns } from "./TaskRuns.js";
 import {
   isCardReadinessStale,
@@ -454,6 +459,7 @@ const App = () => {
   const [workers, setWorkers] = useState<Worker[]>([]);
   // The card whose question is being answered, and the reviewed card being sent back.
   const [answerTarget, setAnswerTarget] = useState<BoardCard | null>(null);
+  const [approveTarget, setApproveTarget] = useState<BoardCard | null>(null);
   const [reworkTarget, setReworkTarget] = useState<BoardCard | null>(null);
   const [automation, setAutomation] = useState<
     WorkerListResponse["automation"] | null
@@ -1771,11 +1777,31 @@ const App = () => {
     await loadState();
   };
 
-  /**
-   * Sends a reviewed task back to Planned with feedback. Guarded by the card the
-   * dialog shows, so feedback never lands on a newer review. Throws for the
-   * dialog.
-   */
+  /** Counts the person's approval against the head shown when the dialog opened. */
+  const approveReview = async (card: BoardCard, note: string) => {
+    try {
+      await api(`/api/board/${card.id}/approve`, {
+        method: "POST",
+        body: JSON.stringify({ note, expectedUpdatedAt: card.updatedAt }),
+      });
+    } catch (err) {
+      if (!isConflict(err)) throw err;
+      const message = await refreshConversationTarget(
+        card,
+        setApproveTarget,
+        (current) => current.column === "review",
+      );
+      throw new Error(
+        message ||
+          "The review changed. Check the current card before approving again.",
+      );
+    }
+    setApproveTarget(null);
+    setNotice(`Approved ${card.title}.`);
+    await loadState();
+  };
+
+  /** Sends the reviewed task back with feedback, guarded against a newer review. */
   const requestRework = async (card: BoardCard, feedback: string) => {
     try {
       await api(`/api/board/${card.id}/rework`, {
@@ -2667,6 +2693,21 @@ const App = () => {
                                   }
                                 />
                               )}
+                            {column === "review" && card.ideaId && (
+                              <TaskReviews
+                                compact
+                                cardId={card.id}
+                                reloadKey={`${card.updatedAt}|${loadCount}`}
+                                onChanged={() => loadState()}
+                              />
+                            )}
+                            {column === "planned" &&
+                              Boolean(card.reviewRounds) && (
+                                <Text size="xs" c="dimmed">
+                                  Review rounds: {card.reviewRounds}/
+                                  {selectedProject?.maxReviewRounds ?? 3}
+                                </Text>
+                              )}
                             {boardCardGitHubLink(
                               card,
                               card.ideaId
@@ -2905,6 +2946,24 @@ const App = () => {
                                 className="board-card-task-id"
                                 justify="flex-end"
                               >
+                                {column === "review" && card.ideaId && (
+                                  <Button
+                                    type="button"
+                                    size="compact-xs"
+                                    variant="subtle"
+                                    color="green"
+                                    aria-label={`Approve ${card.title}`}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setApproveTarget(card);
+                                    }}
+                                    onKeyDown={(event) =>
+                                      event.stopPropagation()
+                                    }
+                                  >
+                                    Approve
+                                  </Button>
+                                )}
                                 {(column === "review" ||
                                   column === "pr_ready") && (
                                   <Button
@@ -3473,12 +3532,23 @@ const App = () => {
 
             {/* A runner reports after moving the card, so what the workers do reloads too,
                 and so does every board load. */}
+            <TaskReviews
+              cardId={taskViewCard?.id ?? taskViewIdea.id}
+              reloadKey={`${taskViewCard?.updatedAt}|${loadCount}`}
+              onChanged={() => loadState()}
+            />
             <TaskRuns
               ideaId={taskViewIdea.id}
               reloadKey={`${taskViewCard?.updatedAt}|${workerActivitySignature(workers)}|${loadCount}`}
             />
 
             <TaskHistory
+              reviewRounds={taskViewCard?.reviewRounds}
+              maxReviewRounds={
+                state.projects.find(
+                  (project) => project.id === taskViewIdea.projectId,
+                )?.maxReviewRounds
+              }
               ideaId={taskViewIdea.id}
               reloadKey={`${taskViewCard?.updatedAt}|${workerActivitySignature(workers)}`}
             />
@@ -3528,6 +3598,15 @@ const App = () => {
                 >
                   Close
                 </Button>
+                {taskViewCard?.column === "review" && (
+                  <Button
+                    color="green"
+                    variant="light"
+                    onClick={() => setApproveTarget(taskViewCard)}
+                  >
+                    Approve
+                  </Button>
+                )}
                 {(taskViewCard?.column === "review" ||
                   taskViewCard?.column === "pr_ready") && (
                   <Button
@@ -3561,6 +3640,11 @@ const App = () => {
         card={answerTarget}
         onClose={() => setAnswerTarget(null)}
         onSubmit={answerQuestion}
+      />
+      <ApproveDialog
+        card={approveTarget}
+        onClose={() => setApproveTarget(null)}
+        onSubmit={approveReview}
       />
       <ReworkDialog
         card={reworkTarget}

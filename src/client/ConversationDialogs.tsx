@@ -16,6 +16,7 @@ type TextDialogProps = {
   label: string;
   intro?: string;
   submitLabel: string;
+  optional?: boolean;
   onClose: () => void;
   onSubmit: (card: BoardCard, text: string) => Promise<void>;
 };
@@ -27,6 +28,7 @@ const TextDialog = ({
   label,
   intro,
   submitLabel,
+  optional = false,
   onClose,
   onSubmit,
 }: TextDialogProps) => {
@@ -43,7 +45,7 @@ const TextDialog = ({
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!card || !text.trim()) return;
+    if (!card || (!optional && !text.trim())) return;
     setIsSubmitting(true);
     setError("");
     try {
@@ -79,7 +81,7 @@ const TextDialog = ({
               onChange={(event) => setText(event.currentTarget.value)}
               autosize
               minRows={4}
-              required
+              required={!optional}
               data-autofocus
             />
             <Group justify="flex-end">
@@ -94,7 +96,7 @@ const TextDialog = ({
               <Button
                 type="submit"
                 loading={isSubmitting}
-                disabled={!text.trim()}
+                disabled={!optional && !text.trim()}
               >
                 {submitLabel}
               </Button>
@@ -140,6 +142,18 @@ export const ReworkDialog = ({ card, onClose, onSubmit }: CardDialogProps) => (
         : "The task goes back to Planned; the next run gets this feedback."
     }
     submitLabel="Send back to Planned"
+    onClose={onClose}
+    onSubmit={onSubmit}
+  />
+);
+
+export const ApproveDialog = ({ card, onClose, onSubmit }: CardDialogProps) => (
+  <TextDialog
+    card={card}
+    title="Approve review"
+    label="Note (optional)"
+    submitLabel="Approve"
+    optional
     onClose={onClose}
     onSubmit={onSubmit}
   />
