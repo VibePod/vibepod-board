@@ -259,6 +259,7 @@ class WorkerRegistration(ApiModel):
     machine: StrictStr = ""
     # implement or review: what the worker claims tasks for.
     mode: ClaimMode = ClaimMode.IMPLEMENT
+    replace: StrictBool = False
 
 
 class HeartbeatRequest(ApiModel):

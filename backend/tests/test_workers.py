@@ -35,8 +35,8 @@ def planned(session: Session, project, title: str, **fields: Any):
     return task
 
 
-def register(session: Session, name: str = NAME, project: str = "VP"):
-    return workers.register_worker(session, ADMIN, project, name, "claude", "laptop")
+def register(session: Session, name: str = NAME, project: str = "VP", **options: Any):
+    return workers.register_worker(session, ADMIN, project, name, "claude", "laptop", **options)
 
 
 def listed(session: Session, access=ADMIN, **options: Any):
@@ -222,7 +222,7 @@ def test_registering_again_renews_the_claims_under_the_name(session: Session, vp
     register(session)
     claimed = claims.claim_task(session, ADMIN, "VP", NAME, lease_seconds=60).item.card
 
-    register(session)
+    register(session, replace=True)
 
     renewed = board.get_card(session, ADMIN, task.id)
     assert renewed.claim_expires_at >= claimed.claim_expires_at + timedelta(seconds=600)
@@ -261,9 +261,11 @@ def test_heartbeats_leave_other_holders_claims_alone(session: Session, vp) -> No
     assert card.claim_expires_at == claimed.item.card.claim_expires_at
 
 
-def test_registering_a_connected_name_replaces_the_old_registration(session: Session, vp) -> None:
+def test_explicit_replacement_of_a_connected_name_replaces_the_old_registration(
+    session: Session, vp
+) -> None:
     old = register(session).item
-    new = register(session).item
+    new = register(session, replace=True).item
 
     names = [(worker.id, worker.status) for worker in listed(session)]
     assert (new.id, WorkerState.IDLE) in names
@@ -293,7 +295,8 @@ def test_concurrent_registrations_of_one_name_leave_one_connected(
     for thread in threads:
         thread.join(timeout=30)
 
-    assert errors == []
+    assert len(errors) == runners - 1
+    assert all(isinstance(error, Conflict) for error in errors)
     live = session.execute(
         text("select count(*) from workers where name = :name and stopped_at is null"),
         {"name": NAME},
@@ -434,7 +437,7 @@ def test_a_late_sign_off_of_a_replaced_registration_leaves_the_claims_alone(
 ) -> None:
     planned(session, vp, "Held across a restart")
     old = register(session).item
-    new = register(session).item
+    new = register(session, replace=True).item
     claims.claim_task(session, ADMIN, "VP", NAME)
 
     # The old process's shutdown hook runs after the new one registered.
@@ -551,3 +554,105 @@ def test_a_lease_shorter_than_two_heartbeats_fails_at_startup(monkeypatch) -> No
         assert get_settings().claim_lease_seconds == 120
     finally:
         get_settings.cache_clear()
+
+
+@pytest.mark.parametrize("status", [WorkerStatus.IDLE, WorkerStatus.WORKING, WorkerStatus.PAUSED])
+def test_live_registration_is_refused_without_changing_worker_or_claims(
+    session: Session, vp, status: WorkerStatus
+) -> None:
+    task = planned(session, vp, "Keep the live worker's claim")
+    old = register(session).item
+    claims.claim_task(session, ADMIN, "VP", NAME)
+    workers.heartbeat(
+        session,
+        ADMIN,
+        old.id,
+        status,
+        task=task.id if status == WorkerStatus.WORKING else None,
+        status_reason="Usage limit" if status == WorkerStatus.PAUSED else None,
+    )
+    before_worker = workers.get_worker(session, ADMIN, old.id)
+    before_card = board.get_card(session, ADMIN, task.id)
+    with pytest.raises(Conflict) as error:
+        register(session, name=f"  {NAME}  ")
+    assert str(error.value) == (
+        f"A worker named {NAME} is connected (machine laptop, "
+        f"started at {old.started_at.isoformat()}); stop it or register under another name"
+    )
+    assert workers.get_worker(session, ADMIN, old.id) == before_worker
+    assert board.get_card(session, ADMIN, task.id) == before_card
+    assert len(listed(session)) == 1
+    workers.heartbeat(session, ADMIN, old.id, WorkerStatus.IDLE)
+
+
+def test_offline_registration_is_replaced_and_keeps_claims(session: Session, vp) -> None:
+    from vibepod_board.tables import WorkerRow
+
+    task = planned(session, vp, "Restart after a crash")
+    old = register(session).item
+    claimed = claims.claim_task(session, ADMIN, "VP", NAME, lease_seconds=600).item.card
+    row = session.get(WorkerRow, old.id)
+    row.last_seen_at = now() - timedelta(seconds=121)
+    session.commit()
+
+    new = register(session, timing=workers.WorkerTiming(offline_seconds=120)).item
+
+    assert new.id != old.id
+    assert workers.get_worker(session, ADMIN, old.id).stopped_at is not None
+    card = board.get_card(session, ADMIN, task.id)
+    assert (card.assignee, card.claimed_at, card.attempts) == (
+        claimed.assignee,
+        claimed.claimed_at,
+        claimed.attempts,
+    )
+    assert card.claim_expires_at > claimed.claim_expires_at
+    workers.sign_off(session, ADMIN, old.id)
+    assert board.get_card(session, ADMIN, task.id) == card
+
+
+def test_signed_off_name_can_register_again(session: Session, vp) -> None:
+    old = register(session).item
+    workers.sign_off(session, ADMIN, old.id)
+    assert register(session).item.id != old.id
+
+
+def test_rest_refuses_live_name_and_accepts_explicit_replacement(api: TestClient) -> None:
+    body = {"projectId": "VP", "name": NAME, "machine": "laptop"}
+    old = api.post("/api/workers", json=body).json()["item"]
+    refused = api.post("/api/workers", json=body)
+    assert refused.status_code == 409
+    assert f"A worker named {NAME} is connected (machine laptop, started at " in refused.text
+    assert "stop it or register under another name" in refused.text
+    assert api.get(f"/api/workers/{old['id']}").json()["item"] == old
+    replaced = api.post("/api/workers", json={**body, "replace": True})
+    assert replaced.status_code == 201
+    assert replaced.json()["item"]["id"] != old["id"]
+    assert (
+        api.post(f"/api/workers/{old['id']}/heartbeat", json={"status": "idle"}).status_code == 409
+    )
+
+
+async def test_mcp_refuses_live_name_and_accepts_explicit_replacement(
+    server_url: str, session: Session, vp
+) -> None:
+    token = tokens.create_token(session, "Runner", [vp.id]).token
+    args = {"projectId": "VP", "name": NAME, "machine": "laptop"}
+    old = await call(server_url, token, "register_worker", **args)
+    with pytest.raises(ToolError, match=f"A worker named {NAME} is connected") as error:
+        await call(server_url, token, "register_worker", **args)
+    assert "machine laptop, started at " in str(error.value)
+    assert "stop it or register under another name" in str(error.value)
+    new = await call(server_url, token, "register_worker", **args, replace=True)
+    assert new["item"]["id"] != old["item"]["id"]
+
+
+def test_registration_uses_the_configured_offline_window(session: Session, vp) -> None:
+    from vibepod_board.tables import WorkerRow
+
+    old = register(session).item
+    row = session.get(WorkerRow, old.id)
+    row.last_seen_at = now() - timedelta(seconds=90)
+    session.commit()
+    with pytest.raises(Conflict, match="is connected"):
+        register(session, timing=workers.WorkerTiming(offline_seconds=120))
+    assert register(session, timing=workers.WorkerTiming(offline_seconds=60)).item.id != old.id
