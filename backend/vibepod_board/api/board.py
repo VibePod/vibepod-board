@@ -176,12 +176,9 @@ def hand_over_task(
             branch_name=body.branch_name,
             note=body.note,
             expected_updated_at=body.expected_updated_at,
-<<<<<<< HEAD
             head_sha=body.head_sha,
-=======
             pr_title=body.pr_title,
             pr_body=body.pr_body,
->>>>>>> b2dabf5 (Store the pull request an agent suggests at hand-over and prefill Open PR from it)
         )
     )
 

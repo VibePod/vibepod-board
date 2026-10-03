@@ -839,16 +839,13 @@ def create_mcp_server(
     @mcp.tool(
         title="Hand Over Task",
         description="Move a task you claimed to Review with the branch that holds the work, "
-<<<<<<< HEAD
         "ending the claim. A note is recorded in the task history. headSha is the commit the "
-        "branch ends at: reviews and approvals are bound to it.",
-=======
-        "ending the claim. A note is recorded in the task history. Pass prTitle and prBody to "
+        "branch ends at: reviews and approvals are bound to it. "
+        "Pass prTitle and prBody to "
         "suggest the pull request for the work; Open PR starts from them. Describe the change, "
         "not the task: what changed and why, notable decisions, how it was tested, in a few "
         "short markdown lines, without repeating the spec or a log of the run. A later "
         "hand-over with either field replaces the suggestion; without them it is kept.",
->>>>>>> b2dabf5 (Store the pull request an agent suggests at hand-over and prefill Open PR from it)
     )
     def hand_over_task(
         id: CardId,
@@ -858,9 +855,7 @@ def create_mcp_server(
         ] = None,
         note: str | None = None,
         expectedUpdatedAt: ExpectedUpdatedAt = None,  # noqa: N803
-<<<<<<< HEAD
         headSha: HeadSha = None,  # noqa: N803
-=======
         prTitle: Annotated[  # noqa: N803
             str | None,
             Field(description="Suggested pull request title: short, imperative, about the change."),
@@ -872,7 +867,6 @@ def create_mcp_server(
                 "why, notable decisions, how it was tested. Closes #n is added when opening."
             ),
         ] = None,
->>>>>>> b2dabf5 (Store the pull request an agent suggests at hand-over and prefill Open PR from it)
         view: ViewArg = None,
     ) -> dict[str, Any]:
         return run(
@@ -886,12 +880,9 @@ def create_mcp_server(
                     branch_name=branchName,
                     note=note,
                     expected_updated_at=expectedUpdatedAt,
-<<<<<<< HEAD
                     head_sha=headSha,
-=======
                     pr_title=prTitle,
                     pr_body=prBody,
->>>>>>> b2dabf5 (Store the pull request an agent suggests at hand-over and prefill Open PR from it)
                 ),
                 view,
             )

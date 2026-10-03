@@ -366,24 +366,18 @@ def hand_over_task(
     branch_name: str | None = None,
     note: str | None = None,
     expected_updated_at: str | None = None,
-<<<<<<< HEAD
     head_sha: str | None = None,
-) -> BoardCard:
-    """Moves a claimed task to Review with the branch that holds the work, and ends the
-    claim. A successful run clears the failed attempts. `head_sha` is the commit the branch
-    ends at: reviews and their approvals are bound to it, so a hand-over on a new commit
-    starts the approval count over."""
-=======
     pr_title: str | None = None,
     pr_body: str | None = None,
 ) -> BoardCard:
     """Moves a claimed task to Review with the branch that holds the work, and ends the
-    claim. A successful run clears the failed attempts.
+    claim. A successful run clears the failed attempts. `head_sha` is the commit the branch
+    ends at: reviews and their approvals are bound to it, so a hand-over on a new commit
+    starts the approval count over.
 
     A pull request title or body replaces the card's suggested pull request as a whole, so a
     rework never keeps half of the description of an older head; without either, the
     suggestion is left as it is."""
->>>>>>> b2dabf5 (Store the pull request an agent suggests at hand-over and prefill Open PR from it)
     holder = _holder(assignee)
     sha = normalize_sha(head_sha)
     idea, card = _held(session, access, reference, holder)
