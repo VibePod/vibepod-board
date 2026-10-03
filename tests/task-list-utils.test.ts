@@ -383,7 +383,7 @@ describe("board search", () => {
     expect(ids("unrelated")).toEqual([]);
   });
 
-  it("matches the repository path and remote, which cards no longer show", () => {
+  it("matches the card's repository path and remote, which cards no longer show", () => {
     const ideas = new Map([
       [
         "idea-85",
@@ -391,14 +391,33 @@ describe("board search", () => {
           id: "idea-85",
           taskNumber: 85,
           title: "Linked task",
-          repositoryLocalPath: "/root/DEV/vibepod-board",
-          repositoryRemoteUrl: "git@github.com:vibepod/vibepod-board.git",
+          repositoryLocalPath: "/root/DEV/old-board",
+          repositoryRemoteUrl: "git@github.com:vibepod/old-board.git",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        }),
+      ],
+      [
+        "idea-86",
+        task({
+          id: "idea-86",
+          taskNumber: 86,
+          title: "Cleared task",
+          repositoryRemoteUrl: "https://github.com/vibepod/cleared.git",
           createdAt: "2026-01-01T00:00:00.000Z",
         }),
       ],
     ]);
     const columns: BoardColumns = {
-      ready: [card({ id: "linked", ideaId: "idea-85", title: "Linked task" })],
+      ready: [
+        card({
+          id: "linked",
+          ideaId: "idea-85",
+          title: "Linked task",
+          repositoryLocalPath: "/root/DEV/vibepod-board",
+          repositoryRemoteUrl: "git@github.com:vibepod/vibepod-board.git",
+        }),
+        card({ id: "cleared", ideaId: "idea-86", title: "Cleared task" }),
+      ],
       planned: [
         card({
           id: "loose",
@@ -421,5 +440,8 @@ describe("board search", () => {
     expect(ids("github.com:vibepod")).toEqual(["linked"]);
     expect(ids("/srv/cli")).toEqual(["loose"]);
     expect(ids("gitlab")).toEqual(["loose"]);
+    // The task's repository no longer applies once the card has replaced or cleared it.
+    expect(ids("old-board")).toEqual([]);
+    expect(ids("vibepod/cleared")).toEqual([]);
   });
 });

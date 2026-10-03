@@ -114,8 +114,8 @@ export const matchesTaskSearch = (
 
 /**
  * Filters every board column with the task search. Every card matches on its own title,
- * details, labels and repository; cards linked to a task also match on the task's text fields and on
- * its task ID and number.
+ * details, labels and repository; cards linked to a task also match on the task's text
+ * fields and on its task ID and number, but not on the task's repository.
  */
 export const filterColumnsBySearch = (
   columns: BoardColumns,
@@ -135,8 +135,9 @@ export const filterColumnsBySearch = (
             summary: idea.summary,
             details: `${idea.details} ${card.details}`,
             labels: [...idea.labels, ...card.labels],
-            repositoryLocalPath: `${idea.repositoryLocalPath ?? ""} ${card.repositoryLocalPath ?? ""}`,
-            repositoryRemoteUrl: `${idea.repositoryRemoteUrl ?? ""} ${card.repositoryRemoteUrl ?? ""}`,
+            // The card's repository fields win, as on the card and in the task view.
+            repositoryLocalPath: card.repositoryLocalPath,
+            repositoryRemoteUrl: card.repositoryRemoteUrl,
           }
         : { ...card, projectKey };
       return matchesTaskSearch(target, search);
