@@ -40,13 +40,11 @@ import {
   Columns3,
   Download,
   ExternalLink,
-  FileText,
   FolderKanban,
   Fullscreen,
   GitBranch,
   KeyRound,
   List,
-  ListChecks,
   Lock,
   LogOut,
   MessageCircleQuestion,
@@ -149,6 +147,7 @@ import {
   projectExportFileName,
 } from "./projectTransfer.js";
 import { githubRemoteToHttpsUrl } from "./repositoryUtils.js";
+import { Sidebar } from "./Sidebar.js";
 import { TaskGraph } from "./TaskGraph.js";
 import { TaskHistory } from "./TaskHistory.js";
 import { TaskRuns } from "./TaskRuns.js";
@@ -1852,126 +1851,11 @@ const App = () => {
       </header>
 
       {showProjectSidebar && (
-        <aside className="sidebar">
-          <nav className="nav">
-            <a
-              className={activeView === "ideas" ? "active" : ""}
-              href={
-                selectedProject
-                  ? formatNavigationPath({
-                      activeView: "ideas",
-                      selectedProjectId: selectedProject.id,
-                    })
-                  : formatNavigationPath({
-                      activeView: "projects",
-                      selectedProjectId: "",
-                    })
-              }
-              aria-disabled={!selectedProject}
-              onClick={(event) => {
-                event.preventDefault();
-                if (selectedProject) {
-                  navigateTo({
-                    activeView: "ideas",
-                    selectedProjectId: selectedProject.id,
-                  });
-                }
-              }}
-            >
-              <ListChecks size={18} />
-              Tasks
-            </a>
-            <a
-              className={activeView === "board" ? "active" : ""}
-              href={
-                selectedProject
-                  ? formatNavigationPath({
-                      activeView: "board",
-                      selectedProjectId: selectedProject.id,
-                    })
-                  : formatNavigationPath({
-                      activeView: "projects",
-                      selectedProjectId: "",
-                    })
-              }
-              aria-disabled={!selectedProject}
-              onClick={(event) => {
-                event.preventDefault();
-                if (selectedProject) {
-                  navigateTo({
-                    activeView: "board",
-                    selectedProjectId: selectedProject.id,
-                  });
-                }
-              }}
-            >
-              <Columns3 size={18} />
-              Board
-            </a>
-            <a
-              className={activeView === "archive" ? "active" : ""}
-              href={
-                selectedProject
-                  ? formatNavigationPath({
-                      activeView: "archive",
-                      selectedProjectId: selectedProject.id,
-                    })
-                  : formatNavigationPath({
-                      activeView: "projects",
-                      selectedProjectId: "",
-                    })
-              }
-              aria-disabled={!selectedProject}
-              onClick={(event) => {
-                event.preventDefault();
-                if (selectedProject) {
-                  navigateTo({
-                    activeView: "archive",
-                    selectedProjectId: selectedProject.id,
-                  });
-                }
-              }}
-            >
-              <Archive size={18} />
-              Archive
-            </a>
-            <a
-              className={activeView === "documents" ? "active" : ""}
-              href={
-                selectedProject
-                  ? formatNavigationPath({
-                      activeView: "documents",
-                      selectedProjectId: selectedProject.id,
-                    })
-                  : formatNavigationPath({
-                      activeView: "projects",
-                      selectedProjectId: "",
-                    })
-              }
-              aria-disabled={!selectedProject}
-              onClick={(event) => {
-                event.preventDefault();
-                if (selectedProject) {
-                  navigateTo({
-                    activeView: "documents",
-                    selectedProjectId: selectedProject.id,
-                  });
-                }
-              }}
-            >
-              <FileText size={18} />
-              Notes
-            </a>
-          </nav>
-          {selectedProject && (
-            <Paper className="project-context" withBorder radius="md" p="sm">
-              <Text size="xs" fw={700} tt="uppercase">
-                Current Project
-              </Text>
-              <Text fw={700}>{selectedProject.title}</Text>
-            </Paper>
-          )}
-        </aside>
+        <Sidebar
+          activeView={activeView}
+          selectedProject={selectedProject ?? null}
+          navigateTo={navigateTo}
+        />
       )}
 
       <section className="workspace">
