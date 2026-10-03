@@ -8,6 +8,8 @@ type TaskHistoryProps = {
   ideaId: string;
   /** Reloads the history when it changes, such as the card's `updatedAt`. */
   reloadKey?: string;
+  reviewRounds?: number;
+  maxReviewRounds?: number;
 };
 
 const formatEventTime = (value: string) =>
@@ -20,7 +22,12 @@ const formatEventTime = (value: string) =>
  * What happened to a task under automation, newest first. Tasks no runner has
  * touched have no history, and the section stays hidden.
  */
-export const TaskHistory = ({ ideaId, reloadKey }: TaskHistoryProps) => {
+export const TaskHistory = ({
+  ideaId,
+  reloadKey,
+  reviewRounds,
+  maxReviewRounds,
+}: TaskHistoryProps) => {
   // Kept with the task they belong to, so switching tasks never shows the last
   // task's history while the new one loads.
   const [loaded, setLoaded] = useState<{
@@ -65,6 +72,11 @@ export const TaskHistory = ({ ideaId, reloadKey }: TaskHistoryProps) => {
     >
       <Text size="xs" fw={700} tt="uppercase" c="dimmed" mb="xs">
         History
+        {reviewRounds !== undefined && (
+          <Text component="span" size="xs" ml="sm">
+            Review rounds: {reviewRounds}/{maxReviewRounds ?? 3}
+          </Text>
+        )}
       </Text>
       <div className="task-history-list">
         {events.map((event) => (

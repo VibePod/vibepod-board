@@ -223,6 +223,9 @@ export type TaskRun = {
   workerId?: string;
   workerName?: string;
   agent?: string;
+  kind?: WorkerMode;
+  verdict?: ReviewVerdict;
+  feedback?: string;
   outcome: RunOutcome;
   summary: string;
   commits: RunCommit[];
@@ -307,7 +310,10 @@ export type CreateProjectInput = {
 };
 
 export type UpdateProjectInput = Partial<
-  Pick<Project, "key" | "title" | "summary">
+  Pick<
+    Project,
+    "key" | "title" | "summary" | "requiredApprovals" | "maxReviewRounds"
+  >
 >;
 
 export type CreateIdeaInput = {
@@ -471,4 +477,32 @@ export type CreatedApiTokenResponse = {
 export type AuthMeResponse = {
   authenticated: boolean;
   username?: string;
+};
+
+export type ReviewVerdict =
+  | "approve"
+  | "rework"
+  | "needs_input"
+  | "failed"
+  | "released";
+export type TaskReview = {
+  id: string;
+  ideaId: string;
+  reviewer: string;
+  headSha?: string;
+  open: boolean;
+  verdict?: ReviewVerdict;
+  feedback?: string;
+  endedReason?: string;
+  createdAt: string;
+  endedAt?: string;
+};
+export type ReviewState = {
+  taskId: string;
+  headSha?: string;
+  approvals: number;
+  requiredApprovals: number;
+  reviewRounds: number;
+  maxReviewRounds: number;
+  items: TaskReview[];
 };

@@ -1,4 +1,9 @@
-import type { BoardCard, RunOutcome, TaskEventKind } from "../shared/types.js";
+import type {
+  BoardCard,
+  ReviewVerdict,
+  RunOutcome,
+  TaskEventKind,
+} from "../shared/types.js";
 
 export const pluralize = (
   count: number,
@@ -109,4 +114,19 @@ export const formatDuration = (seconds: number): string => {
   if (minutes > 0)
     return rest > 0 ? `${minutes} min ${rest} s` : `${minutes} min`;
   return `${rest} s`;
+};
+
+export const reviewVerdictLabels: Record<ReviewVerdict, string> = {
+  approve: "Approved",
+  rework: "Rework",
+  needs_input: "Needs input",
+  failed: "Failed",
+  released: "Released",
+};
+export const reviewVerdictColors: Record<ReviewVerdict, string> = {
+  approve: "green",
+  rework: "orange",
+  needs_input: "violet",
+  failed: "red",
+  released: "gray",
 };

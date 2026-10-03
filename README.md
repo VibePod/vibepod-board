@@ -461,6 +461,16 @@ such as a Claude and a Codex one, can review the same task at once.
 - **Loop guard.** The card counts rework verdicts in a row (`reviewRounds`). The one that
   reaches `maxReviewRounds` blocks the task in Review for a human instead of sending it back.
   An approval to PR ready or moving the card by hand resets the count.
+- **Board UI.** Review cards show the current approval count and open reviewers, with a
+  **Cancel** control for each review. **Approve** accepts an optional note and counts the
+  signed-in person once for the current head, alongside worker approvals. It uses
+  `POST /api/board/:id/approve` with `note` and `expectedUpdatedAt`. **Request changes**
+  records the person's review and feedback and sends the card back to Planned.
+  The task view lists every review and marks verdicts for older commits as outdated.
+- **Run reports.** Review runs appear alongside implementation runs with `kind`, `verdict`
+  and `feedback`, plus the verify output. Reports from a registered review worker capture
+  its submitted verdict automatically; callers may also provide these fields explicitly
+  to the REST API or `add_run_report`.
 - **State.** `GET /api/board/:id/reviews` (`list_task_reviews`) lists the task's reviews with
   their reviewer, `headSha`, verdict and feedback, and its approvals for the current head
   commit. The history records `review_started`, `approved`, `rework_requested` and

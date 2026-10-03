@@ -170,6 +170,20 @@ const boardApi = (reviewColumn: "review" | "pr_ready" = "review") => {
       reviewed = { ...reviewed, ...JSON.parse(String(init?.body)) };
       return jsonResponse({ item: reviewed });
     }
+    if (path === "/api/board/card-2/reviews") {
+      return jsonResponse({
+        taskId: "idea-2",
+        approvals: 1,
+        requiredApprovals: 2,
+        reviewRounds: 1,
+        maxReviewRounds: 3,
+        items: [],
+      });
+    }
+    if (path === "/api/board/card-2/approve" && method === "POST") {
+      reviewed = { ...reviewed, column: "pr_ready" };
+      return jsonResponse({ item: reviewed });
+    }
     if (path === "/api/board/card-2/rework" && method === "POST") {
       reviewed = { ...reviewed, column: "planned" };
       return jsonResponse({ item: reviewed });
@@ -449,3 +463,35 @@ it("searches cards in PR ready", async () => {
   });
   expect(within(target).queryByText("Reviewed cache")).toBeNull();
 });
+
+it.each(["", "Looks good to me"])(
+  "approves from the review card with optional note %s",
+  async (note) => {
+    const fetchMock = await renderBoard();
+    const reviewed = cardFor("Reviewed cache");
+    expect(await within(reviewed).findByText("1/2 approvals")).toBeTruthy();
+    await userEvent.click(
+      within(reviewed).getByRole("button", { name: "Approve Reviewed cache" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Approve review",
+    });
+    if (note)
+      await userEvent.type(
+        within(dialog).getByLabelText("Note (optional)"),
+        note,
+      );
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Approve" }),
+    );
+    await screen.findByText("Approved Reviewed cache.");
+    expect(posts(fetchMock)).toEqual([
+      ["/api/board/card-2/approve", { note, expectedUpdatedAt: timestamp }],
+    ]);
+    await waitFor(() =>
+      expect(
+        cardFor("Reviewed cache").closest(".column")?.textContent,
+      ).toContain("PR ready"),
+    );
+  },
+);
