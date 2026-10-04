@@ -719,8 +719,9 @@ def create_mcp_server(
         title="Update Board Card",
         description="Edit one board card, moving and editing in the same call. Accepts a card "
         "id or the key of its task such as VP-236. Only provided fields change. A claim "
-        "written here also lands on the task. suggestedPrTitle and suggestedPrBody edit the "
-        "pull request the card suggests for Open PR; an empty string clears one. Pass "
+        "written here also lands on the task. prTitle and prBody (markdown) edit the "
+        "pull request the card suggests for Open PR; an empty string clears one. "
+        "suggestedPrTitle and suggestedPrBody are also accepted. Pass "
         "expectedUpdatedAt to refuse a stale write. Echoes a compact record unless view says "
         "otherwise.",
         annotations=IDEMPOTENT,
@@ -735,6 +736,8 @@ def create_mcp_server(
         assignee: Assignee = None,
         suggestedPrTitle: str | None = None,  # noqa: N803
         suggestedPrBody: str | None = None,  # noqa: N803
+        prTitle: str | None = None,  # noqa: N803
+        prBody: str | None = None,  # noqa: N803
         expectedUpdatedAt: ExpectedUpdatedAt = None,  # noqa: N803
         view: ViewArg = None,
     ) -> dict[str, Any]:
@@ -742,8 +745,8 @@ def create_mcp_server(
             "column": column,
             "details": details,
             "assignee": assignee,
-            "suggested_pr_title": suggestedPrTitle,
-            "suggested_pr_body": suggestedPrBody,
+            "suggested_pr_title": prTitle if prTitle is not None else suggestedPrTitle,
+            "suggested_pr_body": prBody if prBody is not None else suggestedPrBody,
             "expected_updated_at": expectedUpdatedAt,
             **{
                 key: value

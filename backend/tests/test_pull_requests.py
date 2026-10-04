@@ -103,6 +103,20 @@ def test_prefills_title_base_and_a_short_body_from_the_task(
     assert draft.body == "Open the PR from the board\n\nCloses #7"
 
 
+@pytest.mark.parametrize("linked", [False, True])
+def test_empty_summary_does_not_prefill_the_full_spec(
+    session: Session, project, github: GitHubClient, linked: bool
+) -> None:
+    card = pr_ready_card(
+        session,
+        project,
+        details="A long specification that should not become a PR description.",
+        github_issue_url=f"https://github.com/{REPO}/issues/7" if linked else None,
+    )
+    draft = pull_requests.pull_request_draft(session, ADMIN, card.id, github)
+    assert draft.body == ("Closes #7" if linked else "")
+
+
 def test_prefills_from_the_suggested_pull_request(
     session: Session, project, github: GitHubClient
 ) -> None:

@@ -171,8 +171,8 @@ describe("the suggested pull request", () => {
       ([, init]) => init?.method === "PATCH",
     );
     expect(JSON.parse(String(patch?.[1]?.body))).toEqual({
-      suggestedPrTitle: "Open pull requests",
-      suggestedPrBody: "Adds the **Open PR** dialog.",
+      prTitle: "Open pull requests",
+      prBody: "Adds the **Open PR** dialog.",
       expectedUpdatedAt: card.updatedAt,
     });
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();

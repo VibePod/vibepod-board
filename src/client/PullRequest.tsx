@@ -431,8 +431,8 @@ export const SuggestedPullRequest = ({
       await api<{ item: BoardCard }>(`/api/board/${card.id}`, {
         method: "PATCH",
         body: JSON.stringify({
-          suggestedPrTitle: title,
-          suggestedPrBody: body,
+          prTitle: title,
+          prBody: body,
           expectedUpdatedAt: card.updatedAt,
         }),
       });
