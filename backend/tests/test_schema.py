@@ -8,7 +8,7 @@ from sqlmodel import SQLModel
 
 from vibepod_board.db import migrate
 
-HEAD = "0011"
+HEAD = "0012"
 LEGACY_SCHEMA = (Path(__file__).parent / "legacy_schema.sql").read_text()
 # The first TS schema, before repository, readiness and dependency support.
 ORIGINAL_SCHEMA = LEGACY_SCHEMA.split("alter table board_cards add column", 1)[0]
@@ -266,7 +266,7 @@ def test_0006_leaves_existing_cards_unclaimed_and_unblocked(empty_db: Engine) ->
     assert revision(empty_db) == HEAD
 
 
-def test_0011_leaves_existing_cards_without_a_suggested_pull_request(empty_db: Engine) -> None:
+def test_0012_leaves_existing_cards_without_a_suggested_pull_request(empty_db: Engine) -> None:
     from alembic import command
 
     from vibepod_board.db import alembic_config
@@ -274,7 +274,7 @@ def test_0011_leaves_existing_cards_without_a_suggested_pull_request(empty_db: E
     config = alembic_config()
     with empty_db.begin() as connection:
         config.attributes["connection"] = connection
-        command.upgrade(config, "0010")
+        command.upgrade(config, "0011")
         connection.execute(
             text(
                 "insert into projects (id, key, title, created_at, updated_at) "
