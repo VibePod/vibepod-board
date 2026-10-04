@@ -96,7 +96,7 @@ def _closes(body: str, repository: str, number: int) -> bool:
 def _body(card: BoardCardRow, idea: IdeaRow | None, repository: str) -> str:
     """The card's suggested description, else the task summary; either closes the linked
     issue when it is in the same repository."""
-    body = (card.suggested_pr_body or (idea.summary if idea else "") or card.details).strip()
+    body = (card.suggested_pr_body or (idea.summary if idea else "") or "").strip()
     issue = parse_issue_url(card.github_issue_url or "")
     if issue and issue.repository == repository and not _closes(body, repository, issue.number):
         body = f"{body}\n\nCloses #{issue.number}" if body else f"Closes #{issue.number}"

@@ -139,6 +139,40 @@ async def test_updates_board_card_metadata_in_mapped_projects(
         )
 
 
+@pytest.mark.parametrize(
+    "title_field,body_field",
+    [("prTitle", "prBody"), ("suggestedPrTitle", "suggestedPrBody")],
+)
+async def test_edits_suggested_pull_request(
+    server_url: str, scoped: dict[str, Any], title_field: str, body_field: str
+) -> None:
+    async def edit(**fields: str) -> dict[str, Any]:
+        return (
+            await call(
+                server_url,
+                scoped["token"],
+                "update_board_card",
+                id=scoped["mine_card"].id,
+                view="full",
+                **fields,
+            )
+        )["item"]
+
+    suggestion = await edit(**{title_field: "Add widget", body_field: "Adds **widget**."})
+    assert suggestion["suggestedPrTitle"] == "Add widget"
+    assert suggestion["suggestedPrBody"] == "Adds **widget**."
+    assert suggestion["suggestedPrBy"]
+    assert suggestion["suggestedPrAt"] == suggestion["updatedAt"]
+    suggestion = await edit(**{body_field: "Tested with pytest."})
+    assert suggestion["suggestedPrTitle"] == "Add widget"
+    assert suggestion["suggestedPrBody"] == "Tested with pytest."
+    cleared = await edit(**{title_field: "", body_field: ""})
+    assert "suggestedPrTitle" not in cleared
+    assert "suggestedPrBody" not in cleared
+    assert "suggestedPrBy" not in cleared
+    assert "suggestedPrAt" not in cleared
+
+
 async def test_sets_card_readiness_in_mapped_projects_only(
     server_url: str, scoped: dict[str, Any]
 ) -> None:
