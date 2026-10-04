@@ -357,7 +357,9 @@ describe("connected workers", () => {
       within(dialog).queryByRole("button", { name: "Stop silent@box" }),
     ).toBeNull();
     expect(
-      within(dialog).getByRole("button", { name: "Remove silent@box (silent-1)" }),
+      within(dialog).getByRole("button", {
+        name: "Remove silent@box (silent-1)",
+      }),
     ).toBeTruthy();
     expect(
       within(dialog).getByRole("button", {
