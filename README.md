@@ -481,7 +481,7 @@ Cards in the **Done** column can be archived so the column does not grow forever
 
 Archived cards leave the board (`GET /api/board`, `list_board`) and are listed in the project's **Archive** view (`/projects/:id/archive`), by `GET /api/board/archived`, and by the `list_archived_cards` MCP tool. The task keeps its record, dependencies, readiness history and GitHub link, and still counts as done for the tasks that depend on it. Task edits and GitHub pulls keep refreshing an archived card, but never bring it back; an archived card cannot be moved or edited, and its task cannot be taken off the board. **Unarchive** (`POST /api/board/:id/unarchive`, `unarchive_board_card`) returns it to Done.
 
-Project exports are bundle version 3 and carry each card's `archivedAt`; version 1 and 2 bundles still import.
+Project exports are bundle version 5 and carry each card's `archivedAt`, linked pull request fields and suggested pull request fields; versions 1 through 4 still import.
 
 ## Task Dependencies
 
