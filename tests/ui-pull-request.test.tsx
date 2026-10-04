@@ -60,7 +60,13 @@ afterEach(() => {
 });
 
 describe("opening a pull request", () => {
-  it("prefills the dialog from the draft and opens the PR", async () => {
+  it.each([
+    { title: "Open PRs from the board", body: "Closes #33" },
+    {
+      title: "Add the Open PR dialog",
+      body: "Adds the dialog.\n\nTested with Vitest.\n\nCloses #33",
+    },
+  ])("prefills and submits the draft: $title", async ({ title, body }) => {
     const fetchMock = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit) => {
         const path = String(input);
@@ -68,10 +74,10 @@ describe("opening a pull request", () => {
           // The draft comes back as is, not wrapped in `item`.
           return jsonResponse({
             repository: "vibepod/vibepod-board",
-            title: "Open PRs from the board",
+            title,
             base: "main",
             bases: ["main"],
-            body: "Closes #33",
+            body,
             draft: false,
           });
         }
@@ -104,7 +110,11 @@ describe("opening a pull request", () => {
             "input[type='text'], input:not([type])",
           ) as HTMLInputElement | null
         )?.value,
-      ).toBe("Open PRs from the board"),
+      ).toBe(title),
+    );
+    expect(screen.getByRole("textbox", { name: "Body" })).toHaveProperty(
+      "value",
+      body,
     );
     const submit = Array.from(
       dialog.querySelectorAll("button[type='submit']"),
@@ -117,9 +127,9 @@ describe("opening a pull request", () => {
       ([, init]) => init?.method === "POST",
     );
     expect(JSON.parse(String(post?.[1]?.body))).toEqual({
-      title: "Open PRs from the board",
+      title,
       base: "main",
-      body: "Closes #33",
+      body,
       draft: false,
     });
   });
@@ -162,8 +172,14 @@ describe("the suggested pull request", () => {
     const title = screen.getByRole("textbox", { name: "Title" });
     await userEvent.clear(title);
     await userEvent.type(title, "Open pull requests");
+    const description = screen.getByRole("textbox", { name: "Description" });
+    await userEvent.clear(description);
+    await userEvent.type(
+      description,
+      "Adds the **PR dialog**. Tested with Vitest.",
+    );
     await userEvent.click(screen.getByRole("radio", { name: "Preview" }));
-    expect(screen.getByText("Open PR").tagName).toBe("STRONG");
+    expect(screen.getByText("PR dialog").tagName).toBe("STRONG");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(onChange).toHaveBeenCalled());
@@ -172,7 +188,7 @@ describe("the suggested pull request", () => {
     );
     expect(JSON.parse(String(patch?.[1]?.body))).toEqual({
       prTitle: "Open pull requests",
-      prBody: "Adds the **Open PR** dialog.",
+      prBody: "Adds the **PR dialog**. Tested with Vitest.",
       expectedUpdatedAt: card.updatedAt,
     });
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
