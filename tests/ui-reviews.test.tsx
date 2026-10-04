@@ -2,12 +2,13 @@
 import { MantineProvider } from "@mantine/core";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { TaskReviews } from "../src/client/TaskReviews.js";
+import { ApproveDialog } from "../src/client/ConversationDialogs.js";
 import { TaskHistory } from "../src/client/TaskHistory.js";
+import { TaskReviews } from "../src/client/TaskReviews.js";
 import { TaskRuns } from "../src/client/TaskRuns.js";
 import { WorkersList } from "../src/client/Workers.js";
-import { ApproveDialog } from "../src/client/ConversationDialogs.js";
 import type { BoardCard } from "../src/shared/types.js";
+
 const timestamp = "2026-09-30T08:00:00Z";
 const response = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status });

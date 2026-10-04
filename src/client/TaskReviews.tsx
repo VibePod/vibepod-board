@@ -1,8 +1,8 @@
 import { Badge, Button, Code, Group, Paper, Stack, Text } from "@mantine/core";
 import { useEffect, useState } from "react";
 import type { ReviewState } from "../shared/types.js";
-import { reviewVerdictColors, reviewVerdictLabels } from "./automationUtils.js";
 import { api } from "./api.js";
+import { reviewVerdictColors, reviewVerdictLabels } from "./automationUtils.js";
 import { MarkdownText } from "./Markdown.js";
 
 /** Both views read the same authoritative approvals and open review claims. */
