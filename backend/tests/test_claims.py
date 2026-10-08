@@ -682,6 +682,7 @@ def test_rest_runs_the_claim_lifecycle(api: TestClient) -> None:
             "assignee": RUNNER,
             "branchName": "vp-1",
             "note": "Done",
+            "headSha": "a" * 40,
             "prTitle": "Add claims",
             "prBody": "Adds claims.",
         },
@@ -692,6 +693,8 @@ def test_rest_runs_the_claim_lifecycle(api: TestClient) -> None:
     assert handed.json()["item"]["suggestedPrTitle"] == "Add claims"
     assert handed.json()["item"]["suggestedPrBody"] == "Adds claims."
     assert handed.json()["item"]["suggestedPrBy"] == RUNNER
+    assert handed.json()["item"]["headSha"] == "a" * 40
+    assert handed.json()["item"]["handedOverAt"]
 
     edited = api.patch("/api/board/VP-1", json={"suggestedPrTitle": "Add task claims"})
     assert edited.status_code == 200, edited.text
@@ -826,12 +829,15 @@ async def test_mcp_hands_over(server_url: str, token: str) -> None:
         id="VP-1",
         assignee=RUNNER,
         branchName="vp-1",
+        headSha="b" * 40,
         prTitle="Add claims",
         prBody="Adds claims.",
         view="full",
     )
     assert handed["item"]["column"] == "review"
     assert handed["item"]["branchName"] == "vp-1"
+    assert handed["item"]["headSha"] == "b" * 40
+    assert handed["item"]["handedOverAt"]
     assert (handed["item"]["suggestedPrTitle"], handed["item"]["suggestedPrBody"]) == (
         "Add claims",
         "Adds claims.",
