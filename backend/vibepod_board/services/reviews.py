@@ -60,8 +60,16 @@ from vibepod_board.services.open_reviews import (
     open_reviews,
     short_sha,
 )
+from vibepod_board.services.push_requests import push_request_out, request_after_approval
 from vibepod_board.services.references import require_card_ref, require_idea_ref, task_keys
-from vibepod_board.tables import BoardCardRow, IdeaRow, ProjectRow, TaskReviewRow, WorkerRow
+from vibepod_board.tables import (
+    BoardCardRow,
+    IdeaRow,
+    ProjectRow,
+    PushRequestRow,
+    TaskReviewRow,
+    WorkerRow,
+)
 
 NOTHING_TO_REVIEW = "No task in review can be claimed for a review"
 # Verdicts that settle a reviewer's view of a head commit: it is not handed that commit again.
@@ -323,7 +331,9 @@ def submit_review(
 ) -> ReviewState:
     """Ends a review the caller holds with its verdict. `approve` counts an approval of the
     head commit, and the approval that reaches the project's requirement moves the task to PR
-    ready. `rework` sends it back to Planned with the note as feedback and ends the other open
+    ready, and asks that reviewer to push the reviewed commit when the project pushes approved
+    branches: the reply carries that push request. `rework` sends it back to Planned with the
+    note as feedback and ends the other open
     reviews, or blocks it in Review once the reviewers sent it back `max_review_rounds` times in
     a row. `needs_input` blocks it in Review with the note as a question for a human; `failed`
     and `released` end the review without judging the task. A verdict naming another commit
@@ -373,6 +383,7 @@ def submit_review(
     review.feedback = note or None
     review.ended_at = timestamp
     review.updated_at = timestamp
+    push: PushRequestRow | None = None
 
     if verdict == ReviewVerdict.APPROVE:
         session.flush()
@@ -382,6 +393,9 @@ def submit_review(
         add_task_event(session, idea.id, TaskEventKind.APPROVED, message, holder, timestamp)
         if len(approved) >= project.required_approvals:
             move_to_pr_ready(session, idea, card, key, count, timestamp, holder)
+            push = request_after_approval(
+                session, project, card, holder, review.head_sha, timestamp
+            )
         else:
             add_activity(session, "board.approved", f"{holder} approved {key} ({count})", timestamp)
     elif verdict == ReviewVerdict.REWORK:
@@ -431,7 +445,10 @@ def submit_review(
         add_task_event(session, idea.id, TaskEventKind.QUESTION, note, holder, timestamp)
         add_activity(session, "board.question", f"{key}: {holder} asks {note}", timestamp)
     session.flush()
-    return _state(session, idea, card, project)
+    state = _state(session, idea, card, project)
+    if push is None:
+        return state
+    return state.model_copy(update={"push_request": push_request_out(session, push)})
 
 
 def _state(

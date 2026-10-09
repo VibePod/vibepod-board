@@ -118,7 +118,7 @@ def test_exports_one_self_contained_project(store: Store) -> None:
     bundle = export_project(s, project.id)
     data = dump(bundle)
 
-    match_object(data, {"bundleVersion": 5, "project": {"id": project.id, "key": "APP"}})
+    match_object(data, {"bundleVersion": 6, "project": {"id": project.id, "key": "APP"}})
     assert len(bundle.ideas) == 2
     assert [idea.project_id for idea in bundle.ideas] == [project.id, project.id]
     assert next(idea for idea in bundle.ideas if idea.id == feature.id).depends_on == [
@@ -173,7 +173,7 @@ def test_imports_a_bundle_as_a_new_project(store: Store, column: BoardColumn) ->
     round_trip = export_project(s, bundle.project.id)
 
     # The review settings stay behind, so the new project starts with the defaults.
-    settings = {"requiredApprovals": 1, "maxReviewRounds": 3}
+    settings = {"requiredApprovals": 1, "maxReviewRounds": 3, "pushApprovedBranches": True}
     assert dump(result) == {"item": {**dump(bundle.project), **settings}, "replaced": False}
     expected = dump(bundle)
     match_object(

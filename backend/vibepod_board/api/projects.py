@@ -37,6 +37,7 @@ def create_project(body: ProjectCreate, session: SessionDep, _admin: AdminDep) -
             body.summary,
             body.required_approvals,
             body.max_review_rounds,
+            body.push_approved_branches,
         )
     )
 
@@ -54,7 +55,7 @@ def update_project_settings(
     project_id: str, body: ProjectSettings, session: SessionDep, access: AccessDep
 ) -> Item[Project]:
     """The review settings, for any caller with access to the project: `requiredApprovals`
-    (1 to 5) and `maxReviewRounds` (1 to 10)."""
+    (1 to 5), `maxReviewRounds` (1 to 10) and `pushApprovedBranches`."""
     changes = body.model_dump(exclude_unset=True, by_alias=False)
     return Item(item=projects.update_project_settings(session, access, project_id, **changes))
 

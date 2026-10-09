@@ -2,7 +2,7 @@
 titles are trimmed, and numbers and booleans must be real JSON numbers and booleans."""
 
 import re
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     AfterValidator,
@@ -20,6 +20,7 @@ from vibepod_board.enums import (
     ClaimMode,
     DocumentKind,
     IdeaStatus,
+    PushStatus,
     ReleaseOutcome,
     ReviewVerdict,
     RunOutcome,
@@ -78,6 +79,8 @@ class ProjectSettings(ApiModel):
     required_approvals: RequiredApprovals | None = None
     # Rework verdicts in a row after which a task is blocked for a human.
     max_review_rounds: MaxReviewRounds | None = None
+    # Whether the approval that moves a task to PR ready asks its reviewer to push the branch.
+    push_approved_branches: StrictBool | None = None
 
 
 class ProjectCreate(ProjectSettings):
@@ -362,3 +365,28 @@ class CancelReviewRequest(ApiModel):
 class ApproveRequest(ApiModel):
     note: StrictStr | None = None
     expected_updated_at: RequiredText | None = None
+
+
+class OpenPrOptions(ApiModel):
+    """The pull request to open once a branch is pushed; left-out fields take the Open PR
+    dialog's prefill."""
+
+    title: StrictStr | None = None
+    body: StrictStr | None = None
+    base: StrictStr | None = None
+    draft: StrictBool = False
+
+
+class PushRequestCreate(ApiModel):
+    open_pr: OpenPrOptions | None = None
+
+
+class ClaimPushRequest(ApiModel):
+    assignee: RequiredText
+
+
+class PushResult(ApiModel):
+    assignee: RequiredText
+    status: Literal[PushStatus.PUSHED, PushStatus.FAILED]
+    pushed_sha: StrictStr | None = None
+    error: StrictStr | None = None

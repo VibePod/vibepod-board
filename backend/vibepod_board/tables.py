@@ -73,6 +73,10 @@ class ProjectRow(SQLModel, table=True):
     max_review_rounds: int = Field(
         default=3, sa_column=Column(Integer, nullable=False, server_default=text("3"))
     )
+    # Whether the approval that moves a task to PR ready asks its reviewer to push the branch.
+    push_approved_branches: bool = Field(
+        default=True, sa_column=Column(Boolean, nullable=False, server_default=text("true"))
+    )
     created_at: datetime = _timestamp()
     updated_at: datetime = _timestamp()
 
@@ -201,6 +205,9 @@ class BoardCardRow(SQLModel, table=True):
     review_rounds: int = Field(
         default=0, sa_column=Column(Integer, nullable=False, server_default=text("0"))
     )
+    # The commit a worker last reported pushed to the branch on GitHub, and when.
+    branch_pushed_sha: str | None = _text()
+    branch_pushed_at: datetime | None = _timestamp(nullable=True)
     created_at: datetime = _timestamp()
     updated_at: datetime = _timestamp()
 
@@ -281,6 +288,57 @@ class TaskReviewRow(SQLModel, table=True):
     # Why a review ended without a verdict, such as an expired lease.
     ended_reason: str | None = _text()
     ended_at: datetime | None = _timestamp(nullable=True)
+    created_at: datetime = _timestamp()
+    updated_at: datetime = _timestamp()
+
+
+class PushRequestRow(SQLModel, table=True):
+    """The board asking a worker to push a card's branch to GitHub: after the approval that
+    moved the task to PR ready, or from Open PR. A worker claims it with a lease, pushes from
+    the task's repository and reports the outcome; the board never touches the repository."""
+
+    __tablename__ = "push_requests"
+    __table_args__ = (
+        Index("push_requests_card_idx", "card_id", text("created_at DESC")),
+        # One request per card is pending or claimed at a time.
+        Index(
+            "push_requests_active_card_key",
+            "card_id",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'claimed')"),
+        ),
+        Index(
+            "push_requests_active_project_idx",
+            "project_id",
+            "created_at",
+            postgresql_where=text("status IN ('pending', 'claimed')"),
+        ),
+    )
+
+    id: str = Field(sa_column=Column(Text, primary_key=True))
+    card_id: str = _foreign_key("board_cards.id", "CASCADE")
+    project_id: str = _foreign_key("projects.id", "CASCADE")
+    branch: str = Field(sa_column=Column(Text, nullable=False))
+    # The commit to push; none pushes the local branch tip.
+    head_sha: str | None = _text()
+    repository_local_path: str | None = _text()
+    repository_remote_url: str | None = _text()
+    # owner/repo the pull request goes to.
+    repository: str | None = _text()
+    # approved or open_pr.
+    reason: str = Field(sa_column=Column(Text, nullable=False))
+    # pending, claimed, pushed or failed.
+    status: str = Field(sa_column=Column(Text, nullable=False))
+    # Who holds it, until `lease_expires_at`; a request made at an approval starts held by
+    # the reviewer.
+    assignee: str | None = _text()
+    lease_expires_at: datetime | None = _timestamp(nullable=True)
+    pushed_sha: str | None = _text()
+    error: str | None = _text()
+    # {"title", "body", "base", "draft"}: the pull request to open once the branch is pushed.
+    open_pr: dict[str, Any] | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
+    pull_request_url: str | None = _text()
+    requested_by: str | None = _text()
     created_at: datetime = _timestamp()
     updated_at: datetime = _timestamp()
 

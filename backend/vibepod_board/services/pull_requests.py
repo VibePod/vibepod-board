@@ -1,6 +1,7 @@
 """Open a card's pull request on GitHub, or link one opened by hand.
 
-The board never pushes: the card's branch must already be on GitHub. The card keeps the PR's
+The board never pushes: the card's branch must already be on GitHub, or a worker pushes it
+first through a push request (see `push_requests.py`). The card keeps the PR's
 identity and the state it had when it was opened or linked; keeping that state in sync is
 not done here.
 """
@@ -39,6 +40,8 @@ class PullRequestDraft(ApiModel):
     bases: list[str]
     body: str
     draft: bool = False
+    # False when the card's branch is not on GitHub yet: it has to be pushed first.
+    branch_on_github: bool = True
 
 
 def repository_for(session: Session, card: BoardCardRow) -> str:
@@ -116,6 +119,8 @@ def _draft(session: Session, card: BoardCardRow, client: GitHubClient) -> PullRe
         base=bases[1] if len(bases) > 1 else default,
         bases=bases,
         body=_body(card, idea, repository),
+        branch_on_github=bool(card.branch_name)
+        and client.branch_exists(repository, card.branch_name or ""),
     )
 
 

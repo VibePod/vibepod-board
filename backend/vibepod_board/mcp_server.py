@@ -22,7 +22,12 @@ from sqlmodel import Session
 from vibepod_board.access import AccessContext, require_admin, token_access
 from vibepod_board.api.deps import worker_timing
 from vibepod_board.api.github import github_client
-from vibepod_board.api.models import BoardCardBatchItem, IdeaBatchItem, RunCommitInput
+from vibepod_board.api.models import (
+    BoardCardBatchItem,
+    IdeaBatchItem,
+    OpenPrOptions,
+    RunCommitInput,
+)
 from vibepod_board.config import Settings
 from vibepod_board.db import get_engine
 from vibepod_board.enums import (
@@ -50,6 +55,7 @@ from vibepod_board.services import (
     ideas,
     projects,
     pull_requests,
+    push_requests,
     readiness,
     reviews,
     runs,
@@ -84,6 +90,10 @@ ProjectFilter = Annotated[
     str | None, Field(description="Limit to one project, by id, key or title.")
 ]
 Score = Annotated[int, Field(ge=1, le=10)]
+OpenPr = Annotated[
+    OpenPrOptions,
+    Field(description="The pull request to open once the branch is pushed."),
+]
 ViewArg = Annotated[
     View | None,
     Field(
@@ -532,6 +542,31 @@ def create_mcp_server(
                 )
             }
         )
+
+    @mcp.tool(
+        title="Request Branch Push",
+        description="Ask the project's workers to push a card's branch to GitHub, at the "
+        "commit the reviewers approved (else the local branch tip); the board never pushes "
+        "itself. A live worker that has the repository claims it with its heartbeat, pushes "
+        "and reports. With openPr (title, body, base, draft; each optional, defaulting like "
+        "open_pull_request) the board opens that pull request once the branch is pushed; it "
+        "needs the card in PR ready. A request still pending or claimed for the card is "
+        "returned instead of a new one, with the openPr options added. Follow it with "
+        "get_push_request.",
+    )
+    def request_branch_push(id: CardId, openPr: OpenPr | None = None) -> dict[str, Any]:  # noqa: N803
+        options = openPr.model_dump(by_alias=False) if openPr else None
+        return run(lambda s, a: push_requests.request_push(s, a, id, options))
+
+    @mcp.tool(
+        title="Get Push Request",
+        description="The latest push request of a card: status pending, claimed (with its "
+        "assignee and leaseExpiresAt), pushed (with pushedSha, and pullRequestUrl when the "
+        "board opened the PR) or failed (with error). A lapsed lease is back to pending.",
+        annotations=READ_ONLY,
+    )
+    def get_push_request(id: CardId) -> dict[str, Any]:
+        return run(lambda s, a: push_requests.latest_push_request(s, a, id))
 
     @mcp.tool(
         title="Link Pull Request",
@@ -1001,7 +1036,8 @@ def create_mcp_server(
         "a reason when paused), the task it works on and the step it is in (preparing_workspace, "
         "agent_running, verifying, handing_over), and the runId of the agent container or task "
         "running it. Renews the claims the worker holds. The reply carries instructions for "
-        "the worker. A worker that was removed gets NotFound.",
+        "the worker and pushRequests, the pending push requests of the project it may take "
+        "(oldest first, at most 5). A worker that was removed gets NotFound.",
     )
     def worker_heartbeat(
         id: Annotated[str, Field(min_length=1, description="Worker id from register_worker.")],
@@ -1218,7 +1254,9 @@ def create_mcp_server(
         "reviews; after maxReviewRounds rework verdicts in a row it is blocked for a human "
         "instead. needs_input (note is the question) blocks it in Review until someone "
         "answers; failed and released end the review without judging. A verdict for an older "
-        "head commit is refused. Returns the task's approval state.",
+        "head commit is refused. Returns the task's approval state; when your approval moved "
+        "the task to PR ready and the project pushes approved branches, pushRequest asks you "
+        "to push the reviewed commit (it is held by you for 5 minutes).",
     )
     def submit_review(
         id: CardId,
@@ -1273,8 +1311,10 @@ def create_mcp_server(
     @mcp.tool(
         title="Update Project Settings",
         description="Change the review settings of a project: requiredApprovals, the approvals "
-        "a task needs for its head commit to move to PR ready, and maxReviewRounds, the "
-        "rework verdicts in a row after which it is blocked for a human.",
+        "a task needs for its head commit to move to PR ready, maxReviewRounds, the "
+        "rework verdicts in a row after which it is blocked for a human, and "
+        "pushApprovedBranches, whether the approval that moves a task to PR ready asks its "
+        "reviewer to push the branch to GitHub.",
     )
     def update_project_settings(
         projectId: Annotated[  # noqa: N803
@@ -1286,11 +1326,12 @@ def create_mcp_server(
         maxReviewRounds: Annotated[  # noqa: N803
             int | None, Field(ge=MIN_REVIEW_ROUNDS, le=MAX_REVIEW_ROUNDS)
         ] = None,
+        pushApprovedBranches: bool | None = None,  # noqa: N803
     ) -> dict[str, Any]:
         return run(
             lambda s, a: {
                 "item": projects.update_project_settings(
-                    s, a, projectId, requiredApprovals, maxReviewRounds
+                    s, a, projectId, requiredApprovals, maxReviewRounds, pushApprovedBranches
                 )
             }
         )

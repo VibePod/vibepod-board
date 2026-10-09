@@ -91,6 +91,10 @@ class TaskEventKind(StrEnum):
     PR_OPENED = "pr_opened"
     PR_LINKED = "pr_linked"
     PR_UNLINKED = "pr_unlinked"
+    # Push requests: asked for, and the branch pushed or the push failed, as a worker reported.
+    PUSH_REQUESTED = "push_requested"
+    BRANCH_PUSHED = "branch_pushed"
+    PUSH_FAILED = "push_failed"
 
 
 BOARD_COLUMNS: tuple[BoardColumn, ...] = tuple(BoardColumn)
@@ -145,3 +149,19 @@ class InstructionType(StrEnum):
     STOP = "stop"
     # Stop the run of the named task; it is no longer claimed by the worker.
     CANCEL = "cancel"
+
+
+class PushReason(StrEnum):
+    """Why the board asks for a branch to be pushed."""
+
+    # The approval that moved the task to PR ready.
+    APPROVED = "approved"
+    # Open PR found the branch missing on GitHub; the PR opens once it is pushed.
+    OPEN_PR = "open_pr"
+
+
+class PushStatus(StrEnum):
+    PENDING = "pending"
+    CLAIMED = "claimed"
+    PUSHED = "pushed"
+    FAILED = "failed"

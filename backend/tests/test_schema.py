@@ -8,7 +8,7 @@ from sqlmodel import SQLModel
 
 from vibepod_board.db import migrate
 
-HEAD = "0014"
+HEAD = "0015"
 LEGACY_SCHEMA = (Path(__file__).parent / "legacy_schema.sql").read_text()
 # The first TS schema, before repository, readiness and dependency support.
 ORIGINAL_SCHEMA = LEGACY_SCHEMA.split("alter table board_cards add column", 1)[0]
@@ -43,6 +43,7 @@ def test_creates_board_and_token_tables(db: Engine) -> None:
         "idea_readiness_events",
         "ideas",
         "projects",
+        "push_requests",
         "task_dependencies",
         "task_events",
         "task_reviews",
@@ -333,3 +334,45 @@ def test_0014_leaves_existing_cards_without_a_suggested_pull_request(empty_db: E
         ).all()
     assert [tuple(row) for row in rows] == [(None, None, None, None)]
     assert revision(empty_db) == HEAD
+
+
+def test_0015_leaves_cards_unpushed_and_pushes_approved_branches(empty_db: Engine) -> None:
+    from alembic import command
+
+    from vibepod_board.db import alembic_config
+
+    config = alembic_config()
+    with empty_db.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "0014")
+        connection.execute(
+            text(
+                "insert into projects (id, key, title, created_at, updated_at) "
+                "values ('p1', 'APP', 'App', now(), now())"
+            )
+        )
+        connection.execute(
+            text(
+                "insert into board_cards (id, project_id, title, column_name, branch_name, "
+                "created_at, updated_at) values ('c1', 'p1', 'Approved work', 'pr_ready', "
+                "'vp-1', now(), now())"
+            )
+        )
+
+    migrate(empty_db)
+
+    with empty_db.connect() as connection:
+        card = connection.execute(
+            text("select branch_pushed_sha, branch_pushed_at from board_cards")
+        ).one()
+        project = connection.execute(text("select push_approved_branches from projects")).one()
+        requests = connection.execute(text("select count(*) from push_requests")).scalar_one()
+    assert (tuple(card), tuple(project), requests) == ((None, None), (True,), 0)
+    assert revision(empty_db) == HEAD
+
+    with empty_db.begin() as connection:
+        config.attributes["connection"] = connection
+        command.downgrade(config, "0014")
+    assert "push_requests" not in table_names(empty_db)
+    assert "branch_pushed_sha" not in column_names(empty_db, "board_cards")
+    assert "push_approved_branches" not in column_names(empty_db, "projects")

@@ -47,6 +47,7 @@ def create_project(
     summary: str | None = None,
     required_approvals: int | None = None,
     max_review_rounds: int | None = None,
+    push_approved_branches: bool | None = None,
 ) -> Project:
     assert_title(title, "Project")
     key = normalize_project_key(key)
@@ -61,7 +62,7 @@ def create_project(
         created_at=timestamp,
         updated_at=timestamp,
     )
-    _apply_review_settings(row, required_approvals, max_review_rounds)
+    _apply_review_settings(row, required_approvals, max_review_rounds, push_approved_branches)
     session.add(row)
     session.flush()
     add_activity(session, "project.created", f"Created project: {row.title}", timestamp)
@@ -77,10 +78,11 @@ def update_project(
     summary: str | None = None,
     required_approvals: int | None = None,
     max_review_rounds: int | None = None,
+    push_approved_branches: bool | None = None,
 ) -> Project:
     row = require_project(session, project_id)
     validate_review_settings(required_approvals, max_review_rounds)
-    _apply_review_settings(row, required_approvals, max_review_rounds)
+    _apply_review_settings(row, required_approvals, max_review_rounds, push_approved_branches)
     timestamp = now()
     if required_approvals is not None:
         promote_approved(session, row.id, row.required_approvals, timestamp, None)
@@ -100,12 +102,17 @@ def update_project(
 
 
 def _apply_review_settings(
-    row: ProjectRow, required_approvals: int | None, max_review_rounds: int | None
+    row: ProjectRow,
+    required_approvals: int | None,
+    max_review_rounds: int | None,
+    push_approved_branches: bool | None = None,
 ) -> None:
     if required_approvals is not None:
         row.required_approvals = required_approvals
     if max_review_rounds is not None:
         row.max_review_rounds = max_review_rounds
+    if push_approved_branches is not None:
+        row.push_approved_branches = push_approved_branches
 
 
 @transactional
@@ -115,9 +122,11 @@ def update_project_settings(
     project: str,
     required_approvals: int | None = None,
     max_review_rounds: int | None = None,
+    push_approved_branches: bool | None = None,
 ) -> Project:
     """Changes how review workers treat the project's tasks: the approvals a task needs for
-    its head commit, and the rework verdicts in a row after which it is blocked. Unlike the
+    its head commit, the rework verdicts in a row after which it is blocked, and whether the
+    approval that moves a task to PR ready asks its reviewer to push the branch. Unlike the
     rest of the project, any caller with access to the project may change them. A new
     requirement applies from the next verdict on, except that a task in Review whose head
     commit already has the approvals a lowered requirement asks for moves to PR ready now."""
@@ -130,7 +139,7 @@ def update_project_settings(
         .with_for_update()
         .execution_options(populate_existing=True)
     ).one()
-    _apply_review_settings(row, required_approvals, max_review_rounds)
+    _apply_review_settings(row, required_approvals, max_review_rounds, push_approved_branches)
     timestamp = now()
     if required_approvals is not None:
         promote_approved(

@@ -20,6 +20,8 @@ from vibepod_board.enums import (
     DocumentKind,
     IdeaStatus,
     InstructionType,
+    PushReason,
+    PushStatus,
     ReviewVerdict,
     RunOutcome,
     TaskEventKind,
@@ -64,6 +66,8 @@ class Project(ApiModel):
     # a row after which it is blocked for a human.
     required_approvals: int = 1
     max_review_rounds: int = 3
+    # Whether the approval that moves a task to PR ready asks its reviewer to push the branch.
+    push_approved_branches: bool = True
     created_at: Timestamp
     updated_at: Timestamp
 
@@ -150,6 +154,9 @@ class BoardCard(ApiModel):
     handed_over_at: Timestamp | None = None
     # Rework verdicts in a row since the card was last moved by hand or approved.
     review_rounds: int = 0
+    # The commit a worker last reported pushed to the branch on GitHub, and when.
+    branch_pushed_sha: str | None = None
+    branch_pushed_at: Timestamp | None = None
     created_at: Timestamp
     updated_at: Timestamp
 
@@ -294,6 +301,36 @@ class TaskReview(ApiModel):
     updated_at: Timestamp
 
 
+class PushRequest(ApiModel):
+    """The board asking a worker to push a card's branch to GitHub. Unlike other records it
+    carries its empty fields as null, as the worker contract spells them out."""
+
+    id: str
+    card_id: str
+    task_key: str | None = None
+    branch: str
+    # The commit to push; null pushes the local branch tip.
+    head_sha: str | None = None
+    repository_local_path: str | None = None
+    repository_remote_url: str | None = None
+    # owner/repo the pull request goes to.
+    repository: str | None = None
+    reason: PushReason
+    status: PushStatus
+    assignee: str | None = None
+    lease_expires_at: Timestamp | None = None
+    pushed_sha: str | None = None
+    error: str | None = None
+    # Set when the board opened the pull request after the push.
+    pull_request_url: str | None = None
+    created_at: Timestamp
+    updated_at: Timestamp
+
+    @model_serializer(mode="wrap")
+    def _drop_unset_optionals(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        return handler(self)
+
+
 class ReviewState(ApiModel):
     """Where a task stands with its reviewers: approvals for the current head commit against
     the project's requirement, open reviews, and every review, newest first."""
@@ -310,6 +347,16 @@ class ReviewState(ApiModel):
     review_rounds: int
     max_review_rounds: int
     items: list[TaskReview]
+    # The push request the approval that completed the required approvals made, held by its
+    # reviewer; null otherwise.
+    push_request: PushRequest | None = None
+
+    @model_serializer(mode="wrap")
+    def _drop_unset_optionals(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        return {
+            key: value for key, value in data.items() if value is not None or key == "pushRequest"
+        }
 
 
 class ClaimResult(ApiModel):
@@ -430,6 +477,8 @@ class WorkerSession(ApiModel):
     instructions: list[WorkerInstruction] = Field(default_factory=list)
     # How often the board expects a heartbeat.
     heartbeat_seconds: int
+    # Pending push requests of the project the worker may take, oldest first.
+    push_requests: list[PushRequest] = Field(default_factory=list)
 
 
 class AutomationState(ApiModel):

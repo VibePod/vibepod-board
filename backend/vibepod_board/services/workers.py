@@ -9,7 +9,8 @@ The worker's name is the holder of the claims it takes (see `claims.py`), so eve
 also renews those claims: a running worker never loses its task to claim expiry. Registering
 a live name is refused unless replacement is explicitly requested. An offline registration,
 or one replaced explicitly, is removed, so a restarted worker takes its claims back up. The
-heartbeat reply carries instructions for the worker.
+heartbeat reply carries instructions for the worker, and the pending push requests of its
+project it may take (see `push_requests.py`).
 
 Removing a worker leaves its run reports and task history alone: they keep its name by value.
 """
@@ -32,7 +33,7 @@ from vibepod_board.enums import (
     WorkerStep,
 )
 from vibepod_board.errors import BadRequest, Conflict, NotFound
-from vibepod_board.schemas import Worker, WorkerInstruction, WorkerSession, now
+from vibepod_board.schemas import PushRequest, Worker, WorkerInstruction, WorkerSession, now
 from vibepod_board.services.automation import pause_reason
 from vibepod_board.services.claims import DEFAULT_LEASE_SECONDS, apply_release, lease_for
 from vibepod_board.services.common import (
@@ -45,6 +46,7 @@ from vibepod_board.services.common import (
 from vibepod_board.services.history import actor_for
 from vibepod_board.services.listing import list_scope, scoped
 from vibepod_board.services.open_reviews import end_review
+from vibepod_board.services.push_requests import pending_for_worker
 from vibepod_board.services.references import (
     require_idea_ref,
     resolve_project_id,
@@ -169,12 +171,14 @@ def _session_reply(
     row: WorkerRow,
     timing: WorkerTiming,
     instructions: list[WorkerInstruction] | None = None,
+    push_requests: list[PushRequest] | None = None,
 ) -> WorkerSession:
     session.flush()
     return WorkerSession(
         item=workers_from_rows(session, [row], timing)[0],
         instructions=instructions or [],
         heartbeat_seconds=timing.heartbeat_seconds,
+        push_requests=push_requests or [],
     )
 
 
@@ -385,7 +389,8 @@ def heartbeat(
     timing: WorkerTiming | None = None,
 ) -> WorkerSession:
     """Records that the worker is alive, what it is doing, and renews its claims. `run_id`
-    names the agent container or task running the task, as `vp task logs` takes it."""
+    names the agent container or task running the task, as `vp task logs` takes it. The reply
+    offers the pending push requests of the project the worker may take."""
     timing = timing or WorkerTiming()
     status = WorkerStatus(status)
     lease = lease_for(lease_seconds, timing.lease_seconds)
@@ -434,7 +439,8 @@ def heartbeat(
                 type=InstructionType.CANCEL, reason="The task was deleted", task_id=vanished
             )
         )
-    return _session_reply(session, row, timing, instructions)
+    pushes = pending_for_worker(session, row.project_id, row.name, timestamp)
+    return _session_reply(session, row, timing, instructions, pushes)
 
 
 @transactional

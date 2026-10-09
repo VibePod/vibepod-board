@@ -224,6 +224,19 @@ def test_rejects_any_suggested_pull_request_field_before_version_5(field: str) -
     assert parse_project_bundle(bundle).board_cards[0].model_dump(by_alias=True)[field] is not None
 
 
+@pytest.mark.parametrize(
+    ("field", "value"), [("branchPushedSha", "a" * 40), ("branchPushedAt", STAMP)]
+)
+def test_rejects_a_pushed_branch_before_version_6(field: str, value: str) -> None:
+    bundle = valid_bundle()
+    bundle["bundleVersion"] = 5
+    bundle["boardCards"][0][field] = value
+    with pytest.raises(ValidationError, match="Pushed branches require bundleVersion 6"):
+        parse_project_bundle(bundle)
+    bundle["bundleVersion"] = 6
+    assert parse_project_bundle(bundle).board_cards[0].model_dump(by_alias=True)[field] is not None
+
+
 def test_rejects_archived_cards_outside_the_done_column() -> None:
     bundle = valid_bundle()
     bundle["bundleVersion"] = 3

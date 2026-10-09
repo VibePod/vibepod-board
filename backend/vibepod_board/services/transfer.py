@@ -55,7 +55,7 @@ AUTOMATION_CARD_FIELDS = {
     "review_rounds",
 }
 # Review settings are how a board automates the project, not part of the project's content.
-AUTOMATION_PROJECT_FIELDS = {"required_approvals", "max_review_rounds"}
+AUTOMATION_PROJECT_FIELDS = {"required_approvals", "max_review_rounds", "push_approved_branches"}
 
 
 def export_project(session: Session, project_id: str) -> ProjectBundle:
@@ -74,7 +74,7 @@ def export_project(session: Session, project_id: str) -> ProjectBundle:
             ideas[index] = idea.model_copy(update={"assignee": None})
     return parse_project_bundle(
         {
-            "bundleVersion": 5,
+            "bundleVersion": 6,
             "exportedAt": format_timestamp(now()),
             "project": project.model_dump(mode="json", exclude=AUTOMATION_PROJECT_FIELDS),
             "ideas": [idea.model_dump(mode="json") for idea in ideas],
@@ -185,6 +185,8 @@ def _insert_children(session: Session, bundle: ProjectBundle, destination: str) 
                 suggested_pr_body=card.suggested_pr_body,
                 suggested_pr_by=card.suggested_pr_by,
                 suggested_pr_at=card.suggested_pr_at,
+                branch_pushed_sha=card.branch_pushed_sha,
+                branch_pushed_at=card.branch_pushed_at,
                 repository_local_path=card.repository_local_path,
                 repository_remote_url=card.repository_remote_url,
                 assignee=card.assignee,

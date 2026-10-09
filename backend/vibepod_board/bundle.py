@@ -1,4 +1,4 @@
-"""Project export/import bundle (versions 1 to 5).
+"""Project export/import bundle (versions 1 to 6).
 
 Port of `src/shared/projectBundle.ts`: strict shapes (unknown fields are rejected) plus the
 relationship rules that keep a bundle self-contained. The client validates with the TS copy
@@ -111,6 +111,8 @@ class BundleBoardCard(BundleModel):
     suggested_pr_body: StrictStr | None = None
     suggested_pr_by: StrictStr | None = None
     suggested_pr_at: BundleTimestamp | None = None
+    branch_pushed_sha: StrictStr | None = None
+    branch_pushed_at: BundleTimestamp | None = None
     repository_local_path: StrictStr | None = None
     repository_remote_url: StrictStr | None = None
     assignee: StrictStr | None = None
@@ -163,6 +165,8 @@ SUGGESTED_PULL_REQUEST_FIELDS = (
     "suggested_pr_by",
     "suggested_pr_at",
 )
+# Fields added by bundle version 6: the commit last pushed to the card's branch on GitHub.
+PUSHED_BRANCH_FIELDS = ("branch_pushed_sha", "branch_pushed_at")
 GITHUB_SYNC_FIELDS = (
     "github_repository",
     "github_issue_state",
@@ -177,8 +181,9 @@ def _duplicates[T](values: Iterable[T]) -> list[T]:
 
 class ProjectBundle(BundleModel):
     # 2 adds GitHub sync state on tasks, 3 archived board cards, 4 linked pull requests on
-    # board cards, 5 suggested pull requests on board cards; older bundles are still accepted.
-    bundle_version: Literal[1, 2, 3, 4, 5]
+    # board cards, 5 suggested pull requests on board cards, 6 pushed branches on board cards;
+    # older bundles are still accepted.
+    bundle_version: Literal[1, 2, 3, 4, 5, 6]
     exported_at: BundleTimestamp
     project: BundleProject
     ideas: list[BundleIdea]
@@ -233,6 +238,12 @@ def relationship_issues(bundle: ProjectBundle) -> list[str]:
             "Suggested pull requests require bundleVersion 5"
             for card in bundle.board_cards
             if any(getattr(card, field) is not None for field in SUGGESTED_PULL_REQUEST_FIELDS)
+        ][:1]
+    if bundle.bundle_version < 6:
+        issues += [
+            "Pushed branches require bundleVersion 6"
+            for card in bundle.board_cards
+            if any(getattr(card, field) is not None for field in PUSHED_BRANCH_FIELDS)
         ][:1]
     if bundle.bundle_version == 1:
         issues += [

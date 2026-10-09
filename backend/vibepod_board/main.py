@@ -23,6 +23,7 @@ from vibepod_board.api import (
     github,
     ideas,
     projects,
+    push_requests,
     system,
     tokens,
     workers,
@@ -203,7 +204,17 @@ def create_app(
     )
     _install_error_handlers(app)
 
-    for module in (system, projects, ideas, github, board, documents, tokens, workers):
+    for module in (
+        system,
+        projects,
+        ideas,
+        github,
+        push_requests,
+        board,
+        documents,
+        tokens,
+        workers,
+    ):
         app.include_router(module.router)
     # FastMCP ships a Starlette app whose middleware verifies the bearer token. Routing
     # /mcp to the whole app keeps that middleware, and unlike a mount it does not turn the
