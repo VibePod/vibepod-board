@@ -61,12 +61,18 @@ export const taskEventLabels: Record<TaskEventKind, string> = {
   pr_opened: "PR opened",
   pr_linked: "PR linked",
   pr_unlinked: "PR unlinked",
+  push_requested: "Push requested",
+  branch_pushed: "Branch pushed",
+  push_failed: "Push failed",
 };
 
 export const taskEventColors: Record<TaskEventKind, string> = {
   pr_opened: "green",
   pr_linked: "blue",
   pr_unlinked: "gray",
+  push_requested: "blue",
+  branch_pushed: "green",
+  push_failed: "red",
   claimed: "grape",
   handed_over: "teal",
   failed: "orange",

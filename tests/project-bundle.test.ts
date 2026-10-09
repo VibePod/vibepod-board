@@ -237,6 +237,24 @@ describe("project bundle validation", () => {
     }
   });
 
+  it("accepts pushed branch fields from version 6 only", () => {
+    for (const field of [
+      { branchPushedSha: "a".repeat(40) },
+      { branchPushedAt: "2026-08-14T12:00:00.000Z" },
+    ]) {
+      const bundle = validBundle();
+      const pushed = (bundleVersion: 5 | 6) => ({
+        ...bundle,
+        bundleVersion,
+        boardCards: [{ ...bundle.boardCards[0], ...field }],
+      });
+      expect(() => parseProjectBundle(pushed(5))).toThrow(
+        "Pushed branches require bundleVersion 6",
+      );
+      expect(parseProjectBundle(pushed(6)).boardCards[0]).toMatchObject(field);
+    }
+  });
+
   it("accepts archived board cards in version 3 bundles only", () => {
     const archived = (bundleVersion: 1 | 2 | 3, column: "done" | "review") => {
       const bundle = validBundle();

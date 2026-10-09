@@ -86,6 +86,8 @@ const boardCardSchema = z
     suggestedPrBody: optionalTextSchema,
     suggestedPrBy: optionalTextSchema,
     suggestedPrAt: timestampSchema.optional(),
+    branchPushedSha: optionalTextSchema,
+    branchPushedAt: timestampSchema.optional(),
     repositoryLocalPath: optionalTextSchema,
     repositoryRemoteUrl: optionalTextSchema,
     assignee: optionalTextSchema,
@@ -172,6 +174,9 @@ const suggestedPullRequestFields = [
   "suggestedPrAt",
 ] as const;
 
+/** Fields added by bundle version 6: the commit last pushed to the card's branch. */
+const pushedBranchFields = ["branchPushedSha", "branchPushedAt"] as const;
+
 /** Fields added by bundle version 2. */
 const githubSyncFields = [
   "githubRepository",
@@ -234,6 +239,16 @@ const validateRelationships = (bundle: ProjectBundle, ctx: z.RefinementCtx) => {
         ctx,
         ["boardCards", index, "suggestedPrTitle"],
         "Suggested pull requests require bundleVersion 5",
+      );
+    }
+    if (
+      bundle.bundleVersion < 6 &&
+      pushedBranchFields.some((field) => card[field] !== undefined)
+    ) {
+      addIssue(
+        ctx,
+        ["boardCards", index, "branchPushedSha"],
+        "Pushed branches require bundleVersion 6",
       );
     }
     if (card.archivedAt === undefined) {
@@ -355,6 +370,7 @@ export const projectBundleSchema = z
       z.literal(3),
       z.literal(4),
       z.literal(5),
+      z.literal(6),
     ]),
     exportedAt: timestampSchema,
     project: projectSchema,

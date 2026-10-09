@@ -1,15 +1,22 @@
 // @vitest-environment jsdom
 
 import { MantineProvider } from "@mantine/core";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  BranchPushBadge,
   PullRequestPanel,
   SuggestedPullRequest,
 } from "../src/client/PullRequest.js";
-import type { BoardCard } from "../src/shared/types.js";
+import type { BoardCard, PushRequest } from "../src/shared/types.js";
 
 const card = {
   id: "card-1",
@@ -132,6 +139,164 @@ describe("opening a pull request", () => {
       body,
       draft: false,
     });
+  });
+});
+
+describe("pushing a branch that is not on GitHub", () => {
+  const draft = {
+    repository: "vibepod/vibepod-board",
+    title: "Push from the board",
+    base: "main",
+    bases: ["main"],
+    body: "Closes #33",
+    draft: false,
+    branchOnGithub: false,
+  };
+  const pushRequest = (changes: Partial<PushRequest>): PushRequest => ({
+    id: "push-1",
+    cardId: "card-1",
+    taskKey: "VP-33",
+    branch: "issue-33",
+    headSha: null,
+    repositoryLocalPath: null,
+    repositoryRemoteUrl: null,
+    repository: "vibepod/vibepod-board",
+    reason: "open_pr",
+    status: "pending",
+    assignee: null,
+    leaseExpiresAt: null,
+    pushedSha: null,
+    error: null,
+    pullRequestUrl: null,
+    createdAt: "2026-10-09T08:00:00.000Z",
+    updatedAt: "2026-10-09T08:00:00.000Z",
+    ...changes,
+  });
+
+  const openDialog = async (liveWorkers: number, onChange = vi.fn()) => {
+    render(
+      <MantineProvider>
+        <PullRequestPanel
+          card={card}
+          enabled
+          liveWorkers={liveWorkers}
+          onChange={onChange}
+        />
+      </MantineProvider>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Open PR" }));
+    return screen.findByRole("dialog", { name: "Open Pull Request" });
+  };
+
+  it("asks a worker to push, follows the request and reports the PR", async () => {
+    const pullRequestUrl = "https://github.com/vibepod/vibepod-board/pull/40";
+    let polled = 0;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input);
+        if (path === "/api/board/card-1/pull-request" && !init?.method) {
+          return jsonResponse(draft);
+        }
+        if (path === "/api/board/card-1/push-request" && !init?.method) {
+          polled += 1;
+          // None asked for before the dialog opened; then the pushed request.
+          return polled === 1
+            ? jsonResponse({ error: "No push request for this card" }, 404)
+            : jsonResponse(
+                pushRequest({
+                  status: "pushed",
+                  assignee: "Claude::Worker",
+                  pushedSha: "a".repeat(40),
+                  pullRequestUrl,
+                }),
+              );
+        }
+        if (
+          path === "/api/board/card-1/push-request" &&
+          init?.method === "POST"
+        ) {
+          return jsonResponse(pushRequest({}));
+        }
+        return jsonResponse({ error: "Not found" }, 404);
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const onChange = vi.fn(async () => undefined);
+
+    const dialog = await openDialog(1, onChange);
+    const push = await within(dialog).findByRole("button", {
+      name: "Push and open PR",
+    });
+    await waitFor(() => expect(polled).toBe(1));
+    await userEvent.click(push);
+
+    expect(
+      await within(dialog).findByText("Waiting for a worker"),
+    ).toBeTruthy();
+    const post = fetchMock.mock.calls.find(
+      ([, init]) => init?.method === "POST",
+    );
+    expect(String(post?.[0])).toBe("/api/board/card-1/push-request");
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({
+      openPr: {
+        title: "Push from the board",
+        base: "main",
+        body: "Closes #33",
+        draft: false,
+      },
+    });
+    expect(
+      await within(dialog).findByText("Pull request opened", undefined, {
+        timeout: 4000,
+      }),
+    ).toBeTruthy();
+    expect(
+      within(dialog).getByRole("link", { name: pullRequestUrl }),
+    ).toBeTruthy();
+    expect(onChange).toHaveBeenCalled();
+  });
+
+  it("shows the push command while no worker is online", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) =>
+        String(input) === "/api/board/card-1/pull-request"
+          ? jsonResponse(draft)
+          : jsonResponse({ error: "No push request for this card" }, 404),
+      ),
+    );
+
+    const dialog = await openDialog(0);
+
+    expect(
+      await within(dialog).findByText("git push origin issue-33"),
+    ).toBeTruthy();
+    expect(
+      within(dialog).getByRole("button", { name: "Copy push command" }),
+    ).toBeTruthy();
+    expect(
+      within(dialog).queryByRole("button", { name: "Push and open PR" }),
+    ).toBeNull();
+    expect(
+      within(dialog).getByRole("button", { name: "Open pull request" }),
+    ).toBeTruthy();
+  });
+
+  it("tells PR ready cards on GitHub from local ones", () => {
+    render(
+      <MantineProvider>
+        <BranchPushBadge card={{ headSha: "a".repeat(40) }} />
+        <BranchPushBadge
+          card={{ headSha: "a".repeat(40), branchPushedSha: "a".repeat(40) }}
+        />
+        <BranchPushBadge
+          card={{ headSha: "b".repeat(40), branchPushedSha: "a".repeat(40) }}
+        />
+      </MantineProvider>,
+    );
+
+    expect(screen.getAllByText("local only")).toHaveLength(2);
+    expect(screen.getAllByText("on GitHub")).toHaveLength(1);
   });
 });
 

@@ -98,6 +98,9 @@ describe("project review settings", () => {
 
     fireEvent.change(approvals, { target: { value: "2" } });
     fireEvent.change(rounds, { target: { value: "4" } });
+    const push = within(dialog).getByLabelText(/Push approved branches/);
+    expect((push as HTMLInputElement).checked).toBe(true);
+    await userEvent.click(push);
     await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
     const patch = fetchMock.mock.calls.find(
@@ -107,6 +110,7 @@ describe("project review settings", () => {
     expect(JSON.parse(String(body))).toMatchObject({
       requiredApprovals: 2,
       maxReviewRounds: 4,
+      pushApprovedBranches: false,
     });
   });
 });

@@ -22,6 +22,8 @@ export type Project = {
   requiredApprovals?: number;
   /** Rework verdicts in a row after which a task is blocked for a human. */
   maxReviewRounds?: number;
+  /** Whether the approval that moves a task to PR ready asks its reviewer to push the branch. */
+  pushApprovedBranches?: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -118,6 +120,34 @@ export type BoardCard = {
   handedOverAt?: string;
   /** Rework verdicts in a row since the card was last moved by hand or approved. */
   reviewRounds?: number;
+  /** The commit a worker last reported pushed to the branch on GitHub, and when. */
+  branchPushedSha?: string;
+  branchPushedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export const pushStatuses = ["pending", "claimed", "pushed", "failed"] as const;
+export type PushStatus = (typeof pushStatuses)[number];
+
+/** The board asking a worker to push a card's branch to GitHub; empty fields are null. */
+export type PushRequest = {
+  id: string;
+  cardId: string;
+  taskKey: string | null;
+  branch: string;
+  headSha: string | null;
+  repositoryLocalPath: string | null;
+  repositoryRemoteUrl: string | null;
+  repository: string | null;
+  reason: "approved" | "open_pr";
+  status: PushStatus;
+  assignee: string | null;
+  leaseExpiresAt: string | null;
+  pushedSha: string | null;
+  error: string | null;
+  /** Set when the board opened the pull request after the push. */
+  pullRequestUrl: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -142,6 +172,9 @@ export const taskEventKinds = [
   "pr_opened",
   "pr_linked",
   "pr_unlinked",
+  "push_requested",
+  "branch_pushed",
+  "push_failed",
 ] as const;
 
 export type TaskEventKind = (typeof taskEventKinds)[number];
@@ -295,10 +328,10 @@ export type BoardData = {
 export type ProjectBundle = {
   /**
    * 2 adds GitHub sync state on tasks, 3 archived board cards, 4 linked pull
-   * requests on board cards, 5 suggested pull requests on board cards; older
-   * bundles are still accepted.
+   * requests on board cards, 5 suggested pull requests on board cards, 6 pushed
+   * branches on board cards; older bundles are still accepted.
    */
-  bundleVersion: 1 | 2 | 3 | 4 | 5;
+  bundleVersion: 1 | 2 | 3 | 4 | 5 | 6;
   exportedAt: string;
   project: Project;
   ideas: Idea[];
@@ -325,7 +358,12 @@ export type CreateProjectInput = {
 export type UpdateProjectInput = Partial<
   Pick<
     Project,
-    "key" | "title" | "summary" | "requiredApprovals" | "maxReviewRounds"
+    | "key"
+    | "title"
+    | "summary"
+    | "requiredApprovals"
+    | "maxReviewRounds"
+    | "pushApprovedBranches"
   >
 >;
 

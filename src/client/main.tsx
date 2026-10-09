@@ -149,6 +149,7 @@ import {
   parseNavigationPath,
 } from "./navigation.js";
 import {
+  BranchPushBadge,
   PullRequestBadge,
   PullRequestPanel,
   SuggestedPullRequest,
@@ -189,6 +190,7 @@ import { taskOverviewForIdea } from "./taskOverviewUtils.js";
 import { formatTokenProjectLabel } from "./tokenProjects.js";
 import { WorkerActivity, WorkersIndicator } from "./Workers.js";
 import {
+  onlineWorkers,
   workerActivitySignature,
   workingWorkersByTask,
 } from "./workerUtils.js";
@@ -225,6 +227,7 @@ type ProjectDraft = {
   summary: string;
   requiredApprovals: number;
   maxReviewRounds: number;
+  pushApprovedBranches: boolean;
 };
 
 type NoteDraft = {
@@ -298,6 +301,7 @@ const emptyProjectDraft = (): ProjectDraft => ({
   summary: "",
   requiredApprovals: 1,
   maxReviewRounds: 3,
+  pushApprovedBranches: true,
 });
 
 /** How often the workers of the open project are polled while the page is visible. */
@@ -1158,6 +1162,7 @@ const App = () => {
         summary: project.summary,
         requiredApprovals: project.requiredApprovals ?? 1,
         maxReviewRounds: project.maxReviewRounds ?? 3,
+        pushApprovedBranches: project.pushApprovedBranches ?? true,
       },
     });
   };
@@ -1180,6 +1185,7 @@ const App = () => {
       summary: projectModal.draft.summary,
       requiredApprovals: projectModal.draft.requiredApprovals,
       maxReviewRounds: projectModal.draft.maxReviewRounds,
+      pushApprovedBranches: projectModal.draft.pushApprovedBranches,
     };
 
     try {
@@ -2830,6 +2836,9 @@ const App = () => {
                                 >
                                   {card.branchName}
                                 </Badge>
+                                {column === "pr_ready" && (
+                                  <BranchPushBadge card={card} />
+                                )}
                               </Group>
                             )}
                             {(cardTaskId ||
@@ -3158,6 +3167,16 @@ const App = () => {
                   clampBehavior="strict"
                 />
               </Group>
+              <Switch
+                label="Push approved branches"
+                description="The approval that moves a task to PR ready asks its reviewer to push the branch to GitHub"
+                checked={projectModal.draft.pushApprovedBranches}
+                onChange={(event) =>
+                  updateProjectDraft({
+                    pushApprovedBranches: event.currentTarget.checked,
+                  })
+                }
+              />
               <Group justify="flex-end">
                 <Button
                   type="button"
@@ -3220,6 +3239,7 @@ const App = () => {
                 key={taskViewCard.id}
                 card={taskViewCard}
                 enabled={githubStatus?.enabled ?? false}
+                liveWorkers={onlineWorkers(workers).length}
                 onChange={loadState}
               />
             )}
