@@ -56,12 +56,50 @@ GITHUB_REPOSITORY=owner/repo    # optional default; a task's GitHub remote URL w
 
 A card in **PR ready** can open its pull request on GitHub, or link one opened by hand. The PR's number, state (open/closed/merged) and other details are stored on the card and shown as a badge that opens the PR in a new tab.
 
-- **Open PR** in the task view (also `GET`/`POST /api/board/:id/pull-request`, MCP `open_pull_request`): a dialog prefilled from the card's suggested pull request — the title and description the agent wrote when it handed the task over — with the repository's default branch as the base (or, for stacked work, the branch of a dependency's open PR), plus a draft toggle. Without a suggestion the title is the task title and the body the task summary. `Closes #<n>` is appended when the linked issue is in the same repository and the body does not close it yet. The PR is created with the card's branch as head; the branch must already be on GitHub (the board never pushes), and a PR that already exists for that branch is linked instead of failing.
+- **Open PR** in the task view (also `GET`/`POST /api/board/:id/pull-request`, MCP `open_pull_request`): a dialog prefilled from the card's suggested pull request — the title and description the agent wrote when it handed the task over — with the repository's default branch as the base (or, for stacked work, the branch of a dependency's open PR), plus a draft toggle. Without a suggestion the title is the task title and the body the task summary. `Closes #<n>` is appended when the linked issue is in the same repository and the body does not close it yet. The PR is created with the card's branch as head; the branch must already be on GitHub (the board never pushes itself), and a PR that already exists for that branch is linked instead of failing. The draft's `branchOnGithub` says whether it is there; when it is not, the dialog offers **Push and open PR** (see [Pushing Branches](#pushing-branches)), or shows the `git push origin <branch>` command to copy while no worker of the project is online.
 - **Suggested pull request**: `hand_over_task` takes optional `prTitle` and `prBody` (markdown), stored on the card as `suggestedPrTitle`/`suggestedPrBody` with who suggested them and when. A later hand-over with either field replaces the suggestion, so it follows the head of the branch on rework. The task view shows it in a **Pull request** section with edit and preview, and `PATCH /api/board/:id` / `update_board_card` take `prTitle` and `prBody` (an empty string clears). The earlier `suggestedPrTitle` and `suggestedPrBody` names are also accepted.
 - **Link PR** takes a `https://github.com/owner/repo/pull/123` URL for PRs opened by hand (also `POST /api/board/:id/pull-request/link`, MCP `link_pull_request`); an empty URL unlinks.
 - History records when a PR was opened or linked and by whom. Keeping the stored PR state in sync afterwards is a follow-up.
 
 Opening and reading pull requests uses the same `GITHUB_TOKEN` as issue sync (see above).
+
+### Pushing Branches
+
+Workers commit on local branches, and the board has no access to the repositories, so a
+worker on the host pushes the branch with the user's git credentials when the board asks with
+a **push request**. A request names the card's `branch`, the commit to push (`headSha`, the
+approved head; null pushes the local branch tip), the task's `repositoryLocalPath`,
+`repositoryRemoteUrl` and GitHub `repository`, its `reason` (`approved` or `open_pr`) and
+`status` (`pending`, `claimed`, `pushed` or `failed`), with its `assignee` and
+`leaseExpiresAt`, the `pushedSha`, an `error`, and the `pullRequestUrl` the board opened after
+the push. Empty fields are sent as `null`.
+
+- **On approval.** The reviewer approval that completes `requiredApprovals` creates a request
+  for the reviewed `headSha`, held by that reviewer for 5 minutes, and the verdict reply
+  (`POST /api/board/:id/review`, `submit_review`) carries it as `pushRequest` (null otherwise).
+  The project setting `pushApprovedBranches` (default on; project dialog,
+  `PATCH /api/projects/:id/settings`, `update_project_settings`) turns this off. If the
+  reviewer does not report within the lease, the request opens to every worker.
+- **On Open PR.** `POST /api/board/:id/push-request` with
+  `{"openPr": {"title", "body", "base", "draft"}}` (MCP `request_branch_push`) asks any worker
+  of the project; the board opens that PR once the branch is pushed. The card needs a branch,
+  and `openPr` needs it in PR ready (`409` otherwise). A request still `pending` or `claimed`
+  for the card is returned instead of a new one, with the `openPr` options added.
+  `GET /api/board/:id/push-request` (`get_push_request`) returns the card's latest request, or
+  `404`.
+- **Workers.** Every heartbeat reply carries `pushRequests`: the project's pending requests
+  that are unassigned or assigned to that worker, oldest first, at most 5. A worker that has
+  the repository claims one with `POST /api/board/push-requests/:id/claim` (`{"assignee"}`, a
+  5 minute lease; `409` while someone else holds it or once it ended; claiming again renews),
+  pushes, and reports with `POST /api/board/push-requests/:id/result`
+  (`{"assignee", "status": "pushed" | "failed", "pushedSha"?, "error"?}`; only the holder may
+  report). A lease that runs out puts the request back to `pending` with no assignee, swept
+  whenever requests are read.
+- **Outcome.** `pushed` records `branchPushedSha` and `branchPushedAt` on the card, and PR ready
+  cards show **on GitHub** or **local only**. A request with PR options then opens the PR and
+  stores its link in `pullRequestUrl`; when that fails, the request stays `pushed` with the
+  reason in `error`. `failed` keeps the error and ends the request, so a new one can be made.
+  The history records `push_requested`, `branch_pushed` and `push_failed` events.
 
 ## API
 
@@ -117,6 +155,10 @@ Opening and reading pull requests uses the same `GITHUB_TOKEN` as issue sync (se
 - `POST /api/board/:id/review`
 - `POST /api/board/:id/review/renew`
 - `POST /api/board/:id/reviews/:reviewId/cancel`
+- `POST /api/board/:id/push-request`
+- `GET /api/board/:id/push-request`
+- `POST /api/board/push-requests/:id/claim`
+- `POST /api/board/push-requests/:id/result`
 - `POST /api/board/:id/rework`
 - `GET /api/projects/:id/automation`
 - `POST /api/projects/:id/automation/pause`
@@ -214,6 +256,8 @@ Tools:
 - `list_task_reviews`
 - `cancel_task_review`
 - `update_project_settings`
+- `request_branch_push`
+- `get_push_request`
 - `list_idea_readiness`
 - `list_readiness`
 - `push_github_issue`
@@ -455,7 +499,8 @@ such as a Claude and a Codex one, can review the same task at once.
   reviewers must approve a task's head commit, and `maxReviewRounds` (1 to 10, default 3) how
   many rework verdicts in a row send it back before it is blocked for a human. Edit them in the
   project dialog, with `PATCH /api/projects/:id` (admin) or `PATCH /api/projects/:id/settings`
-  (any caller with access to the project), or `update_project_settings`. They stay out of
+  (any caller with access to the project), or `update_project_settings`, as is
+  `pushApprovedBranches` (see [Pushing Branches](#pushing-branches)). They stay out of
   project exports.
 - **Head commit.** `hand_over_task` takes the `headSha` the branch ends at. Reviews and
   approvals are bound to it: a hand-over on a new commit starts the approval count over.
@@ -475,7 +520,8 @@ such as a Claude and a Codex one, can review the same task at once.
   holds the review, the `verdict` and the `headSha` it reviewed. A verdict for another commit
   is refused (`409`): the branch moved on. Only the holder of the review may submit it.
   - `approve` (optional `note`) records an approval; the one that reaches `requiredApprovals`
-    moves the task to **PR ready**.
+    moves the task to **PR ready** and, with `pushApprovedBranches`, asks the reviewer to push
+    the branch: the reply's `pushRequest` (see [Pushing Branches](#pushing-branches)).
   - `rework` (`note` is the feedback) sends the task to Planned with the feedback, like
     **Request changes**, and ends the other open reviews: their verdicts are refused and their
     workers are told to `cancel`.
@@ -509,7 +555,7 @@ Cards in the **Done** column can be archived so the column does not grow forever
 
 Archived cards leave the board (`GET /api/board`, `list_board`) and are listed in the project's **Archive** view (`/projects/:id/archive`), by `GET /api/board/archived`, and by the `list_archived_cards` MCP tool. The task keeps its record, dependencies, readiness history and GitHub link, and still counts as done for the tasks that depend on it. Task edits and GitHub pulls keep refreshing an archived card, but never bring it back; an archived card cannot be moved or edited, and its task cannot be taken off the board. **Unarchive** (`POST /api/board/:id/unarchive`, `unarchive_board_card`) returns it to Done.
 
-Project exports are bundle version 5 and carry each card's `archivedAt`, linked pull request fields and suggested pull request fields; versions 1 through 4 still import.
+Project exports are bundle version 6 and carry each card's `archivedAt`, linked pull request fields, suggested pull request fields and pushed branch (`branchPushedSha`, `branchPushedAt`); versions 1 through 5 still import. Push requests stay on the board.
 
 ## Task Dependencies
 
