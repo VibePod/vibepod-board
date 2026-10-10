@@ -392,7 +392,7 @@ def submit_review(
         message = f"Approved by {holder} at {commit} ({count})" + (f": {note}" if note else "")
         add_task_event(session, idea.id, TaskEventKind.APPROVED, message, holder, timestamp)
         if len(approved) >= project.required_approvals:
-            move_to_pr_ready(session, idea, card, key, count, timestamp, holder)
+            move_to_pr_ready(session, idea, card, key, count, timestamp, holder, push=False)
             push = request_after_approval(
                 session, project, card, holder, review.head_sha, timestamp
             )

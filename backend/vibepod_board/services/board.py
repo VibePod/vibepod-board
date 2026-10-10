@@ -42,7 +42,7 @@ from vibepod_board.services.listing import (
 )
 from vibepod_board.services.open_reviews import end_open_reviews
 from vibepod_board.services.references import require_card_ref, resolve_project_id
-from vibepod_board.tables import BoardCardRow, IdeaRow
+from vibepod_board.tables import BoardCardRow, IdeaRow, ProjectRow
 
 UNSET = object()
 
@@ -364,6 +364,13 @@ def _apply_card_update(
                 .where(col(IdeaRow.id) == card.idea_id)
                 .values(assignee=card.assignee, updated_at=timestamp)
             )
+    if moved and card.column_name == BoardColumn.PR_READY:
+        # Imported here: push requests build on this module.
+        from vibepod_board.services.push_requests import request_for_pr_ready
+
+        project = session.get(ProjectRow, card.project_id)
+        if project is not None:
+            request_for_pr_ready(session, project, card, actor_for(session, access), timestamp)
     card.updated_at = timestamp
     session.flush()
     return card, moved

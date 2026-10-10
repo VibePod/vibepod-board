@@ -7,6 +7,9 @@ The board coordinates that with push requests:
 - The approval that completes a task's required approvals asks its reviewer to push the
   reviewed commit (`request_after_approval`, when the project's `push_approved_branches` is
   on). The request starts held by that reviewer, and the verdict reply carries it.
+- A card reaching PR ready any other way (an approval on the board, a move by hand, a lowered
+  requirement) asks any worker of the project for its head commit (`request_for_pr_ready`,
+  same setting), unless that commit is already pushed.
 - Open PR on a card whose branch is missing on GitHub asks any worker of the project
   (`request_push` with the pull request to open). Workers see pending requests in their
   heartbeat reply (`pending_for_worker`), claim one and push.
@@ -294,6 +297,45 @@ def request_after_approval(
     return _new_request(
         session, card, PushReason.APPROVED, reviewer, timestamp, head_sha=head_sha, holder=reviewer
     )
+
+
+def _pushed_at_head(card: BoardCardRow) -> bool:
+    """Whether a worker already reported the card's branch pushed at its head commit."""
+    pushed = card.branch_pushed_sha
+    return bool(pushed) and (card.head_sha is None or pushed == card.head_sha)
+
+
+def request_for_pr_ready(
+    session: Session,
+    project: ProjectRow,
+    card: BoardCardRow,
+    actor: str | None,
+    timestamp: datetime,
+) -> PushRequestRow | None:
+    """The request a card reaching PR ready without a reviewer's verdict makes: an approval
+    on the board, a move by hand, or a lowered requirement. Nobody holds it, so any live
+    worker of the project picks it up from its heartbeat. Inside the caller's transaction,
+    with task and card locked.
+
+    Nothing is asked when the project does not push approved branches, the card has no
+    branch, or its head commit is already pushed. A request still open for the card's head
+    is kept; a pending one for another commit is moved to the head, and one a worker holds
+    for another commit is superseded."""
+    if not project.push_approved_branches or not card.branch_name or _pushed_at_head(card):
+        return None
+    _sweep(session, timestamp, card_id=card.id)
+    who = actor or "the board"
+    earlier = _active_of(session, card.id)
+    if earlier is not None:
+        if earlier.head_sha == card.head_sha or _move_to_head(earlier, card, timestamp):
+            return earlier
+        earlier.status = PushStatus.FAILED
+        earlier.error = f"Superseded by the push {who} asked for at PR ready"
+        earlier.assignee = None
+        earlier.lease_expires_at = None
+        earlier.updated_at = timestamp
+        session.flush()
+    return _new_request(session, card, PushReason.APPROVED, who, timestamp, head_sha=card.head_sha)
 
 
 def push_request_out(session: Session, row: PushRequestRow) -> PushRequest:

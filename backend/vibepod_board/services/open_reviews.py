@@ -12,7 +12,7 @@ from vibepod_board.errors import BadRequest
 from vibepod_board.services.common import add_activity, lock
 from vibepod_board.services.history import add_task_event
 from vibepod_board.services.references import task_keys
-from vibepod_board.tables import BoardCardRow, IdeaRow, TaskReviewRow
+from vibepod_board.tables import BoardCardRow, IdeaRow, ProjectRow, TaskReviewRow
 
 MIN_REQUIRED_APPROVALS = 1
 MAX_REQUIRED_APPROVALS = 5
@@ -123,9 +123,13 @@ def move_to_pr_ready(
     count: str,
     timestamp: datetime,
     actor: str | None,
+    *,
+    push: bool = True,
 ) -> None:
     """Moves a card whose head commit has the approvals it needs from Review to PR ready,
-    ending the reviews still open on it. `count` reads like "2 of 2"."""
+    ending the reviews still open on it. `count` reads like "2 of 2". With `push` it asks
+    the project's workers to push the approved commit (`request_for_pr_ready`); a reviewer's
+    verdict passes False and asks that reviewer instead."""
     end_open_reviews(session, idea.id, timestamp, "the task is ready for a PR", actor)
     card.column_name = BoardColumn.PR_READY
     card.review_rounds = 0
@@ -137,6 +141,13 @@ def move_to_pr_ready(
     add_activity(
         session, "board.approved", f"{key} is ready for a PR ({count} approvals)", timestamp
     )
+    if push:
+        # Imported here: push requests build on the board service, which imports this module.
+        from vibepod_board.services.push_requests import request_for_pr_ready
+
+        project = session.get(ProjectRow, card.project_id)
+        if project is not None:
+            request_for_pr_ready(session, project, card, actor, timestamp)
 
 
 def promote_approved(

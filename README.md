@@ -80,7 +80,13 @@ the push. Empty fields are sent as `null`.
   (`POST /api/board/:id/review`, `submit_review`) carries it as `pushRequest` (null otherwise).
   The project setting `pushApprovedBranches` (default on; project dialog,
   `PATCH /api/projects/:id/settings`, `update_project_settings`) turns this off. If the
-  reviewer does not report within the lease, the request opens to every worker.
+  reviewer does not report within the lease, the request opens to every worker. A card that
+  reaches PR ready any other way (**Approve** on the board, `POST /api/board/:id/approve`,
+  moving it there by hand, or a lowered `requiredApprovals`) gets a `pending`, unassigned
+  `approved` request for its head commit that any worker picks up from its heartbeat, under the
+  same setting. Nothing is asked when that commit is already pushed; a request still open for
+  the card is kept (a pending one moves to the head; one held for an older commit is
+  superseded), so a card has one at a time.
 - **On Open PR.** `POST /api/board/:id/push-request` with
   `{"openPr": {"title", "body", "base", "draft"}}` (MCP `request_branch_push`) asks any worker
   of the project to push the card's head commit; the board opens that PR once the branch is

@@ -145,6 +145,93 @@ def test_only_the_approval_that_completes_the_requirement_asks(session: Session,
     assert second.push_request is not None and second.push_request.assignee == REVIEWER
 
 
+def assert_open_to_any_worker(session: Session, task, request) -> None:
+    assert (request.reason, request.status, request.assignee) == (
+        PushReason.APPROVED,
+        PushStatus.PENDING,
+        None,
+    )
+    assert (request.branch, request.head_sha, request.lease_expires_at) == ("vp-1", SHA, None)
+    worker = workers.register_worker(session, ADMIN, "VP", OTHER).item
+    beat = workers.heartbeat(session, ADMIN, worker.id, WorkerStatus.IDLE)
+    assert [item.id for item in beat.push_requests] == [request.id]
+
+
+def test_an_approval_on_the_board_asks_any_worker_to_push(session: Session, vp) -> None:
+    task = in_review(session, vp)
+
+    card = conversation.approve_review(session, ADMIN, task.id)
+
+    assert card.column == BoardColumn.PR_READY
+    assert_open_to_any_worker(
+        session, task, push_requests.latest_push_request(session, ADMIN, task.id)
+    )
+    assert TaskEventKind.PUSH_REQUESTED in kinds(session, task)
+
+
+def test_a_move_to_pr_ready_by_hand_asks_once(session: Session, vp) -> None:
+    task = in_review(session, vp)
+
+    board.update_card(session, ADMIN, task.id, column=BoardColumn.PR_READY)
+    first = push_requests.latest_push_request(session, ADMIN, task.id)
+    board.update_card(session, ADMIN, task.id, column=BoardColumn.DONE)
+    board.update_cards(session, ADMIN, [{"id": task.id, "column": BoardColumn.PR_READY}])
+
+    assert_open_to_any_worker(session, task, first)
+    assert push_requests.latest_push_request(session, ADMIN, task.id).id == first.id
+    assert kinds(session, task).count(TaskEventKind.PUSH_REQUESTED) == 1
+
+
+def test_a_lowered_requirement_asks_for_the_cards_it_promotes(session: Session, vp) -> None:
+    projects.update_project_settings(session, ADMIN, "VP", 2)
+    task = in_review(session, vp)
+    assert approve(session, task).push_request is None
+
+    projects.update_project_settings(session, ADMIN, "VP", 1)
+
+    assert board.get_card(session, ADMIN, task.id).column == BoardColumn.PR_READY
+    assert_open_to_any_worker(
+        session, task, push_requests.latest_push_request(session, ADMIN, task.id)
+    )
+
+
+def test_pr_ready_by_hand_supersedes_a_held_push_of_an_older_commit(session: Session, vp) -> None:
+    task = in_review(session, vp)
+    held = approve(session, task).push_request
+    assert held is not None
+    session.execute(
+        update(PushRequestRow).where(PushRequestRow.id == held.id).values(head_sha=PUSHED)
+    )
+    session.commit()
+    board.update_card(session, ADMIN, task.id, column=BoardColumn.REVIEW)
+
+    board.update_card(session, ADMIN, task.id, column=BoardColumn.PR_READY)
+
+    latest = push_requests.latest_push_request(session, ADMIN, task.id)
+    assert latest.id != held.id
+    assert_open_to_any_worker(session, task, latest)
+    with pytest.raises(Conflict, match="already ended"):
+        push_requests.claim_push_request(session, ADMIN, held.id, REVIEWER)
+
+
+def test_pr_ready_asks_nothing_when_the_head_is_pushed_or_pushing_is_off(
+    session: Session, vp
+) -> None:
+    pushed = in_review(session, vp)
+    request = approve(session, pushed).push_request
+    assert request is not None
+    push_requests.report_result(session, ADMIN, request.id, REVIEWER, PushStatus.PUSHED)
+    board.update_card(session, ADMIN, pushed.id, column=BoardColumn.REVIEW)
+    board.update_card(session, ADMIN, pushed.id, column=BoardColumn.PR_READY)
+    assert push_requests.latest_push_request(session, ADMIN, pushed.id).id == request.id
+
+    projects.update_project_settings(session, ADMIN, "VP", push_approved_branches=False)
+    off = in_review(session, vp, "Off", branch="vp-2")
+    conversation.approve_review(session, ADMIN, off.id)
+    with pytest.raises(NotFound):
+        push_requests.latest_push_request(session, ADMIN, off.id)
+
+
 def test_projects_can_turn_pushing_approved_branches_off(session: Session, vp) -> None:
     assert vp.push_approved_branches is True
     updated = projects.update_project_settings(session, ADMIN, "VP", push_approved_branches=False)
@@ -489,6 +576,25 @@ def test_rest_review_verdict_and_settings(client: TestClient, session: Session, 
     login(client)
     edited = client.patch(f"/api/projects/{vp.id}", json={"pushApprovedBranches": True})
     assert edited.json()["item"]["pushApprovedBranches"] is True
+
+
+def test_rest_approval_on_the_board_asks_for_a_push(
+    client: TestClient, session: Session, vp
+) -> None:
+    task = in_review(session, vp)
+    card_id = board.get_card(session, ADMIN, task.id).id
+    login(client)
+
+    approved = client.post(f"/api/board/{card_id}/approve", json={})
+
+    assert approved.status_code == 200, approved.text
+    request = client.get(f"/api/board/{card_id}/push-request").json()
+    assert (request["reason"], request["status"], request["assignee"], request["headSha"]) == (
+        "approved",
+        "pending",
+        None,
+        SHA,
+    )
 
 
 @pytest.fixture

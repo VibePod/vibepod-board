@@ -564,7 +564,11 @@ def test_lowering_the_requirement_promotes_cards_it_already_approved(session: Se
     state = reviews.review_state(session, ADMIN, task.id)
     assert (state.column, state.approvals, state.open_reviews) == (BoardColumn.PR_READY, 2, 0)
     assert card(session, task).review_rounds == 0
-    assert kinds(session, task)[:2] == [TaskEventKind.REVIEW_ENDED, TaskEventKind.APPROVED]
+    assert kinds(session, task)[:3] == [
+        TaskEventKind.PUSH_REQUESTED,
+        TaskEventKind.REVIEW_ENDED,
+        TaskEventKind.APPROVED,
+    ]
     # The blocked card waits for its answer, and then moves on too.
     assert card(session, waiting).column == BoardColumn.REVIEW
     answered = conversation.answer_question(session, ADMIN, waiting.id, "The new one")
