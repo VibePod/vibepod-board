@@ -215,7 +215,7 @@ describe("pushing a branch that is not on GitHub", () => {
           path === "/api/board/card-1/push-request" &&
           init?.method === "POST"
         ) {
-          return jsonResponse(pushRequest({}));
+          return jsonResponse(pushRequest({ headSha: "c".repeat(40) }));
         }
         return jsonResponse({ error: "Not found" }, 404);
       },
@@ -233,6 +233,8 @@ describe("pushing a branch that is not on GitHub", () => {
     expect(
       await within(dialog).findByText("Waiting for a worker"),
     ).toBeTruthy();
+    // The push is of the handed-over commit, not whatever the branch points to.
+    expect(within(dialog).getByText("c".repeat(12))).toBeTruthy();
     const post = fetchMock.mock.calls.find(
       ([, init]) => init?.method === "POST",
     );

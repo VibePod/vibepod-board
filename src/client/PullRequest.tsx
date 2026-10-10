@@ -144,13 +144,26 @@ export const pushPollMs = 2000;
 const isActivePush = (request: PushRequest | null) =>
   request?.status === "pending" || request?.status === "claimed";
 
+/** The commit a push request is for: its short sha, or the branch tip when unknown. */
+const PushTarget = ({ request }: { request: PushRequest }) =>
+  request.headSha ? (
+    <>
+      <code>{request.branch}</code> at{" "}
+      <code>{request.headSha.slice(0, 12)}</code>
+    </>
+  ) : (
+    <>
+      the tip of <code>{request.branch}</code>
+    </>
+  );
+
 /** Where a push request stands, for the Open PR dialog. */
 const PushProgress = ({ request }: { request: PushRequest }) => {
   if (request.status === "pending") {
     return (
       <Alert color="blue" variant="light" title="Waiting for a worker">
-        A worker of the project that has the repository picks the push up with
-        its next heartbeat.
+        A worker of the project that has the repository pushes{" "}
+        <PushTarget request={request} /> with its next heartbeat.
       </Alert>
     );
   }
@@ -158,7 +171,7 @@ const PushProgress = ({ request }: { request: PushRequest }) => {
     return (
       <Alert color="blue" variant="light" title="Pushing">
         {request.assignee ?? "A worker"} is pushing{" "}
-        <code>{request.branch}</code>.
+        <PushTarget request={request} />.
       </Alert>
     );
   }

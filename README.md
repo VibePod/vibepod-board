@@ -68,7 +68,8 @@ Opening and reading pull requests uses the same `GITHUB_TOKEN` as issue sync (se
 Workers commit on local branches, and the board has no access to the repositories, so a
 worker on the host pushes the branch with the user's git credentials when the board asks with
 a **push request**. A request names the card's `branch`, the commit to push (`headSha`, the
-approved head; null pushes the local branch tip), the task's `repositoryLocalPath`,
+card's handed-over head; null, which pushes the local branch tip, only when the card has no
+known head), the task's `repositoryLocalPath`,
 `repositoryRemoteUrl` and GitHub `repository`, its `reason` (`approved` or `open_pr`) and
 `status` (`pending`, `claimed`, `pushed` or `failed`), with its `assignee` and
 `leaseExpiresAt`, the `pushedSha`, an `error`, and the `pullRequestUrl` the board opened after
@@ -82,9 +83,11 @@ the push. Empty fields are sent as `null`.
   reviewer does not report within the lease, the request opens to every worker.
 - **On Open PR.** `POST /api/board/:id/push-request` with
   `{"openPr": {"title", "body", "base", "draft"}}` (MCP `request_branch_push`) asks any worker
-  of the project; the board opens that PR once the branch is pushed. The card needs a branch,
-  and `openPr` needs it in PR ready (`409` otherwise). A request still `pending` or `claimed`
-  for the card is returned instead of a new one, with the `openPr` options added.
+  of the project to push the card's head commit; the board opens that PR once the branch is
+  pushed. The card needs a branch, and `openPr` needs it in PR ready (`409` otherwise). A
+  request still `pending` or `claimed` for the card is returned instead of a new one, with the
+  `openPr` options added; a pending one from before the card's latest hand-over is moved to its
+  head, and one a worker holds for an older commit is refused (`409`) until it is reported.
   `GET /api/board/:id/push-request` (`get_push_request`) returns the card's latest request, or
   `404`.
 - **Workers.** Every heartbeat reply carries `pushRequests`: the project's pending requests

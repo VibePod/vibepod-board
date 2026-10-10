@@ -30,6 +30,7 @@ from vibepod_board.schemas import now
 from vibepod_board.services import (
     board,
     claims,
+    conversation,
     history,
     ideas,
     projects,
@@ -261,6 +262,61 @@ def test_a_card_has_one_open_request_at_a_time(session: Session, vp) -> None:
         SHA,
     )
     assert push_requests.latest_push_request(session, ADMIN, task.id).id == first.id
+
+
+def handed_over_again(session: Session, task, head: str) -> None:
+    """Sends the task back for rework and hands it over again, to Review, at `head`."""
+    conversation.request_rework(session, ADMIN, task.id, "One more thing")
+    claims.claim_task(session, ADMIN, "VP", RUNNER, task=task.id)
+    claims.hand_over_task(session, ADMIN, task.id, RUNNER, branch_name="vp-1", head_sha=head)
+
+
+def test_open_pr_pushes_the_handed_over_commit(
+    github_api: TestClient, session: Session, vp
+) -> None:
+    projects.update_project_settings(session, ADMIN, "VP", push_approved_branches=False)
+    task = in_review(session, vp)
+    approve(session, task)
+    card_id = board.get_card(session, ADMIN, task.id).id
+    token = tokens.create_token(session, "Worker", [vp.id]).token
+
+    created = github_api.post(
+        f"/api/board/{card_id}/push-request",
+        json={"openPr": {"title": "Ship it", "base": "main"}},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+
+    assert created["headSha"] == SHA
+    messages = [event.message for event in history.list_task_history(session, ADMIN, task.id)]
+    assert any(message.startswith(f"Push of vp-1 at {SHA[:12]} requested") for message in messages)
+
+
+def test_a_pending_request_follows_the_card_to_its_new_head(session: Session, vp) -> None:
+    projects.update_project_settings(session, ADMIN, "VP", push_approved_branches=False)
+    task = in_review(session, vp)
+    approve(session, task)
+    first = push_requests.request_push(session, ADMIN, task.id)
+    handed_over_again(session, task, PUSHED)
+
+    again = push_requests.request_push(session, ADMIN, task.id)
+
+    assert (again.id, again.status, again.head_sha) == (first.id, PushStatus.PENDING, PUSHED)
+
+
+def test_a_held_request_for_an_older_commit_is_not_returned_as_the_head(
+    session: Session, vp
+) -> None:
+    projects.update_project_settings(session, ADMIN, "VP", push_approved_branches=False)
+    task = in_review(session, vp)
+    approve(session, task)
+    first = push_requests.request_push(session, ADMIN, task.id)
+    push_requests.claim_push_request(session, ADMIN, first.id, OTHER)
+    handed_over_again(session, task, PUSHED)
+
+    with pytest.raises(Conflict, match=f"{OTHER} is pushing vp-1 at {SHA[:12]}"):
+        push_requests.request_push(session, ADMIN, task.id)
+    push_requests.report_result(session, ADMIN, first.id, OTHER, PushStatus.PUSHED)
+    assert push_requests.request_push(session, ADMIN, task.id).head_sha == PUSHED
 
 
 def test_requests_need_a_branch_and_pull_requests_need_pr_ready(session: Session, vp) -> None:

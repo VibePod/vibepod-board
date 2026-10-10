@@ -199,6 +199,18 @@ def _new_request(
     return row
 
 
+def _move_to_head(row: PushRequestRow, card: BoardCardRow, timestamp: datetime) -> bool:
+    """Points a pending request nobody holds at the card's head commit, which moved on since
+    it was asked for (a later hand-over). A request a worker holds is left alone: it may be
+    pushing already. Says whether the request now is for the head."""
+    if row.status != PushStatus.PENDING or row.assignee:
+        return row.head_sha == card.head_sha
+    if row.head_sha != card.head_sha:
+        row.head_sha = card.head_sha
+        row.updated_at = timestamp
+    return True
+
+
 def _locked_card(session: Session, access: AccessContext, reference: str) -> BoardCardRow:
     found = require_active_card(session, access, reference)
     # Task before card, the order every write takes.
@@ -214,12 +226,15 @@ def request_push(
     reference: str,
     open_pr: dict[str, Any] | None = None,
 ) -> PushRequest:
-    """Asks the project's workers to push the card's branch, at the commit the reviewers
-    approved when there is one. With `open_pr` (title, body, base, draft; each optional) the
-    board opens the pull request once the branch is pushed, which needs the card in PR ready.
+    """Asks the project's workers to push the card's branch at its handed-over head commit,
+    not whatever the worker's local branch points to; only a card without a known head asks
+    for the branch tip. With `open_pr` (title, body, base, draft; each optional) the board
+    opens the pull request once the branch is pushed, which needs the card in PR ready.
 
     A request already pending or claimed for the card is returned instead of a new one; the
-    pull request options of this call are added to it."""
+    pull request options of this call are added to it. A pending one asked for before the
+    card's latest hand-over is moved to its head; one a worker holds for an older commit is
+    refused until that push is reported."""
     card = _locked_card(session, access, reference)
     if not card.branch_name:
         raise Conflict("Set the card's branch before asking for a push")
@@ -232,6 +247,13 @@ def request_push(
     timestamp = now()
     _sweep(session, timestamp, card_id=card.id)
     existing = _active_of(session, card.id)
+    if existing is not None and existing.head_sha != card.head_sha:
+        if not _move_to_head(existing, card, timestamp):
+            raise Conflict(
+                f"{existing.assignee} is pushing {existing.branch} at "
+                f"{_short(existing.head_sha)}, not the card's head {_short(card.head_sha)}; "
+                "ask again once that push is reported"
+            )
     if existing is not None:
         if options is not None:
             existing.open_pr = options
