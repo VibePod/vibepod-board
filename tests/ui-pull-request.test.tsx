@@ -300,6 +300,33 @@ describe("pushing a branch that is not on GitHub", () => {
     expect(screen.getAllByText("local only")).toHaveLength(2);
     expect(screen.getAllByText("on GitHub")).toHaveLength(1);
   });
+
+  it("counts a branch with a linked pull request as on GitHub", () => {
+    render(
+      <MantineProvider>
+        <BranchPushBadge
+          card={{ headSha: "a".repeat(40), githubPrNumber: 7 }}
+        />
+        <BranchPushBadge
+          card={{
+            headSha: "b".repeat(40),
+            branchPushedSha: "a".repeat(40),
+            githubPrNumber: 8,
+          }}
+        />
+      </MantineProvider>,
+    );
+
+    expect(screen.queryByText("local only")).toBeNull();
+    const badges = screen.getAllByText("on GitHub");
+    expect(badges).toHaveLength(2);
+    expect(badges[0].closest("[title]")?.getAttribute("title")).toBe(
+      "On GitHub with pull request #7",
+    );
+    expect(badges[1].closest("[title]")?.getAttribute("title")).toBe(
+      "On GitHub with pull request #8",
+    );
+  });
 });
 
 describe("the suggested pull request", () => {

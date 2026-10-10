@@ -105,7 +105,8 @@ the push. Empty fields are sent as `null`.
   report). A lease that runs out puts the request back to `pending` with no assignee, swept
   whenever requests are read.
 - **Outcome.** `pushed` records `branchPushedSha` and `branchPushedAt` on the card, and PR ready
-  cards show **on GitHub** or **local only**. A request with PR options then opens the PR and
+  cards show **on GitHub** (pushed at the card's head, or a pull request is linked) or
+  **local only**. A request with PR options then opens the PR and
   stores its link in `pullRequestUrl`; when that fails, the request stays `pushed` with the
   reason in `error`. `failed` keeps the error and ends the request, so a new one can be made.
   The history records `push_requested`, `branch_pushed` and `push_failed` events.

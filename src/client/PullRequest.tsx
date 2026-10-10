@@ -76,24 +76,51 @@ export const PullRequestBadge = ({
   );
 };
 
-/**
- * Whether the card's branch is on GitHub as far as the board knows: a worker
- * reported pushing it, at the card's head commit when it has one.
- */
-export const branchPushed = (
-  card: Pick<BoardCard, "branchPushedSha" | "headSha">,
-): boolean => {
+/** Whether a worker reported pushing the card's head commit (any commit when it has none). */
+const headPushed = (card: Pick<BoardCard, "branchPushedSha" | "headSha">) => {
   const pushed = card.branchPushedSha;
   if (!pushed) return false;
   const head = card.headSha;
   return !head || head.startsWith(pushed) || pushed.startsWith(head);
 };
 
-/** "on GitHub" once a worker pushed the card's head commit, else "local only". */
+const hasPullRequest = (card: Pick<BoardCard, "githubPrNumber">) =>
+  card.githubPrNumber !== undefined && card.githubPrNumber !== null;
+
+/**
+ * Whether the card's branch is on GitHub as far as the board knows: a worker
+ * reported pushing it, at the card's head commit when it has one, or a pull
+ * request is linked for it, which needs the branch on GitHub whoever pushed it.
+ */
+export const branchPushed = (
+  card: Pick<BoardCard, "branchPushedSha" | "headSha" | "githubPrNumber">,
+): boolean => headPushed(card) || hasPullRequest(card);
+
+const pushedTitle = (
+  card: Pick<
+    BoardCard,
+    "branchPushedSha" | "branchPushedAt" | "headSha" | "githubPrNumber"
+  >,
+): string => {
+  if (headPushed(card) && card.branchPushedSha) {
+    return `Pushed ${card.branchPushedSha.slice(0, 12)}${
+      card.branchPushedAt ? ` on ${formatSuggestedAt(card.branchPushedAt)}` : ""
+    }`;
+  }
+  if (hasPullRequest(card)) {
+    return `On GitHub with pull request #${card.githubPrNumber}`;
+  }
+  return "Not pushed to GitHub by a worker yet";
+};
+
+/** "on GitHub" once a worker pushed the card's head commit or a PR is linked, else "local only". */
 export const BranchPushBadge = ({
   card,
 }: {
-  card: Pick<BoardCard, "branchPushedSha" | "branchPushedAt" | "headSha">;
+  card: Pick<
+    BoardCard,
+    "branchPushedSha" | "branchPushedAt" | "headSha" | "githubPrNumber"
+  >;
 }) => {
   const pushed = branchPushed(card);
   return (
@@ -109,15 +136,7 @@ export const BranchPushBadge = ({
           <HardDrive size={12} aria-hidden />
         )
       }
-      title={
-        pushed && card.branchPushedSha
-          ? `Pushed ${card.branchPushedSha.slice(0, 12)}${
-              card.branchPushedAt
-                ? ` on ${formatSuggestedAt(card.branchPushedAt)}`
-                : ""
-            }`
-          : "Not pushed to GitHub by a worker yet"
-      }
+      title={pushedTitle(card)}
       style={{ textTransform: "none" }}
     >
       {pushed ? "on GitHub" : "local only"}
