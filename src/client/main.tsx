@@ -13,8 +13,10 @@ import {
   FileInput,
   Group,
   MantineProvider,
+  Menu,
   Modal,
   MultiSelect,
+  NativeSelect,
   NumberInput,
   Paper,
   SegmentedControl,
@@ -31,9 +33,11 @@ import {
   useMantineColorScheme,
 } from "@mantine/core";
 import "@mantine/core/styles.css";
+import { useMediaQuery } from "@mantine/hooks";
 import {
   Archive,
   ArchiveRestore,
+  ArrowRightLeft,
   Ban,
   ChevronLeft,
   ChevronRight,
@@ -113,6 +117,12 @@ import {
   resolveAssigneeFilter,
 } from "./assigneeFilterUtils.js";
 import { failedAttemptsLabel, formatClaimedSince } from "./automationUtils.js";
+import {
+  defaultBoardColumn,
+  phoneBoardQuery,
+  readBoardColumn,
+  writeBoardColumn,
+} from "./boardColumnPicker.js";
 import { AnswerDialog, ReworkDialog } from "./ConversationDialogs.js";
 import { CopyableCode } from "./CopyableCode.js";
 import { DeleteTaskDialog, type DeleteTaskTarget } from "./DeleteTaskDialog.js";
@@ -848,6 +858,44 @@ const App = () => {
     activeAssigneeFilter,
   ]);
   const isBoardFiltered = visibleProjectColumns !== projectColumns;
+  // Phones show one column at a time, picked from a dropdown and remembered per project.
+  const isPhoneBoard = useMediaQuery(phoneBoardQuery, false, {
+    getInitialValueInEffect: false,
+  });
+  const [pickedBoardColumns, setPickedBoardColumns] = useState<
+    Record<string, BoardColumn>
+  >({});
+  const shownBoardColumn: BoardColumn | null = selectedProject
+    ? (pickedBoardColumns[selectedProject.id] ??
+      readBoardColumn(selectedProject.id) ??
+      defaultBoardColumn(projectColumns))
+    : null;
+  // The default is settled once the board has loaded, so a card moving out of the
+  // shown column (by hand or by a worker) does not switch the column under the user.
+  useEffect(() => {
+    if (!selectedProject || loadCount === 0) return;
+    const projectId = selectedProject.id;
+    setPickedBoardColumns((current) =>
+      current[projectId]
+        ? current
+        : {
+            ...current,
+            [projectId]:
+              readBoardColumn(projectId) ?? defaultBoardColumn(projectColumns),
+          },
+    );
+  }, [selectedProject, loadCount, projectColumns]);
+  const pickBoardColumn = (column: BoardColumn) => {
+    if (!selectedProject) return;
+    writeBoardColumn(selectedProject.id, column);
+    setPickedBoardColumns((current) => ({
+      ...current,
+      [selectedProject.id]: column,
+    }));
+  };
+  const shownColumns = isPhoneBoard
+    ? boardColumns.filter((column) => column === shownBoardColumn)
+    : boardColumns;
   const workerByTask = useMemo(() => workingWorkersByTask(workers), [workers]);
   const projectDocuments = selectedProject
     ? state.documents.filter(
@@ -1746,13 +1794,9 @@ const App = () => {
     await loadState();
   };
 
-  const dropCard = async (column: BoardColumn) => {
-    const card = boardColumns
-      .flatMap((boardColumn) => projectColumns[boardColumn] ?? [])
-      .find((item) => item.id === draggingCardId);
-    setDraggingCardId("");
-    setDragOverColumn(null);
-    if (!card || card.column === column) {
+  /** A move by hand, dragged or picked from a card's Move to menu. */
+  const moveCardByHand = async (card: BoardCard, column: BoardColumn) => {
+    if (card.column === column) {
       return;
     }
     // A reviewed task goes back with feedback, so the next run knows what to change.
@@ -1764,6 +1808,17 @@ const App = () => {
       return;
     }
     await moveCard(card, column);
+  };
+
+  const dropCard = async (column: BoardColumn) => {
+    const card = boardColumns
+      .flatMap((boardColumn) => projectColumns[boardColumn] ?? [])
+      .find((item) => item.id === draggingCardId);
+    setDraggingCardId("");
+    setDragOverColumn(null);
+    if (card) {
+      await moveCardByHand(card, column);
+    }
   };
 
   const saveNote = async (event: FormEvent) => {
@@ -2407,8 +2462,29 @@ const App = () => {
                 }
               />
             </Paper>
-            <div className="board">
-              {boardColumns.map((column) => (
+            {isPhoneBoard && shownBoardColumn && (
+              <Paper
+                className="board-column-picker"
+                withBorder
+                radius="md"
+                p="sm"
+              >
+                <NativeSelect
+                  label="Column"
+                  size="md"
+                  value={shownBoardColumn}
+                  onChange={(event) =>
+                    pickBoardColumn(event.currentTarget.value as BoardColumn)
+                  }
+                  data={boardColumns.map((column) => ({
+                    value: column,
+                    label: `${columnLabels[column]} (${visibleProjectColumns[column]?.length ?? 0})`,
+                  }))}
+                />
+              </Paper>
+            )}
+            <div className={`board ${isPhoneBoard ? "is-single-column" : ""}`}>
+              {shownColumns.map((column) => (
                 <Paper
                   className={`column ${dragOverColumn === column ? "drop-active" : ""}`}
                   withBorder
@@ -2487,7 +2563,7 @@ const App = () => {
                           radius="md"
                           role="button"
                           tabIndex={0}
-                          draggable
+                          draggable={!isPhoneBoard}
                           aria-grabbed={draggingCardId === card.id}
                           onClick={() => openCardTask(card)}
                           onDragStart={(event) => {
@@ -2510,7 +2586,74 @@ const App = () => {
                           }}
                         >
                           <Stack gap="xs">
-                            <Title order={4}>{card.title}</Title>
+                            {isPhoneBoard ? (
+                              <Group
+                                gap="xs"
+                                justify="space-between"
+                                wrap="nowrap"
+                                align="flex-start"
+                              >
+                                <Title order={4}>{card.title}</Title>
+                                <Menu position="bottom-end" withinPortal>
+                                  <Menu.Target>
+                                    <ActionIcon
+                                      variant="subtle"
+                                      color="gray"
+                                      size="md"
+                                      aria-label={`Move ${card.title} to…`}
+                                      title="Move to…"
+                                      onClick={(event) =>
+                                        event.stopPropagation()
+                                      }
+                                      onKeyDown={(event) =>
+                                        event.stopPropagation()
+                                      }
+                                    >
+                                      <ArrowRightLeft size={16} />
+                                    </ActionIcon>
+                                  </Menu.Target>
+                                  <Menu.Dropdown
+                                    onClick={(event) => event.stopPropagation()}
+                                    onKeyDown={(event) =>
+                                      event.stopPropagation()
+                                    }
+                                  >
+                                    <Menu.Label>Move to…</Menu.Label>
+                                    {boardColumns
+                                      .filter((target) => target !== column)
+                                      .map((target) => (
+                                        <Menu.Item
+                                          key={target}
+                                          onClick={() => {
+                                            // An answer is what puts a waiting task back in Planned.
+                                            if (
+                                              card.question &&
+                                              target === "planned"
+                                            ) {
+                                              setAnswerTarget(card);
+                                              return;
+                                            }
+                                            void moveCardByHand(
+                                              card,
+                                              target,
+                                            ).catch((err) =>
+                                              setError(
+                                                err instanceof Error
+                                                  ? err.message
+                                                  : "Failed to move card",
+                                              ),
+                                            );
+                                          }}
+                                        >
+                                          {columnLabels[target]}
+                                        </Menu.Item>
+                                      ))}
+                                  </Menu.Dropdown>
+                                </Menu>
+                              </Group>
+                            ) : (
+                              <Title order={4}>{card.title}</Title>
+                            )}
                             {column === "in_progress" &&
                               card.ideaId &&
                               workerByTask.has(card.ideaId) && (
