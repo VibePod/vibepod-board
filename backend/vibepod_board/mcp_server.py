@@ -806,8 +806,9 @@ def create_mcp_server(
         "be claimed, and the full task and card when something was. With mode review it takes "
         "the next task in Review for a review instead: the card stays in Review, and the "
         "result's review names the headSha to judge. Tasks without a branch, blocked tasks, "
-        "tasks you already reviewed at their head commit and tasks with enough approvals and "
-        "open reviews are skipped. Report the verdict with submit_review.",
+        "tasks you already approved or sent back at their head commit, tasks whose review you "
+        "failed less than 10 minutes ago and tasks with enough approvals and open reviews are "
+        "skipped. Report the verdict with submit_review.",
     )
     def claim_next_task(
         projectId: Annotated[  # noqa: N803

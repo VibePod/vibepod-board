@@ -499,7 +499,69 @@ def test_a_failed_review_counts_no_attempt(session: Session, vp) -> None:
     failed = card(session, task)
     assert (failed.column, failed.attempts) == (BoardColumn.REVIEW, 0)
     assert kinds(session, task)[0] == TaskEventKind.REVIEW_ENDED
+
+
+def age_reviews(session: Session, task, by: timedelta) -> None:
+    """Moves the end of the task's ended reviews back by `by`, as if that much time passed."""
+    session.execute(
+        text(
+            "update task_reviews set ended_at = ended_at - :by "
+            "where idea_id = :id and ended_at is not null"
+        ),
+        {"id": task.id, "by": by},
+    )
+    session.commit()
+
+
+def test_a_failed_review_is_retried_after_the_cooldown(session: Session, vp) -> None:
+    require(session, 2)
+    task = in_review(session, vp, "Model API unreachable")
+    review(session)
+    verdict(session, task, CLAUDE, ReviewVerdict.FAILED, sha=None, note="EAI_AGAIN")
+
     assert review(session).claimed is False
+    with pytest.raises(Conflict, match="failed; it may retry from"):
+        review(session, task=task.id)
+    # Another reviewer is not held back by it.
+    assert review(session, CODEX).claimed
+
+    age_reviews(session, task, reviews.FAILED_REVIEW_COOLDOWN - timedelta(minutes=1))
+    assert review(session).claimed is False
+    age_reviews(session, task, timedelta(minutes=1))
+
+    retried = review(session)
+    assert retried.claimed and retried.item.task.key == "VP-1"
+    assert retried.review.head_sha == SHA
+
+
+def test_a_released_or_cancelled_review_is_retried_at_once(session: Session, vp) -> None:
+    task = in_review(session, vp, "Ended without deciding")
+    first = review(session).review
+    reviews.cancel_review(session, ADMIN, task.id, first.id, "Wrong model")
+
+    assert review(session).claimed
+    verdict(session, task, CLAUDE, ReviewVerdict.RELEASED, sha=None)
+
+    assert review(session).claimed
+    # Once the cooldown of a failure is over, the release that follows it adds no wait.
+    verdict(session, task, CLAUDE, ReviewVerdict.FAILED, sha=None)
+    age_reviews(session, task, reviews.FAILED_REVIEW_COOLDOWN)
+    assert review(session).claimed
+    verdict(session, task, CLAUDE, ReviewVerdict.RELEASED, sha=None)
+    assert review(session).claimed
+
+
+def test_a_rework_verdict_settles_the_head_for_its_reviewer(session: Session, vp) -> None:
+    require(session, 1, 3)
+    task = in_review(session, vp, "Rework then back at the same head")
+    review(session)
+    verdict(session, task, CLAUDE, ReviewVerdict.REWORK, note="Fix it")
+    # Handed over again at the same commit: the rework verdict still stands for that reviewer.
+    hand_over_again(session, task, SHA)
+
+    assert review(session).claimed is False
+    with pytest.raises(Conflict, match="already reviewed"):
+        review(session, task=task.id)
     assert review(session, CODEX).claimed
 
 

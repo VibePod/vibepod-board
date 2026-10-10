@@ -14,7 +14,8 @@ requires. Any rework verdict sends it back to Planned with the feedback and ends
 reviews; after `max_review_rounds` rework verdicts in a row it is blocked in Review for a human
 instead. A question for a human blocks it as well and ends the other open reviews; a blocked
 task takes no verdict until someone acts on it. A hand-over on a new commit starts the approval
-count over, and a verdict for another commit is refused.
+count over, and a verdict for another commit is refused. A reviewer is not handed a head commit
+again once it approved it or sent it back; after a failed review, only once a cooldown passed.
 
 Review claims are serialised on the project row like implementation claims, and every write to
 a review locks its task, its card and then the review, so counting approvals and open reviews
@@ -73,8 +74,15 @@ from vibepod_board.tables import (
 
 NOTHING_TO_REVIEW = "No task in review can be claimed for a review"
 # Verdicts that settle a reviewer's view of a head commit: it is not handed that commit again.
-# A released review or a question leaves the reviewer free to look again.
-SETTLED = (ReviewVerdict.APPROVE, ReviewVerdict.REWORK, ReviewVerdict.FAILED)
+# A review that ended without deciding (failed, released, expired or cancelled) leaves the
+# reviewer free to look again, and so does a question once it is answered: the card is blocked
+# until then, and the answer is what the reviewer was missing.
+SETTLED = (ReviewVerdict.APPROVE, ReviewVerdict.REWORK)
+# How long a reviewer whose last review of a head commit failed waits before it is handed that
+# commit again. A failure is often transient (the agent could not reach its model API, say), so
+# it may retry, but not at once: a failure that persists would otherwise turn into a claim,
+# fail, claim loop on the same card.
+FAILED_REVIEW_COOLDOWN = timedelta(minutes=10)
 
 
 def _settled_by(session: Session, card: BoardCardRow, reviewer: str) -> bool:
@@ -91,6 +99,26 @@ def _settled_by(session: Session, card: BoardCardRow, reviewer: str) -> bool:
         ).first()
         is not None
     )
+
+
+def _failed_retry_at(session: Session, card: BoardCardRow, reviewer: str) -> datetime | None:
+    """When the reviewer may review the card's head commit again after its last review of it
+    failed, or None when that review did not fail or the cooldown is over."""
+    last = session.exec(
+        select(TaskReviewRow)
+        .where(
+            TaskReviewRow.idea_id == card.idea_id,
+            TaskReviewRow.reviewer == reviewer,
+            col(TaskReviewRow.ended_at).is_not(None),
+            *_at_head(card),
+        )
+        .order_by(col(TaskReviewRow.ended_at).desc(), col(TaskReviewRow.id).desc())
+        .limit(1)
+    ).first()
+    if last is None or last.verdict != ReviewVerdict.FAILED or last.ended_at is None:
+        return None
+    retry_at = last.ended_at + FAILED_REVIEW_COOLDOWN
+    return retry_at if retry_at > now() else None
 
 
 def _review_obstacle(
@@ -125,6 +153,12 @@ def _review_obstacle(
         return f"{reviewer} is already reviewing it"
     if _settled_by(session, card, reviewer):
         return f"{reviewer} already reviewed {short_sha(card.head_sha)}"
+    retry_at = _failed_retry_at(session, card, reviewer)
+    if retry_at is not None:
+        return (
+            f"the last review by {reviewer} of {short_sha(card.head_sha)} failed; "
+            f"it may retry from {retry_at:%Y-%m-%d %H:%M} UTC"
+        )
     approved = len(approvers(session, card))
     if approved + len(reviews) >= project.required_approvals:
         return (

@@ -537,6 +537,9 @@ such as a Claude and a Codex one, can review the same task at once.
     workers are told to `cancel`.
   - `needs_input` (`note` is the question) blocks the card in Review; answering unblocks it
     there, and the reviewer that asked may review it again. `failed` and `released` end the review without judging the task.
+    Only `approve` and `rework` count as having reviewed the head commit: after a `released`,
+    cancelled or expired review the reviewer may claim the card again at once, and after a
+    `failed` one once 10 minutes have passed.
 - **Loop guard.** The card counts rework verdicts in a row (`reviewRounds`). The one that
   reaches `maxReviewRounds` blocks the task in Review for a human instead of sending it back.
   An approval to PR ready or moving the card by hand resets the count.
