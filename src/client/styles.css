@@ -1229,6 +1229,35 @@ body {
   .nav {
     grid-template-columns: 1fr;
   }
+
+  /* The stacked top bar would cover most of a phone screen, so the column picker
+     holds the top instead. */
+  .app-topbar {
+    position: static;
+  }
+}
+
+/* Phones: one column at a time, picked from a dropdown that stays at the top. */
+.board-column-picker {
+  background: var(--app-surface);
+  border-color: var(--app-border);
+  position: sticky;
+  top: env(safe-area-inset-top, 0px);
+  z-index: 10;
+}
+
+.board.is-single-column {
+  grid-template-columns: minmax(0, 1fr);
+  overflow-x: visible;
+}
+
+.board.is-single-column .column {
+  min-height: 0;
+  min-width: 0;
+}
+
+.board.is-single-column .compact-card {
+  cursor: pointer;
 }
 
 /* Event badges share one column, so the messages line up. */
