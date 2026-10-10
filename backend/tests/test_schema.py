@@ -376,3 +376,85 @@ def test_0015_leaves_cards_unpushed_and_pushes_approved_branches(empty_db: Engin
     assert "push_requests" not in table_names(empty_db)
     assert "branch_pushed_sha" not in column_names(empty_db, "board_cards")
     assert "push_approved_branches" not in column_names(empty_db, "projects")
+
+
+def early_suggested_pr_database(engine: Engine) -> None:
+    """A database an early build migrated: 0011, then its own 0012 adding the suggested pull
+    request columns, which are 0014 now."""
+    from alembic import command
+
+    from vibepod_board.db import alembic_config
+
+    config = alembic_config()
+    with engine.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "0011")
+        for name, type_ in [
+            ("suggested_pr_title", "text"),
+            ("suggested_pr_body", "text"),
+            ("suggested_pr_by", "text"),
+            ("suggested_pr_at", "timestamptz"),
+        ]:
+            connection.execute(text(f"alter table board_cards add column {name} {type_}"))
+        connection.execute(
+            text(
+                "insert into projects (id, key, title, created_at, updated_at) "
+                "values ('p1', 'APP', 'App', now(), now())"
+            )
+        )
+        connection.execute(
+            text(
+                "insert into board_cards (id, project_id, title, column_name, created_at, "
+                "updated_at, suggested_pr_title, suggested_pr_body, suggested_pr_by, "
+                "suggested_pr_at) values "
+                "('c1', 'p1', 'Suggested', 'review', now(), now(), 'Add it', 'Body', "
+                "'Claude::Runner', '2026-10-01T08:00:00Z'), "
+                "('c2', 'p1', 'Plain', 'planned', now(), now(), null, null, null, null)"
+            )
+        )
+        connection.execute(text("update alembic_version set version_num = '0012'"))
+
+
+def test_repairs_a_database_migrated_by_the_early_suggested_pr_migration(
+    empty_db: Engine, caplog
+) -> None:
+    early_suggested_pr_database(empty_db)
+
+    with caplog.at_level("WARNING", logger="vibepod_board.db"):
+        migrate(empty_db)
+
+    assert revision(empty_db) == HEAD
+    assert {"kind", "verdict", "feedback"} <= set(column_names(empty_db, "task_runs"))
+    assert not [name for name in column_names(empty_db, "board_cards") if "legacy" in name]
+    assert schema_diff(empty_db) == []
+    with empty_db.connect() as connection:
+        rows = connection.execute(
+            text(
+                "select id, suggested_pr_title, suggested_pr_body, suggested_pr_by, "
+                "suggested_pr_at from board_cards order by id"
+            )
+        ).all()
+    assert [tuple(row) for row in rows] == [
+        ("c1", "Add it", "Body", "Claude::Runner", datetime(2026, 10, 1, 8, tzinfo=UTC)),
+        ("c2", None, None, None, None),
+    ]
+    assert [record.message for record in caplog.records if "early build" in record.message]
+
+
+def test_leaves_a_database_at_the_real_0012_alone(empty_db: Engine, caplog) -> None:
+    from alembic import command
+
+    from vibepod_board.db import alembic_config
+
+    config = alembic_config()
+    with empty_db.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "0012")
+
+    with caplog.at_level("WARNING", logger="vibepod_board.db"):
+        migrate(empty_db)
+        migrate(empty_db)
+
+    assert revision(empty_db) == HEAD
+    assert schema_diff(empty_db) == []
+    assert not [record for record in caplog.records if "early build" in record.message]
