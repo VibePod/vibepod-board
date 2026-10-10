@@ -68,7 +68,11 @@ def get_board(
         assignee=split_list(assignee),
         unassigned=unassigned,
     )
-    return Columns(columns=board.board_columns(session, access, filters=filters))
+    columns = board.board_columns(session, access, filters=filters)
+    states = reviews.board_review_states(session, columns.review)
+    for card in columns.review:
+        card.review_state = states.get(card.id)
+    return Columns(columns=columns)
 
 
 @router.get("/archived")

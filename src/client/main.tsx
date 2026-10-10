@@ -2697,6 +2697,7 @@ const App = () => {
                               <TaskReviews
                                 compact
                                 cardId={card.id}
+                                state={card.reviewState}
                                 reloadKey={`${card.updatedAt}|${loadCount}`}
                                 onChanged={() => loadState()}
                               />

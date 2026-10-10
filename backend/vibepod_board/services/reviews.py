@@ -24,13 +24,13 @@ never races a verdict.
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 
-from sqlalchemy import update
+from sqlalchemy import or_, update
 from sqlmodel import Session, col, select
 
 from vibepod_board.access import AccessContext, assert_can_access_project
 from vibepod_board.enums import BoardColumn, IdeaStatus, ReviewVerdict, TaskEventKind
 from vibepod_board.errors import BadRequest, Conflict, NotFound
-from vibepod_board.schemas import ClaimResult, ReviewState, TaskReview, now
+from vibepod_board.schemas import BoardCard, ClaimResult, ReviewState, TaskReview, now
 from vibepod_board.services.claims import (
     DEFAULT_LEASE_SECONDS,
     _card_of,
@@ -76,6 +76,7 @@ def _settled_by(session: Session, card: BoardCardRow, reviewer: str) -> bool:
             .where(
                 TaskReviewRow.idea_id == card.idea_id,
                 TaskReviewRow.reviewer == reviewer,
+                col(TaskReviewRow.actor_identity).is_(None),
                 col(TaskReviewRow.verdict).in_(list(SETTLED)),
                 *_at_head(card),
             )
@@ -534,3 +535,57 @@ def renew_reviews_of(
         )
         .values(lease_expires_at=expires_at, worker_id=worker_id)
     )
+
+
+def board_review_states(session: Session, cards: list[BoardCard]) -> dict[str, ReviewState]:
+    """Compact review state in two queries, independent of the number of cards."""
+    cards = [card for card in cards if card.idea_id]
+    if not cards:
+        return {}
+    timestamp = now()
+    projects = {
+        p.id: p
+        for p in session.exec(
+            select(ProjectRow).where(col(ProjectRow.id).in_({c.project_id for c in cards}))
+        ).all()
+    }
+    rows = session.exec(
+        select(TaskReviewRow).where(
+            col(TaskReviewRow.idea_id).in_({c.idea_id for c in cards}),
+            or_(
+                TaskReviewRow.verdict == ReviewVerdict.APPROVE,
+                col(TaskReviewRow.ended_at).is_(None),
+            ),
+        )
+    ).all()
+    grouped = {}
+    for row in rows:
+        grouped.setdefault(row.idea_id, []).append(row)
+    result = {}
+    for card in cards:
+        project = projects[card.project_id]
+        approvals = {}
+        opened = []
+        for row in grouped.get(card.idea_id, []):
+            current = row.head_sha == card.head_sha and (
+                card.head_sha is not None
+                or card.handed_over_at is None
+                or row.created_at >= card.handed_over_at
+            )
+            if current and row.verdict == ReviewVerdict.APPROVE:
+                approvals.setdefault(row.actor_identity or f"worker:{row.reviewer}", row.reviewer)
+            if is_open(row, timestamp):
+                opened.append(review_from_row(row, at=timestamp))
+        result[card.id] = ReviewState(
+            task_id=card.idea_id,
+            column=card.column,
+            head_sha=card.head_sha,
+            required_approvals=project.required_approvals,
+            approvals=len(approvals),
+            approved_by=list(approvals.values()),
+            open_reviews=len(opened),
+            review_rounds=card.review_rounds,
+            max_review_rounds=project.max_review_rounds,
+            items=opened,
+        )
+    return result

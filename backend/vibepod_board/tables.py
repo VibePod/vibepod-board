@@ -266,6 +266,7 @@ class TaskReviewRow(SQLModel, table=True):
     idea_id: str = _foreign_key("ideas.id", "CASCADE")
     project_id: str = _foreign_key("projects.id", "CASCADE")
     reviewer: str = Field(sa_column=Column(Text, nullable=False))
+    actor_identity: str | None = _text()
     worker_id: str | None = _foreign_key("workers.id", "SET NULL", nullable=True)
     head_sha: str | None = _text()
     # The lease, renewed like a claim's; the review is open until `ended_at`.

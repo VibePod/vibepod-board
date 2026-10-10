@@ -14,7 +14,7 @@ from datetime import datetime
 
 from sqlmodel import Session
 
-from vibepod_board.access import AccessContext, assert_can_access_project
+from vibepod_board.access import AccessContext, AdminAccess, assert_can_access_project
 from vibepod_board.enums import BoardColumn, IdeaStatus, ReviewVerdict, TaskEventKind
 from vibepod_board.errors import BadRequest, Conflict
 from vibepod_board.schemas import BoardCard, now
@@ -123,7 +123,9 @@ def request_rework(
     timestamp = now()
     actor = actor_for(session, access)
     end_open_reviews(session, idea.id, timestamp, f"{actor} requested rework", actor)
-    record_manual_review(session, idea, card, actor, ReviewVerdict.REWORK, feedback, timestamp)
+    record_manual_review(
+        session, idea, card, actor, ReviewVerdict.REWORK, feedback, timestamp, access
+    )
     card.review_rounds += 1
     add_task_event(
         session,
@@ -161,6 +163,7 @@ def record_manual_review(
     verdict: ReviewVerdict,
     note: str | None,
     timestamp: datetime,
+    access: AccessContext,
 ) -> None:
     """Record a person's verdict at the locked card's current head."""
     session.add(
@@ -169,6 +172,11 @@ def record_manual_review(
             idea_id=idea.id,
             project_id=idea.project_id,
             reviewer=actor,
+            actor_identity=(
+                f"admin:{access.username}"
+                if isinstance(access, AdminAccess)
+                else f"token:{access.token_id}"
+            ),
             head_sha=card.head_sha,
             verdict=verdict,
             feedback=note or None,
@@ -193,14 +201,16 @@ def approve_review(
     assert_unchanged("Board card", expected_updated_at, card.updated_at)
     if card.column_name != BoardColumn.REVIEW or idea.status == IdeaStatus.DENIED:
         raise Conflict("Only tasks in Review can be approved")
-    if card.blocked_at is not None:
+    project = require_project(session, idea.project_id)
+    if card.blocked_at is not None and (
+        card.question or not (card.blocked_reason or "").startswith("Sent back for rework ")
+    ):
         raise Conflict("Answer or unblock the task before approving")
     actor = actor_for(session, access)
     timestamp = now()
     record_manual_review(
-        session, idea, card, actor, ReviewVerdict.APPROVE, (note or "").strip(), timestamp
+        session, idea, card, actor, ReviewVerdict.APPROVE, (note or "").strip(), timestamp, access
     )
-    project = require_project(session, idea.project_id)
     approvals = len(approvers(session, card))
     count = f"{approvals} of {project.required_approvals}"
     add_task_event(
@@ -213,8 +223,10 @@ def approve_review(
     )
     card.updated_at = timestamp
     idea.updated_at = timestamp
+    key = task_keys(session, [idea.id]).get(idea.id, idea.id)
     if approvals >= project.required_approvals:
-        key = task_keys(session, [idea.id]).get(idea.id, idea.id)
         move_to_pr_ready(session, idea, card, key, count, timestamp, actor)
+    else:
+        add_activity(session, "board.approved", f"{actor} approved {key} ({count})", timestamp)
     session.flush()
     return decorate_card(session, card_from_row(card))

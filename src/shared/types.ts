@@ -65,6 +65,7 @@ export type Idea = {
 };
 
 export type BoardCard = {
+  reviewState?: ReviewState;
   id: string;
   projectId: string;
   title: string;

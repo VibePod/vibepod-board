@@ -28,21 +28,24 @@ def upgrade() -> None:
     # report to the latest review finished during that attempt, avoiding earlier rounds.
     op.execute("""
         UPDATE task_runs AS report
-        SET verdict = matched.verdict, feedback = matched.feedback
+        SET kind = 'review', verdict = matched.verdict, feedback = matched.feedback
         FROM (
             SELECT DISTINCT ON (run.id) run.id, review.verdict, review.feedback
             FROM task_runs AS run
             JOIN task_reviews AS review
-              ON review.idea_id = run.idea_id AND review.worker_id = run.worker_id
+              ON review.idea_id = run.idea_id AND (review.worker_id = run.worker_id
+                  OR (review.worker_id IS NULL AND run.worker_id IS NULL
+                      AND review.reviewer = run.worker_name))
              AND review.ended_at <= run.created_at
              AND review.updated_at >= COALESCE(
                  run.started_at,
                  (SELECT MAX(previous.created_at) FROM task_runs AS previous
-                  WHERE previous.idea_id = run.idea_id AND previous.worker_id = run.worker_id
+                  WHERE previous.idea_id = run.idea_id
+                    AND previous.worker_name IS NOT DISTINCT FROM run.worker_name
+                    AND previous.worker_id IS NOT DISTINCT FROM run.worker_id
                     AND previous.created_at < run.created_at),
                  '-infinity'::timestamptz
              )
-            WHERE run.kind = 'review'
             ORDER BY run.id, review.updated_at DESC, review.id DESC
         ) AS matched
         WHERE report.id = matched.id

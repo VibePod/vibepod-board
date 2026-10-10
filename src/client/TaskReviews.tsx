@@ -1,8 +1,8 @@
 import { Badge, Button, Code, Group, Paper, Stack, Text } from "@mantine/core";
 import { useEffect, useState } from "react";
 import type { ReviewState } from "../shared/types.js";
-import { reviewVerdictColors, reviewVerdictLabels } from "./automationUtils.js";
 import { api } from "./api.js";
+import { reviewVerdictColors, reviewVerdictLabels } from "./automationUtils.js";
 import { MarkdownText } from "./Markdown.js";
 
 /** Both views read the same authoritative approvals and open review claims. */
@@ -11,11 +11,13 @@ export const TaskReviews = ({
   reloadKey,
   compact = false,
   onChanged,
+  state: suppliedState,
 }: {
   cardId: string;
   reloadKey: string;
   compact?: boolean;
   onChanged?: () => Promise<void>;
+  state?: ReviewState;
 }) => {
   const [loaded, setLoaded] = useState<{
     cardId: string;
@@ -26,6 +28,7 @@ export const TaskReviews = ({
   const [cancelling, setCancelling] = useState<string | null>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: reloadKey and version trigger a refresh
   useEffect(() => {
+    if (compact) return;
     let disposed = false;
     setError("");
     let request = 0;
@@ -52,8 +55,12 @@ export const TaskReviews = ({
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [cardId, reloadKey, version]);
-  const state = loaded?.cardId === cardId ? loaded.state : null;
+  }, [cardId, reloadKey, version, compact]);
+  const state = compact
+    ? suppliedState
+    : loaded?.cardId === cardId
+      ? loaded.state
+      : null;
   const cancel = async (id: string) => {
     setCancelling(id);
     try {

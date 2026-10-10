@@ -2,17 +2,20 @@
 import { MantineProvider } from "@mantine/core";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { TaskReviews } from "../src/client/TaskReviews.js";
+import { ApproveDialog } from "../src/client/ConversationDialogs.js";
 import { TaskHistory } from "../src/client/TaskHistory.js";
+import { TaskReviews } from "../src/client/TaskReviews.js";
 import { TaskRuns } from "../src/client/TaskRuns.js";
 import { WorkersList } from "../src/client/Workers.js";
-import { ApproveDialog } from "../src/client/ConversationDialogs.js";
-import type { BoardCard } from "../src/shared/types.js";
+import type { BoardCard, ReviewState } from "../src/shared/types.js";
+
 const timestamp = "2026-09-30T08:00:00Z";
 const response = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status });
-const reviewState = {
+const reviewState: ReviewState = {
   taskId: "task",
+  approvedBy: ["Carol"],
+  openReviews: 1,
   headSha: "abcdef123456",
   approvals: 1,
   requiredApprovals: 2,
@@ -24,6 +27,10 @@ const reviewState = {
       reviewer: "Alice",
       headSha: "abcdef123456",
       open: true,
+      ideaId: "task",
+      projectId: "project",
+      leaseExpiresAt: timestamp,
+      updatedAt: timestamp,
       createdAt: timestamp,
     },
     {
@@ -33,6 +40,10 @@ const reviewState = {
       open: false,
       verdict: "rework",
       feedback: "Fix the race",
+      ideaId: "task",
+      projectId: "project",
+      leaseExpiresAt: timestamp,
+      updatedAt: timestamp,
       createdAt: timestamp,
       endedAt: timestamp,
     },
@@ -43,6 +54,10 @@ const reviewState = {
       open: false,
       verdict: "approve",
       feedback: "Looks good",
+      ideaId: "task",
+      projectId: "project",
+      leaseExpiresAt: timestamp,
+      updatedAt: timestamp,
       createdAt: timestamp,
     },
   ],
@@ -90,7 +105,13 @@ it("shows current approvals and cancels one open reviewer without moving the car
   vi.stubGlobal("fetch", fetchMock);
   const changed = vi.fn(async () => {});
   mount(
-    <TaskReviews cardId="card" reloadKey="1" compact onChanged={changed} />,
+    <TaskReviews
+      cardId="card"
+      reloadKey="1"
+      compact
+      state={reviewState}
+      onChanged={changed}
+    />,
   );
   await screen.findByText("1/2 approvals");
   expect(screen.getByText("Review rounds: 2/3")).toBeTruthy();
@@ -98,7 +119,7 @@ it("shows current approvals and cancels one open reviewer without moving the car
   fireEvent.click(
     screen.getByRole("button", { name: "Cancel review by Alice" }),
   );
-  await waitFor(() => expect(screen.queryByText("Alice")).toBeNull());
+  await waitFor(() => expect(changed).toHaveBeenCalledOnce());
   expect(
     fetchMock.mock.calls.some(
       ([path, init]) =>
@@ -132,7 +153,9 @@ it("keeps cancellation errors visible", async () => {
         : response(reviewState),
     ),
   );
-  mount(<TaskReviews cardId="card" reloadKey="1" compact />);
+  mount(
+    <TaskReviews cardId="card" reloadKey="1" compact state={reviewState} />,
+  );
   fireEvent.click(
     await screen.findByRole("button", { name: "Cancel review by Alice" }),
   );
@@ -250,4 +273,16 @@ it("shows approvals and rework in history with reviewer actors and the round cou
   expect(screen.getByText(/Alice ·/)).toBeTruthy();
   expect(screen.getByText(/Bob ·/)).toBeTruthy();
   expect(screen.getByText("Review rounds: 1/3")).toBeTruthy();
+});
+
+it("renders compact board state without fetching or starting a review poll", () => {
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+  const interval = vi.spyOn(window, "setInterval");
+  mount(
+    <TaskReviews cardId="card" reloadKey="1" compact state={reviewState} />,
+  );
+  expect(screen.getByText("1/2 approvals")).toBeTruthy();
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(interval).not.toHaveBeenCalled();
 });

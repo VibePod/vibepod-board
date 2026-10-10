@@ -114,6 +114,16 @@ const boardApi = (reviewColumn: "review" | "pr_ready" = "review") => {
     ideaId: "idea-2",
     title: "Reviewed cache",
     column: reviewColumn,
+    reviewState: {
+      taskId: "idea-2",
+      approvals: 1,
+      requiredApprovals: 2,
+      approvedBy: ["Reviewer"],
+      openReviews: 0,
+      reviewRounds: 1,
+      maxReviewRounds: 3,
+      items: [],
+    },
     branchName: "issue-7",
   });
   const columns = (): BoardColumns => ({
