@@ -194,6 +194,48 @@ describe("the suggested pull request", () => {
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
 
+  it("saves against the version the edit started from", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ error: "Card changed" }, 409),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const onChange = vi.fn(async () => undefined);
+
+    const { rerender } = render(
+      <MantineProvider>
+        <SuggestedPullRequest card={suggested} editable onChange={onChange} />
+      </MantineProvider>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+    // A background reload brings in a concurrently edited version.
+    rerender(
+      <MantineProvider>
+        <SuggestedPullRequest
+          card={
+            {
+              ...suggested,
+              suggestedPrTitle: "Edited elsewhere",
+              updatedAt: "2026-09-30T09:00:00.000Z",
+            } as BoardCard
+          }
+          editable
+          onChange={onChange}
+        />
+      </MantineProvider>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(screen.getByText("Card changed")).toBeTruthy());
+    const [, init] = fetchMock.mock.calls[0] as unknown as [
+      string,
+      RequestInit,
+    ];
+    expect(JSON.parse(String(init.body)).expectedUpdatedAt).toBe(
+      card.updatedAt,
+    );
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("says when there is no suggestion yet", () => {
     render(
       <MantineProvider>

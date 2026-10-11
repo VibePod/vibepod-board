@@ -410,6 +410,7 @@ export const SuggestedPullRequest = ({
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [editStartedAt, setEditStartedAt] = useState("");
   const [bodyMode, setBodyMode] = useState<MarkdownFieldMode>("edit");
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -418,6 +419,7 @@ export const SuggestedPullRequest = ({
   const edit = () => {
     setTitle(card.suggestedPrTitle ?? "");
     setBody(card.suggestedPrBody ?? "");
+    setEditStartedAt(card.updatedAt);
     setBodyMode("edit");
     setError("");
     setIsEditing(true);
@@ -433,7 +435,7 @@ export const SuggestedPullRequest = ({
         body: JSON.stringify({
           prTitle: title,
           prBody: body,
-          expectedUpdatedAt: card.updatedAt,
+          expectedUpdatedAt: editStartedAt,
         }),
       });
       await onChange();
