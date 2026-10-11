@@ -174,7 +174,10 @@ describe("the suggested pull request", () => {
     await userEvent.type(title, "Open pull requests");
     const description = screen.getByRole("textbox", { name: "Description" });
     await userEvent.clear(description);
-    await userEvent.type(description, "Adds the **PR dialog**. Tested with Vitest.");
+    await userEvent.type(
+      description,
+      "Adds the **PR dialog**. Tested with Vitest.",
+    );
     await userEvent.click(screen.getByRole("radio", { name: "Preview" }));
     expect(screen.getByText("PR dialog").tagName).toBe("STRONG");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
