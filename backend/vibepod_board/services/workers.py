@@ -6,9 +6,10 @@ offline once the heartbeats stop. A worker that signs off is removed; an offline
 removed from the board too.
 
 The worker's name is the holder of the claims it takes (see `claims.py`), so every heartbeat
-also renews those claims: a running worker never loses its task to claim expiry. Registering a
-name that is already connected replaces (and removes) the earlier registration, so a restarted
-worker takes its claims back up. The heartbeat reply carries instructions for the worker.
+also renews those claims: a running worker never loses its task to claim expiry. Registering
+a live name is refused unless replacement is explicitly requested. An offline registration, or
+one explicitly replaced, is removed so a restarted worker takes its claims back up. The
+heartbeat reply carries instructions for the worker.
 
 Removing a worker leaves its run reports and task history alone: they keep its name by value.
 """
@@ -188,6 +189,7 @@ def register_worker(
     instance: str | None = None,
     timing: WorkerTiming | None = None,
     mode: ClaimMode = ClaimMode.IMPLEMENT,
+    replace: bool = False,
 ) -> WorkerSession:
     """Connects a worker to a project. It shows up as idle right away. `instance` is a short
     id of the running worker process, such as its container id. `mode` says whether it
@@ -200,11 +202,31 @@ def register_worker(
     project_id = resolve_project_id(session, project)
     assert_can_access_project(access, project_id)
     # Registrations of a project take turns, so two starting under one name never both stay
-    # connected: the second one sees and replaces the first.
+    # connected: the second one sees and is refused by the first registration.
     project_row = session.exec(
         select(ProjectRow).where(ProjectRow.id == project_id).with_for_update()
     ).one()
+    # Lock and refresh the current registration so concurrent heartbeats and sign-offs
+    # finish before we decide whether it is live.
+    current = session.exec(
+        select(WorkerRow)
+        .where(
+            WorkerRow.project_id == project_id,
+            WorkerRow.name == name,
+            col(WorkerRow.stopped_at).is_(None),
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).all()
     timestamp = now()
+    if not replace:
+        for worker in current:
+            if _state(worker, timestamp, timing) != WorkerState.OFFLINE:
+                raise Conflict(
+                    f"A worker named {name} is connected (machine {worker.machine or 'unknown'}, "
+                    f"started at {worker.started_at.isoformat()}); "
+                    "stop it or register under another name"
+                )
     session.execute(
         delete(WorkerRow).where(
             col(WorkerRow.project_id) == project_id,

@@ -964,10 +964,11 @@ def create_mcp_server(
         title="Register Worker",
         description="Connect an automated worker to a project; it shows up on the board right "
         "away. Its name is the holder of the claims it takes (use it as the assignee of "
-        "claim_next_task). Registering a name again replaces and removes the earlier "
-        "registration. `instance` is a short id of the worker process, such as its container "
-        "id. Send worker_heartbeat every heartbeatSeconds, and sign_off_worker when done. A "
-        "worker in review mode claims with mode review.",
+        "claim_next_task). A connected name is refused unless replace is true; an offline "
+        "registration is replaced and removed, keeping its claims. `instance` is a short id "
+        "of the worker process, such as its container id. Send worker_heartbeat every "
+        "heartbeatSeconds, and sign_off_worker when done. A worker in review mode claims "
+        "with mode review.",
     )
     def register_worker(
         projectId: Annotated[  # noqa: N803
@@ -978,10 +979,20 @@ def create_mcp_server(
         machine: str | None = None,
         mode: Mode = ClaimMode.IMPLEMENT,
         instance: str | None = None,
+        replace: bool = False,
     ) -> dict[str, Any]:
         return run(
             lambda s, a: workers.register_worker(
-                s, a, projectId, name, agent, machine, instance, worker_timing(settings), mode
+                s,
+                a,
+                projectId,
+                name,
+                agent,
+                machine,
+                instance,
+                worker_timing(settings),
+                mode,
+                replace=replace,
             )
         )
 

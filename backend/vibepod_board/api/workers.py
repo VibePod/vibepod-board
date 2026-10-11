@@ -42,6 +42,7 @@ def register_worker(
         body.instance,
         worker_timing(settings),
         body.mode,
+        replace=body.replace,
     )
 
 
