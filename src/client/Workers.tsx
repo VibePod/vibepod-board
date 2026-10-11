@@ -33,6 +33,14 @@ export const useNow = (intervalMs = 1000): number => {
   return now;
 };
 
+const workerStepLabel = (worker: Worker) => {
+  if (worker.mode === "review") {
+    if (worker.step === "agent_running") return "Reviewing";
+    if (worker.step === "handing_over") return "Submitting verdict";
+  }
+  return worker.step ? workerStepLabels[worker.step] : "";
+};
+
 /** The live "being worked on" line on a board card. */
 export const WorkerActivity = ({ worker }: { worker: Worker }) => {
   const now = useNow();
@@ -52,7 +60,7 @@ export const WorkerActivity = ({ worker }: { worker: Worker }) => {
         <Group gap={6} wrap="nowrap">
           {worker.step && (
             <Text size="xs" c="dimmed" className="board-card-worker-step">
-              {workerStepLabels[worker.step]}
+              {workerStepLabel(worker)}
             </Text>
           )}
           {worker.taskStartedAt && (
@@ -104,6 +112,12 @@ export const WorkersList = ({
                 </Text>
               </Stack>
               <Group gap={6} wrap="nowrap">
+                <Badge
+                  variant="outline"
+                  color={worker.mode === "review" ? "cyan" : "blue"}
+                >
+                  {worker.mode ?? "implement"}
+                </Badge>
                 {worker.stopRequestedAt && worker.status !== "offline" ? (
                   <Badge className="worker-status" variant="light" color="red">
                     Stopping
@@ -150,11 +164,12 @@ export const WorkersList = ({
                   size="sm"
                   onClick={() => onOpenTask(worker.taskId as string)}
                 >
+                  {worker.mode === "review" ? "reviewing " : ""}
                   {[worker.taskKey, worker.taskTitle].filter(Boolean).join(" ")}
                 </Anchor>
                 {worker.step && (
                   <Badge size="sm" variant="outline" color="blue">
-                    {workerStepLabels[worker.step]}
+                    {workerStepLabel(worker)}
                   </Badge>
                 )}
                 {worker.taskStartedAt && (

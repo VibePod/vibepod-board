@@ -266,6 +266,7 @@ class TaskReviewRow(SQLModel, table=True):
     idea_id: str = _foreign_key("ideas.id", "CASCADE")
     project_id: str = _foreign_key("projects.id", "CASCADE")
     reviewer: str = Field(sa_column=Column(Text, nullable=False))
+    actor_identity: str | None = _text()
     worker_id: str | None = _foreign_key("workers.id", "SET NULL", nullable=True)
     head_sha: str | None = _text()
     # The lease, renewed like a claim's; the review is open until `ended_at`.
@@ -292,6 +293,9 @@ class TaskRunRow(SQLModel, table=True):
     # Kept by value: workers are pruned, their reports are not.
     worker_name: str | None = _text()
     agent: str | None = _text()
+    kind: str = _text("implement")
+    verdict: str | None = _text()
+    feedback: str | None = _text()
     outcome: str = Field(sa_column=Column(Text, nullable=False))
     summary: str = _text("")
     # [{"sha": ..., "subject": ...}] for the commits the run made.

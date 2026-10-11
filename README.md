@@ -466,7 +466,22 @@ such as a Claude and a Codex one, can review the same task at once.
 - **Loop guard.** The card counts rework verdicts in a row (`reviewRounds`). The one that
   reaches `maxReviewRounds` blocks the task in Review for a human instead of sending it back.
   An approval to PR ready or moving the card by hand resets the count.
-- **State.** `GET /api/board/:id/reviews` (`list_task_reviews`) lists the task's reviews with
+- **Board UI.** Review cards show the current approval count and open reviewers, with a
+  **Cancel** control for each review. **Approve** accepts an optional note and counts the
+  signed-in person once for the current head, alongside worker approvals. People and
+  workers count separately even when their display names match; API-token approvals
+  use the token identity so renaming it does not add an approval. A person can approve
+  a review blocked by the round limit, while a pending question still needs an answer. It uses
+  `POST /api/board/:id/approve` with `note` and `expectedUpdatedAt`. **Request changes**
+  records the person's review and feedback and sends the card back to Planned.
+  The task view lists every review and marks verdicts for older commits as outdated.
+- **Run reports.** Review runs appear alongside implementation runs with `kind`, `verdict`
+  and `feedback`, plus the verify output. Reports from a registered review worker capture
+  its submitted verdict automatically; callers may also provide these fields explicitly
+  to the REST API or `add_run_report`.
+- **State.** `GET /api/board` includes compact `reviewState` on cards in Review,
+  containing the current approval count and open reviewers. Cards refresh with the board
+  instead of polling full review histories individually. `GET /api/board/:id/reviews` (`list_task_reviews`) lists the task's reviews with
   their reviewer, `headSha`, verdict and feedback, and its approvals for the current head
   commit. The history records `review_started`, `approved`, `rework_requested` and
   `review_ended` events with the reviewer and the commit.

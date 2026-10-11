@@ -5,6 +5,7 @@ from fastapi import APIRouter, Query
 from vibepod_board.api.deps import SettingsDep
 from vibepod_board.api.models import (
     AnswerRequest,
+    ApproveRequest,
     ArchiveDoneRequest,
     BoardCardBatch,
     BoardCardUpdate,
@@ -67,7 +68,11 @@ def get_board(
         assignee=split_list(assignee),
         unassigned=unassigned,
     )
-    return Columns(columns=board.board_columns(session, access, filters=filters))
+    columns = board.board_columns(session, access, filters=filters)
+    states = reviews.board_review_states(session, columns.review)
+    for card in columns.review:
+        card.review_state = states.get(card.id)
+    return Columns(columns=columns)
 
 
 @router.get("/archived")
@@ -305,3 +310,14 @@ def cancel_review(
 ) -> ReviewState:
     """Ends one open review without a verdict; its worker is told to cancel."""
     return reviews.cancel_review(session, access, card_id, review_id, body.reason if body else None)
+
+
+@router.post("/{card_id}/approve")
+def approve_review(
+    card_id: str, body: ApproveRequest, session: SessionDep, access: AccessDep
+) -> Item[BoardCard]:
+    return Item(
+        item=conversation.approve_review(
+            session, access, card_id, body.note, body.expected_updated_at
+        )
+    )

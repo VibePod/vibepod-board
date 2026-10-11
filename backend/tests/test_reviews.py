@@ -12,7 +12,7 @@ from fastmcp.exceptions import ToolError
 from sqlalchemy import Engine, text
 from sqlmodel import Session
 
-from vibepod_board.access import admin_access
+from vibepod_board.access import admin_access, token_access
 from vibepod_board.enums import (
     BoardColumn,
     ClaimMode,
@@ -942,3 +942,153 @@ async def test_mcp_runs_the_review_lifecycle(server_url: str, session: Session, 
         for event in (await call(server_url, token, "list_task_history", id="VP-1"))["items"]
     ]
     assert "rework_requested" in history_kinds and "approved" in history_kinds
+
+
+def test_manual_approval_counts_distinct_people_at_current_head(session, vp):
+    projects.update_project(session, vp.id, required_approvals=2)
+    task = in_review(session, vp, "Manual approval")
+    conversation.approve_review(session, ADMIN, task.id, "Looks good")
+    conversation.approve_review(session, ADMIN, task.id)
+    state = reviews.review_state(session, ADMIN, task.id)
+    assert state.approvals == 1
+    assert state.column == BoardColumn.REVIEW
+    assert state.items[-1].feedback == "Looks good"
+    conversation.approve_review(session, admin_access("second"), task.id)
+    assert card(session, task).column == BoardColumn.PR_READY
+    hand_over_again(session, task, NEXT_SHA)
+    assert reviews.review_state(session, ADMIN, task.id).approvals == 0
+
+
+def test_manual_approval_rejects_stale_card(session, vp):
+    task = in_review(session, vp, "Stale approval")
+    stale = card(session, task).updated_at
+    hand_over_again(session, task, NEXT_SHA)
+    with pytest.raises(Conflict):
+        conversation.approve_review(session, ADMIN, task.id, expected_updated_at=stale)
+    assert reviews.review_state(session, ADMIN, task.id).approvals == 0
+
+
+def test_manual_rework_records_review_and_round(session, vp):
+    task = in_review(session, vp, "Manual rework")
+    conversation.request_rework(session, ADMIN, task.id, "Fix the race")
+    state = reviews.review_state(session, ADMIN, task.id)
+    assert state.column == BoardColumn.PLANNED
+    assert state.review_rounds == 1
+    assert state.items[0].reviewer == "admin"
+    assert state.items[0].verdict == ReviewVerdict.REWORK
+    assert state.items[0].feedback == "Fix the race"
+
+
+def test_review_run_captures_verdict_and_feedback(session, vp):
+    from vibepod_board.enums import RunOutcome
+    from vibepod_board.services import runs
+
+    task = in_review(session, vp, "Review report")
+    worker = workers.register_worker(session, ADMIN, "VP", CLAUDE, mode=ClaimMode.REVIEW).item
+    started = now()
+    review(session)
+    verdict(session, task, CLAUDE, ReviewVerdict.REWORK, note="Fix the race")
+    report = runs.add_run_report(
+        session,
+        ADMIN,
+        task.id,
+        RunOutcome.DONE,
+        worker_id=worker.id,
+        started_at=started,
+        verify_output="Tests passed",
+    )
+    assert report.kind == ClaimMode.REVIEW
+    assert report.verdict == ReviewVerdict.REWORK
+    assert report.feedback == "Fix the race"
+    assert report.verify_output == "Tests passed"
+    assert runs.list_run_reports(session, ADMIN, task.id).items[0].verdict == ReviewVerdict.REWORK
+
+
+def test_manual_approve_api_combines_with_worker_approval(client, session, vp):
+    projects.update_project(session, vp.id, required_approvals=2)
+    task = in_review(session, vp, "Mixed approvals")
+    review(session)
+    verdict(session, task, CLAUDE, ReviewVerdict.APPROVE, note="Worker approved")
+    current = card(session, task)
+    login(client)
+    response = client.post(
+        f"/api/board/{current.id}/approve",
+        json={"note": "Human approved", "expectedUpdatedAt": current.updated_at.isoformat()},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["item"]["column"] == "pr_ready"
+    state = client.get(f"/api/board/{current.id}/reviews").json()
+    assert state["approvals"] == 2
+    assert set(state["approvedBy"]) == {CLAUDE, "admin"}
+    assert state["items"][0]["feedback"] == "Human approved"
+
+
+@pytest.mark.parametrize("manual_first", [True, False])
+def test_manual_and_worker_with_same_name_are_distinct(session, vp, manual_first):
+    projects.update_project(session, vp.id, required_approvals=2)
+    task = in_review(session, vp, "Same display name")
+    person = admin_access(CLAUDE)
+    if manual_first:
+        conversation.approve_review(session, person, task.id)
+    review(session)
+    verdict(session, task, CLAUDE, ReviewVerdict.APPROVE)
+    if not manual_first:
+        conversation.approve_review(session, person, task.id)
+    state = reviews.review_state(session, ADMIN, task.id)
+    assert state.approvals == 2
+    assert state.column == BoardColumn.PR_READY
+
+
+def test_partial_manual_approval_publishes_activity(session, vp):
+    projects.update_project(session, vp.id, required_approvals=2)
+    task = in_review(session, vp, "Partial approval")
+    conversation.approve_review(session, ADMIN, task.id)
+    events = session.exec(text("SELECT message FROM activity_events WHERE type = 'board.approved'"))
+    assert any("admin approved VP-1 (1 of 2)" in row[0] for row in events)
+
+
+def test_manual_approval_resolves_loop_guard(session, vp):
+    projects.update_project(session, vp.id, max_review_rounds=1)
+    task = in_review(session, vp, "Human decision")
+    review(session)
+    verdict(session, task, CLAUDE, ReviewVerdict.REWORK, note="Needs changes")
+    assert card(session, task).blocked_at is not None
+    approved = conversation.approve_review(session, ADMIN, task.id)
+    assert approved.column == BoardColumn.PR_READY
+    assert approved.blocked_at is None
+
+
+def test_manual_approval_still_requires_answer_to_question(session, vp):
+    task = in_review(session, vp, "Question")
+    review(session)
+    verdict(session, task, CLAUDE, ReviewVerdict.NEEDS_INPUT, note="Which behavior?")
+    with pytest.raises(Conflict):
+        conversation.approve_review(session, ADMIN, task.id)
+
+
+def test_board_includes_only_compact_review_state(client, session, vp):
+    projects.update_project(session, vp.id, required_approvals=2)
+    task = in_review(session, vp, "Compact state")
+    conversation.approve_review(session, ADMIN, task.id, "Private history")
+    review(session)
+    login(client)
+    cards = client.get("/api/board").json()["columns"]["review"]
+    state = cards[0]["reviewState"]
+    assert state["approvals"] == 1
+    assert state["requiredApprovals"] == 2
+    assert [item["reviewer"] for item in state["items"]] == [CLAUDE]
+    assert all(item["open"] for item in state["items"])
+
+
+def test_token_identity_survives_rename_and_distinguishes_same_names(session, vp):
+    projects.update_project(session, vp.id, required_approvals=3)
+    task = in_review(session, vp, "Token identities")
+    first = tokens.create_token(session, "Reviewer", [vp.id]).item
+    second = tokens.create_token(session, "Reviewer", [vp.id]).item
+    access = token_access(first.id, [vp.id])
+    conversation.approve_review(session, access, task.id)
+    tokens.update_token(session, first.id, name="Renamed")
+    conversation.approve_review(session, access, task.id)
+    assert reviews.review_state(session, ADMIN, task.id).approvals == 1
+    conversation.approve_review(session, token_access(second.id, [vp.id]), task.id)
+    assert reviews.review_state(session, ADMIN, task.id).approvals == 2

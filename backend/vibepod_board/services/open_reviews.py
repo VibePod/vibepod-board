@@ -104,7 +104,7 @@ def approvers(session: Session, card: BoardCardRow) -> list[str]:
     if not card.idea_id:
         return []
     rows = session.exec(
-        select(TaskReviewRow.reviewer)
+        select(TaskReviewRow)
         .where(
             TaskReviewRow.idea_id == card.idea_id,
             TaskReviewRow.verdict == ReviewVerdict.APPROVE,
@@ -112,7 +112,11 @@ def approvers(session: Session, card: BoardCardRow) -> list[str]:
         )
         .order_by(col(TaskReviewRow.ended_at))
     ).all()
-    return list(dict.fromkeys(rows))
+    identities = {}
+    for row in rows:
+        identity = row.actor_identity or f"worker:{row.reviewer}"
+        identities.setdefault(identity, row.reviewer)
+    return list(identities.values())
 
 
 def move_to_pr_ready(

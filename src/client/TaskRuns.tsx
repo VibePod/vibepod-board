@@ -4,6 +4,8 @@ import type { TaskRun } from "../shared/types.js";
 import { api } from "./api.js";
 import {
   formatDuration,
+  reviewVerdictColors,
+  reviewVerdictLabels,
   runOutcomeColors,
   runOutcomeLabels,
 } from "./automationUtils.js";
@@ -59,12 +61,19 @@ const RunReport = ({ run }: { run: TaskRun }) => (
     <Stack gap="xs">
       <Group gap="xs" justify="space-between" align="flex-start">
         <Group gap="xs">
+          <Badge variant="outline">{run.kind ?? "implement"}</Badge>
           <Badge
             className="task-run-outcome"
             variant="light"
-            color={runOutcomeColors[run.outcome] ?? "gray"}
+            color={
+              run.kind === "review" && run.verdict
+                ? reviewVerdictColors[run.verdict]
+                : (runOutcomeColors[run.outcome] ?? "gray")
+            }
           >
-            {runOutcomeLabels[run.outcome] ?? run.outcome}
+            {run.kind === "review" && run.verdict
+              ? reviewVerdictLabels[run.verdict]
+              : (runOutcomeLabels[run.outcome] ?? run.outcome)}
           </Badge>
           <Text size="sm" fw={600}>
             {[run.workerName, run.agent].filter(Boolean).join(" · ") ||
@@ -86,6 +95,11 @@ const RunReport = ({ run }: { run: TaskRun }) => (
         <Text size="sm" c="red" className="task-run-failure">
           {run.failureReason}
         </Text>
+      )}
+      {run.feedback && (
+        <div className="overview-markdown task-run-feedback">
+          <MarkdownText>{run.feedback}</MarkdownText>
+        </div>
       )}
       {run.summary && (
         <div className="overview-markdown task-run-summary">

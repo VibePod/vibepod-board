@@ -103,7 +103,48 @@ class Idea(ApiModel):
     updated_at: Timestamp
 
 
+class TaskReview(ApiModel):
+    """A review claim and, once given, its verdict."""
+
+    id: str
+    idea_id: str
+    task_key: str | None = None
+    project_id: str
+    reviewer: str
+    worker_id: str | None = None
+    # The commit under review; a verdict must name it.
+    head_sha: str | None = None
+    lease_expires_at: Timestamp
+    open: bool
+    # Left out while open, and when the review ended without one (expired or cancelled).
+    verdict: ReviewVerdict | None = None
+    feedback: str | None = None
+    ended_reason: str | None = None
+    ended_at: Timestamp | None = None
+    created_at: Timestamp
+    updated_at: Timestamp
+
+
+class ReviewState(ApiModel):
+    """Where a task stands with its reviewers: approvals for the current head commit against
+    the project's requirement, open reviews, and every review, newest first."""
+
+    task_id: str
+    task_key: str | None = None
+    column: BoardColumn | None = None
+    head_sha: str | None = None
+    required_approvals: int
+    # Distinct reviewers that approved the current head commit.
+    approvals: int
+    approved_by: list[str]
+    open_reviews: int
+    review_rounds: int
+    max_review_rounds: int
+    items: list[TaskReview]
+
+
 class BoardCard(ApiModel):
+    review_state: ReviewState | None = None
     id: str
     project_id: str
     title: str
@@ -272,46 +313,6 @@ class Claim(ApiModel):
     card: KeyedBoardCard
 
 
-class TaskReview(ApiModel):
-    """A review claim and, once given, its verdict."""
-
-    id: str
-    idea_id: str
-    task_key: str | None = None
-    project_id: str
-    reviewer: str
-    worker_id: str | None = None
-    # The commit under review; a verdict must name it.
-    head_sha: str | None = None
-    lease_expires_at: Timestamp
-    open: bool
-    # Left out while open, and when the review ended without one (expired or cancelled).
-    verdict: ReviewVerdict | None = None
-    feedback: str | None = None
-    ended_reason: str | None = None
-    ended_at: Timestamp | None = None
-    created_at: Timestamp
-    updated_at: Timestamp
-
-
-class ReviewState(ApiModel):
-    """Where a task stands with its reviewers: approvals for the current head commit against
-    the project's requirement, open reviews, and every review, newest first."""
-
-    task_id: str
-    task_key: str | None = None
-    column: BoardColumn | None = None
-    head_sha: str | None = None
-    required_approvals: int
-    # Distinct reviewers that approved the current head commit.
-    approvals: int
-    approved_by: list[str]
-    open_reviews: int
-    review_rounds: int
-    max_review_rounds: int
-    items: list[TaskReview]
-
-
 class ClaimResult(ApiModel):
     claimed: bool
     # The claimed task and its card; left out when nothing was claimed.
@@ -454,6 +455,9 @@ class TaskRun(ApiModel):
     worker_id: str | None = None
     worker_name: str | None = None
     agent: str | None = None
+    kind: ClaimMode = ClaimMode.IMPLEMENT
+    verdict: ReviewVerdict | None = None
+    feedback: str | None = None
     outcome: RunOutcome
     summary: str
     commits: list[RunCommit]
