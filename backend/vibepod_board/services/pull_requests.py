@@ -85,12 +85,39 @@ def _dependency_branches(
     return branches
 
 
+_FENCE = re.compile(r" {0,3}(`{3,}|~{3,})")
+_QUOTE = re.compile(r" {0,3}>")
+_COMMENT = re.compile(r"<!--.*?(?:-->|$)", re.DOTALL)
+_INLINE_CODE = re.compile(r"(`+).+?\1", re.DOTALL)
+
+
+def _prose(body: str) -> str:
+    """The body without the Markdown that GitHub does not read keywords in: fenced code,
+    block quotes, HTML comments and inline code."""
+    lines = []
+    fence = ""
+    for line in body.splitlines():
+        opening = _FENCE.match(line)
+        if fence:
+            if opening and opening.group(1)[0] == fence[0] and len(opening.group(1)) >= len(fence):
+                if not line.strip().strip(fence[0]):
+                    fence = ""
+            continue
+        if opening:
+            fence = opening.group(1)
+            continue
+        if not _QUOTE.match(line):
+            lines.append(line)
+    return _INLINE_CODE.sub("", _COMMENT.sub("", "\n".join(lines)))
+
+
 def _closes(body: str, repository: str, number: int) -> bool:
-    """Whether the body already closes issue `number` of `repository` with a closing keyword."""
+    """Whether the body already closes issue `number` of `repository` with a closing keyword
+    in its prose."""
     name = re.escape(repository)
     target = rf"(?:{name})?#{number}\b|https://github\.com/{name}/issues/{number}\b"
     keyword = r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+"
-    return re.search(f"{keyword}(?:{target})", body, re.IGNORECASE) is not None
+    return re.search(f"{keyword}(?:{target})", _prose(body), re.IGNORECASE) is not None
 
 
 def _body(card: BoardCardRow, idea: IdeaRow | None, repository: str) -> str:

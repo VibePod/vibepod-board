@@ -171,6 +171,37 @@ def test_closes_the_issue_when_the_suggestion_only_mentions_it(
     assert body.endswith("\n\nCloses #7")
 
 
+@pytest.mark.parametrize(
+    "example",
+    [
+        "Write `Closes #7` to close it.",
+        "```\nCloses #7\n```",
+        "~~~~md\nCloses #7\n~~~\n~~~~",
+        "> Closes #7",
+        "<!-- Closes #7 -->",
+        "<!--\nCloses #7\n-->",
+    ],
+)
+def test_closes_the_issue_when_the_suggestion_only_shows_an_example(
+    session: Session, project, github: GitHubClient, example: str
+) -> None:
+    card = pr_ready_card(session, project, github_issue_url=f"https://github.com/{REPO}/issues/7")
+    board.update_card(session, ADMIN, card.id, suggested_pr_body=f"Adds the dialog.\n\n{example}")
+
+    body = pull_requests.pull_request_draft(session, ADMIN, card.id, github).body
+    assert body.endswith("\n\nCloses #7")
+
+
+def test_keeps_a_suggestion_that_closes_the_issue_after_an_example(
+    session: Session, project, github: GitHubClient
+) -> None:
+    card = pr_ready_card(session, project, github_issue_url=f"https://github.com/{REPO}/issues/7")
+    body = "Adds the dialog.\n\n```\nexample\n```\n\n`code` and fixes #7"
+    board.update_card(session, ADMIN, card.id, suggested_pr_body=body)
+
+    assert pull_requests.pull_request_draft(session, ADMIN, card.id, github).body == body
+
+
 def test_a_suggested_title_alone_keeps_the_generated_body(
     session: Session, project, github: GitHubClient
 ) -> None:
