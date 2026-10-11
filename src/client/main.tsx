@@ -463,6 +463,12 @@ const App = () => {
     useState<ArchiveDoneTarget | null>(null);
   const [planReadyTarget, setPlanReadyTarget] =
     useState<PlanReadyTarget | null>(null);
+  // Cards whose Plan request is in flight. The ref refuses a second click that
+  // comes before the re-render disables the button.
+  const [planningCardIds, setPlanningCardIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const planningCardIdsRef = useRef(new Set<string>());
   const [createdToken, setCreatedToken] = useState<CreatedTokenState>(null);
   const [tokenDraft, setTokenDraft] = useState<CreateApiTokenInput>(
     emptyTokenDraft(),
@@ -1803,9 +1809,26 @@ const App = () => {
   /**
    * Hands a Ready card to the workers by putting it in Planned, the way a drop
    * does. Guarded by the card this board shows, and the notice says whether a
-   * worker picks it up or which unfinished dependencies it waits for.
+   * worker picks it up or which unfinished dependencies it waits for. The
+   * card's Plan action is disabled until its request finishes, so a second
+   * click never sends a second, stale write.
    */
   const planCard = async (card: BoardCard) => {
+    if (planningCardIdsRef.current.has(card.id)) return;
+    const setPlanning = (planning: boolean) => {
+      if (planning) planningCardIdsRef.current.add(card.id);
+      else planningCardIdsRef.current.delete(card.id);
+      setPlanningCardIds(new Set(planningCardIdsRef.current));
+    };
+    setPlanning(true);
+    try {
+      await planCardOnce(card);
+    } finally {
+      setPlanning(false);
+    }
+  };
+
+  const planCardOnce = async (card: BoardCard) => {
     setError("");
     setNotice("");
     const { task, waitingFor } = planningOf(card);
@@ -3158,6 +3181,8 @@ const App = () => {
                                     mr="auto"
                                     leftSection={<Send size={12} aria-hidden />}
                                     aria-label={`Plan ${card.title}`}
+                                    disabled={planningCardIds.has(card.id)}
+                                    loading={planningCardIds.has(card.id)}
                                     onClick={(event) => {
                                       event.stopPropagation();
                                       void planCard(card);
@@ -3807,6 +3832,7 @@ const App = () => {
                     variant="light"
                     leftSection={<Send size={16} aria-hidden />}
                     aria-label={`Plan ${taskViewCard.title}`}
+                    disabled={planningCardIds.has(taskViewCard.id)}
                     onClick={() => {
                       // The notice and a conflict show on the board.
                       setTaskViewModal(null);

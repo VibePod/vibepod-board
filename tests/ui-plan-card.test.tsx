@@ -62,12 +62,15 @@ type BoardOptions = {
   stale?: boolean;
   /** Fails every board reload once a card was written. */
   reloadFails?: boolean;
+  /** Holds every card write until it resolves. */
+  writesWaitFor?: Promise<void>;
 };
 
 /** A board with a free Ready task and one that waits for two unfinished tasks. */
 const boardApi = ({
   stale = false,
   reloadFails = false,
+  writesWaitFor,
 }: BoardOptions = {}) => {
   let written = false;
   const ideas = [
@@ -121,6 +124,7 @@ const boardApi = ({
     }
     const target = cards.find((item) => path === `/api/board/${item.id}`);
     if (target && method === "PATCH") {
+      await writesWaitFor;
       if (stale) return jsonResponse({ error: conflict }, 409);
       const body = JSON.parse(String(init?.body));
       target.column = body.column;
@@ -273,6 +277,29 @@ describe("planning a card from Ready", () => {
       await screen.findByText("Planned VP-1: a worker will pick it up."),
     ).toBeTruthy();
     expect(await screen.findByText("Board unavailable")).toBeTruthy();
+    expect(screen.queryByText(/check the card again/)).toBeNull();
+  });
+
+  it("sends one request while a plan is in flight", async () => {
+    let finishWrite = () => {};
+    const fetchMock = await renderBoard({
+      writesWaitFor: new Promise((resolve) => {
+        finishWrite = resolve;
+      }),
+    });
+    const plan = within(cardFor("Free work")).getByRole("button", {
+      name: "Plan Free work",
+    });
+
+    await userEvent.click(plan);
+    await waitFor(() => expect(plan.hasAttribute("disabled")).toBe(true));
+    plan.click();
+    finishWrite();
+
+    expect(
+      await screen.findByText("Planned VP-1: a worker will pick it up."),
+    ).toBeTruthy();
+    expect(patchesOf(fetchMock)).toHaveLength(1);
     expect(screen.queryByText(/check the card again/)).toBeNull();
   });
 
