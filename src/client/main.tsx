@@ -1791,16 +1791,11 @@ const App = () => {
     }
   };
 
-  /** Pass `expectedUpdatedAt` to refuse the move when the card changed meanwhile. */
-  const moveCard = async (
-    card: BoardCard,
-    column: BoardColumn,
-    expectedUpdatedAt?: string,
-  ) => {
+  const moveCard = async (card: BoardCard, column: BoardColumn) => {
     setError("");
     await api(`/api/board/${card.id}`, {
       method: "PATCH",
-      body: JSON.stringify({ column, expectedUpdatedAt }),
+      body: JSON.stringify({ column }),
     });
     await loadState();
   };
@@ -1811,11 +1806,17 @@ const App = () => {
    * worker picks it up or which unfinished dependencies it waits for.
    */
   const planCard = async (card: BoardCard) => {
+    setError("");
     setNotice("");
     const { task, waitingFor } = planningOf(card);
     try {
-      await moveCard(card, "planned", card.updatedAt);
-      setNotice(plannedNotice(task, waitingFor));
+      await api(`/api/board/${card.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          column: "planned",
+          expectedUpdatedAt: card.updatedAt,
+        }),
+      });
     } catch (err) {
       // Reload first: a reload clears the error.
       await loadState().catch(() => undefined);
@@ -1824,6 +1825,15 @@ const App = () => {
           ? `${err.message}. The board was reloaded; check the card again.`
           : "Failed to plan card",
       );
+      return;
+    }
+    // The card is planned: a failed reload is reported as such, not as a
+    // failed plan.
+    setNotice(plannedNotice(task, waitingFor));
+    try {
+      await loadState();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load board");
     }
   };
 

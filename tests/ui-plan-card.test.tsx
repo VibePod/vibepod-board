@@ -58,8 +58,18 @@ const jsonResponse = (body: unknown, status = 200) =>
     headers: { "Content-Type": "application/json" },
   });
 
+type BoardOptions = {
+  stale?: boolean;
+  /** Fails every board reload once a card was written. */
+  reloadFails?: boolean;
+};
+
 /** A board with a free Ready task and one that waits for two unfinished tasks. */
-const boardApi = ({ stale = false } = {}) => {
+const boardApi = ({
+  stale = false,
+  reloadFails = false,
+}: BoardOptions = {}) => {
+  let written = false;
   const ideas = [
     idea({ id: "idea-1", taskNumber: 1, title: "Free work" }),
     idea({ id: "idea-2", taskNumber: 2, title: "First dependency" }),
@@ -99,7 +109,12 @@ const boardApi = ({ stale = false } = {}) => {
     if (path === "/api/projects") return jsonResponse({ items: [project] });
     if (path === "/api/ideas") return jsonResponse({ items: ideas });
     if (path === "/api/documents") return jsonResponse({ items: [] });
-    if (path === "/api/board") return jsonResponse({ columns: columns() });
+    if (path === "/api/board") {
+      if (reloadFails && written) {
+        return jsonResponse({ error: "Board unavailable" }, 500);
+      }
+      return jsonResponse({ columns: columns() });
+    }
     if (path === "/api/board/archived") return jsonResponse({ items: [] });
     if (path.endsWith("/history") || path.includes("/runs")) {
       return jsonResponse({ items: [] });
@@ -110,6 +125,7 @@ const boardApi = ({ stale = false } = {}) => {
       const body = JSON.parse(String(init?.body));
       target.column = body.column;
       target.updatedAt = "2026-10-01T09:00:00.000Z";
+      written = true;
       return jsonResponse({ item: target });
     }
     if (path === "/api/board/batch" && method === "POST") {
@@ -123,16 +139,17 @@ const boardApi = ({ stale = false } = {}) => {
         items: { id: string; column: BoardCard["column"] }[];
       };
       for (const item of body.items) {
-        const written = cards.find((each) => each.id === item.id);
-        if (written) written.column = item.column;
+        const planned = cards.find((each) => each.id === item.id);
+        if (planned) planned.column = item.column;
       }
+      written = true;
       return jsonResponse({ items: cards });
     }
     return jsonResponse({ error: "Not found" }, 404);
   });
 };
 
-const renderBoard = async (options?: { stale?: boolean }) => {
+const renderBoard = async (options?: BoardOptions) => {
   window.history.replaceState(null, "", `/projects/${project.id}/board`);
   const fetchMock = boardApi(options);
   vi.stubGlobal("fetch", fetchMock);
@@ -241,6 +258,22 @@ describe("planning a card from Ready", () => {
     ).toBeTruthy();
     expect(screen.queryByText(/^Planned VP-1/)).toBeNull();
     expect(columnOf(cardFor("Free work"))).toBe("Ready");
+  });
+
+  it("keeps a successful plan when the reload fails", async () => {
+    await renderBoard({ reloadFails: true });
+
+    await userEvent.click(
+      within(cardFor("Free work")).getByRole("button", {
+        name: "Plan Free work",
+      }),
+    );
+
+    expect(
+      await screen.findByText("Planned VP-1: a worker will pick it up."),
+    ).toBeTruthy();
+    expect(await screen.findByText("Board unavailable")).toBeTruthy();
+    expect(screen.queryByText(/check the card again/)).toBeNull();
   });
 
   it("plans with the keyboard without opening the task view", async () => {
