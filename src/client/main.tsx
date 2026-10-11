@@ -110,7 +110,7 @@ import {
   type ArchiveDoneTarget,
 } from "./ArchiveDoneDialog.js";
 import { ArchiveView } from "./ArchiveView.js";
-import { api, isConflict } from "./api.js";
+import { api, isConflict, isNotFound } from "./api.js";
 import { type ArchivedTaskRow, archivedTaskRows } from "./archiveUtils.js";
 import vibepodIconUrl from "./assets/icon.png";
 import {
@@ -1758,9 +1758,9 @@ const App = () => {
 
   /**
    * Plans the Ready cards the dialog was opened for in one all-or-nothing batch,
-   * each guarded by the card the board showed. A stale card refuses the whole
-   * batch: the dialog closes and the board reloads, so the column is checked
-   * again. Other errors are thrown for the dialog.
+   * each guarded by the card the board showed. A stale card, or one removed
+   * meanwhile, refuses the whole batch: the dialog closes and the board reloads,
+   * so the column is checked again. Other errors are thrown for the dialog.
    */
   const confirmPlanReady = async ({ cards }: PlanReadyTarget) => {
     const batch = cards.slice(0, planReadyLimit);
@@ -1776,7 +1776,7 @@ const App = () => {
         }),
       });
     } catch (err) {
-      if (!isConflict(err)) throw err;
+      if (!isConflict(err) && !isNotFound(err)) throw err;
       setPlanReadyTarget(null);
       await loadState().catch(() => undefined);
       setError(

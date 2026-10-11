@@ -103,54 +103,76 @@ const boardApi = ({
     pr_ready: [],
     done: [],
   });
-  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const path = String(input);
-    const method = init?.method ?? "GET";
-    if (path === "/api/auth/me") {
-      return jsonResponse({ authenticated: true, username: "admin" });
-    }
-    if (path === "/api/projects") return jsonResponse({ items: [project] });
-    if (path === "/api/ideas") return jsonResponse({ items: ideas });
-    if (path === "/api/documents") return jsonResponse({ items: [] });
-    if (path === "/api/board") {
-      if (reloadFails && written) {
-        return jsonResponse({ error: "Board unavailable" }, 500);
+  /** Deletes a card elsewhere: later loads and writes no longer find it. */
+  const remove = (id: string) => {
+    cards.splice(
+      cards.findIndex((item) => item.id === id),
+      1,
+    );
+  };
+  const fetchMock = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      const method = init?.method ?? "GET";
+      if (path === "/api/auth/me") {
+        return jsonResponse({ authenticated: true, username: "admin" });
       }
-      return jsonResponse({ columns: columns() });
-    }
-    if (path === "/api/board/archived") return jsonResponse({ items: [] });
-    if (path.endsWith("/history") || path.includes("/runs")) {
-      return jsonResponse({ items: [] });
-    }
-    const target = cards.find((item) => path === `/api/board/${item.id}`);
-    if (target && method === "PATCH") {
-      await writesWaitFor;
-      if (stale) return jsonResponse({ error: conflict }, 409);
-      const body = JSON.parse(String(init?.body));
-      target.column = body.column;
-      target.updatedAt = "2026-10-01T09:00:00.000Z";
-      written = true;
-      return jsonResponse({ item: target });
-    }
-    if (path === "/api/board/batch" && method === "POST") {
-      if (stale) {
-        return jsonResponse(
-          { error: `Batch item 1 (card-1) failed: ${conflict}` },
-          409,
+      if (path === "/api/projects") return jsonResponse({ items: [project] });
+      if (path === "/api/ideas") return jsonResponse({ items: ideas });
+      if (path === "/api/documents") return jsonResponse({ items: [] });
+      if (path === "/api/board") {
+        if (reloadFails && written) {
+          return jsonResponse({ error: "Board unavailable" }, 500);
+        }
+        return jsonResponse({ columns: columns() });
+      }
+      if (path === "/api/board/archived") return jsonResponse({ items: [] });
+      if (path.endsWith("/history") || path.includes("/runs")) {
+        return jsonResponse({ items: [] });
+      }
+      const target = cards.find((item) => path === `/api/board/${item.id}`);
+      if (target && method === "PATCH") {
+        await writesWaitFor;
+        if (stale) return jsonResponse({ error: conflict }, 409);
+        const body = JSON.parse(String(init?.body));
+        target.column = body.column;
+        target.updatedAt = "2026-10-01T09:00:00.000Z";
+        written = true;
+        return jsonResponse({ item: target });
+      }
+      if (path === "/api/board/batch" && method === "POST") {
+        if (stale) {
+          return jsonResponse(
+            { error: `Batch item 1 (card-1) failed: ${conflict}` },
+            409,
+          );
+        }
+        const body = JSON.parse(String(init?.body)) as {
+          items: { id: string; column: BoardCard["column"] }[];
+        };
+        const missing = body.items.findIndex(
+          (item) => !cards.some((each) => each.id === item.id),
         );
+        if (missing >= 0) {
+          const id = body.items[missing]?.id;
+          return jsonResponse(
+            {
+              error: `Batch item ${missing + 1} (${id}) failed: Board card not found: ${id}`,
+            },
+            404,
+          );
+        }
+        for (const item of body.items) {
+          const planned = cards.find((each) => each.id === item.id);
+          if (planned) planned.column = item.column;
+        }
+        written = true;
+        return jsonResponse({ items: cards });
       }
-      const body = JSON.parse(String(init?.body)) as {
-        items: { id: string; column: BoardCard["column"] }[];
-      };
-      for (const item of body.items) {
-        const planned = cards.find((each) => each.id === item.id);
-        if (planned) planned.column = item.column;
-      }
-      written = true;
-      return jsonResponse({ items: cards });
-    }
-    return jsonResponse({ error: "Not found" }, 404);
-  });
+      return jsonResponse({ error: "Not found" }, 404);
+    },
+  );
+  return Object.assign(fetchMock, { remove });
 };
 
 const renderBoard = async (options?: BoardOptions) => {
@@ -443,6 +465,34 @@ describe("planning every Ready card", () => {
         ([input]) => String(input) === "/api/board/batch",
       ),
     ).toBe(false);
+  });
+
+  it("closes and refreshes when a listed card was removed meanwhile", async () => {
+    const fetchMock = await renderBoard();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Plan all ready tasks" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Plan Ready Tasks",
+    });
+    fetchMock.remove("card-4");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Plan Tasks" }),
+    );
+
+    expect(
+      await screen.findByText(
+        "Batch item 2 (card-4) failed: Board card not found: card-4. The board was reloaded; check the cards again.",
+      ),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Plan Ready Tasks" }),
+      ).toBeNull(),
+    );
+    expect(screen.queryByText("Waiting work")).toBeNull();
+    expect(columnOf(cardFor("Free work"))).toBe("Ready");
   });
 
   it("refuses the whole batch when the view is stale", async () => {
