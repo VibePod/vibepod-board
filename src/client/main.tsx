@@ -160,15 +160,15 @@ import {
   parseNavigationPath,
 } from "./navigation.js";
 import {
-  PullRequestBadge,
-  PullRequestPanel,
-  SuggestedPullRequest,
-} from "./PullRequest.js";
-import {
   PlanReadyDialog,
   type PlanReadyTarget,
   planReadyLimit,
 } from "./PlanReadyDialog.js";
+import {
+  PullRequestBadge,
+  PullRequestPanel,
+  SuggestedPullRequest,
+} from "./PullRequest.js";
 import {
   downloadResponse,
   parseProjectBundleText,
