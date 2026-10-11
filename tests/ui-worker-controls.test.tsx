@@ -210,7 +210,9 @@ const boardApi = (initialWorkers: Worker[] = [worker]) => {
 const posts = (fetchMock: ReturnType<typeof boardApi>) =>
   fetchMock.mock.calls
     .filter(([, init]) =>
-      ["POST", "DELETE"].includes((init as RequestInit | undefined)?.method ?? ""),
+      ["POST", "DELETE"].includes(
+        (init as RequestInit | undefined)?.method ?? "",
+      ),
     )
     .map(([input, init]) => [
       String(input),
@@ -375,9 +377,7 @@ describe("worker controls", () => {
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Remove offline workers" }),
     );
-    expect(
-      within(dialog).getByText("Remove 2 offline workers?"),
-    ).toBeTruthy();
+    expect(within(dialog).getByText("Remove 2 offline workers?")).toBeTruthy();
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Keep them" }),
     );
@@ -386,11 +386,11 @@ describe("worker controls", () => {
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Remove offline workers" }),
     );
-    await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Remove" }),
+    );
 
-    expect(
-      await screen.findByText("Removed 2 offline workers."),
-    ).toBeTruthy();
+    expect(await screen.findByText("Removed 2 offline workers.")).toBeTruthy();
     expect(posts(fetchMock)).toEqual([
       [`/api/workers/remove-offline?projectId=${project.id}`, null],
     ]);
