@@ -493,8 +493,11 @@ const App = () => {
   // throw away an older one that succeeded.
   const loadOrder = useRef(createLoadOrder()).current;
 
-  /** A background reload keeps the error banner: the user has not read it yet. */
-  const loadState = async ({ background = false } = {}) => {
+  /**
+   * A background reload keeps the error banner: the user has not read it yet.
+   * Returns the loaded tasks, even when a newer load already replaced them.
+   */
+  const loadState = async ({ background = false } = {}): Promise<Idea[]> => {
     const ticket = loadOrder.start();
     if (!background) setError("");
     const [projects, ideas, board, archived, documents, github] =
@@ -509,7 +512,7 @@ const App = () => {
         // Sync buttons stay disabled when the status cannot be read.
         api<GitHubStatus>("/api/github").catch(() => null),
       ]);
-    if (!loadOrder.apply(ticket)) return;
+    if (!loadOrder.apply(ticket)) return ideas.items;
     setGitHubStatus(github);
     setState((prev) => ({
       projects: projects.items,
@@ -521,6 +524,7 @@ const App = () => {
     if (!archived) setError("Failed to load archived cards");
     setLoadCount((count) => count + 1);
     setIsLoading(false);
+    return ideas.items;
   };
 
   // The worker poll outlives renders; it reloads through the latest loadState.
@@ -1739,10 +1743,14 @@ const App = () => {
   const archivedCardForRow = (row: ArchivedTaskRow) =>
     state.archivedCards.find((card) => card.id === row.cardId);
 
-  /** A card's task key and the keys of the unfinished tasks it depends on. */
-  const planningOf = (card: BoardCard) => {
+  /**
+   * A card's task key and the keys of the unfinished tasks it depends on, named
+   * from `ideas`. Pass the card a write returned: its `blockedBy` is what the
+   * write saw, while the board's copy may predate a dependency change.
+   */
+  const planningOf = (card: BoardCard, ideas: Map<string, Idea>) => {
     const project = state.projects.find((item) => item.id === card.projectId);
-    const idea = card.ideaId ? ideaById.get(card.ideaId) : undefined;
+    const idea = card.ideaId ? ideas.get(card.ideaId) : undefined;
     return {
       task:
         project && idea
@@ -1750,10 +1758,24 @@ const App = () => {
           : card.title,
       waitingFor: dependencyLinks(
         card.blockedBy,
-        ideaById,
+        ideas,
         project?.key ?? "",
       ).map((link) => link.taskId),
     };
+  };
+
+  /**
+   * Reloads the board after a write that succeeded and returns the reloaded
+   * tasks. A failed reload is reported, and the tasks already shown are returned.
+   */
+  const reloadAfterWrite = async (): Promise<Map<string, Idea>> => {
+    try {
+      const ideas = await loadState();
+      return new Map(ideas.map((idea) => [idea.id, idea]));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load board");
+      return ideaById;
+    }
   };
 
   /**
@@ -1764,17 +1786,21 @@ const App = () => {
    */
   const confirmPlanReady = async ({ cards }: PlanReadyTarget) => {
     const batch = cards.slice(0, planReadyLimit);
+    let planned: BoardCard[];
     try {
-      await api("/api/board/batch", {
-        method: "POST",
-        body: JSON.stringify({
-          items: batch.map((card) => ({
-            id: card.id,
-            column: "planned",
-            expectedUpdatedAt: card.updatedAt,
-          })),
-        }),
-      });
+      ({ items: planned } = await api<{ items: BoardCard[] }>(
+        "/api/board/batch",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            items: batch.map((card) => ({
+              id: card.id,
+              column: "planned",
+              expectedUpdatedAt: card.updatedAt,
+            })),
+          }),
+        },
+      ));
     } catch (err) {
       if (!isConflict(err) && !isNotFound(err)) throw err;
       setPlanReadyTarget(null);
@@ -1784,17 +1810,15 @@ const App = () => {
       );
       return;
     }
+    // The cards are planned: close the dialog before refreshing, so a refresh
+    // failure is reported globally instead of inside the dialog.
     setPlanReadyTarget(null);
-    const waiting = batch
-      .map(planningOf)
+    const ideas = await reloadAfterWrite();
+    const waiting = planned
+      .map((card) => planningOf(card, ideas))
       .filter((planning) => planning.waitingFor.length > 0)
       .map((planning) => planning.task);
-    setNotice(plannedManyNotice(batch.length, waiting));
-    try {
-      await loadState();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load board");
-    }
+    setNotice(plannedManyNotice(planned.length, waiting));
   };
 
   const moveCard = async (card: BoardCard, column: BoardColumn) => {
@@ -1831,15 +1855,18 @@ const App = () => {
   const planCardOnce = async (card: BoardCard) => {
     setError("");
     setNotice("");
-    const { task, waitingFor } = planningOf(card);
+    let planned: BoardCard;
     try {
-      await api(`/api/board/${card.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          column: "planned",
-          expectedUpdatedAt: card.updatedAt,
-        }),
-      });
+      ({ item: planned } = await api<{ item: BoardCard }>(
+        `/api/board/${card.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            column: "planned",
+            expectedUpdatedAt: card.updatedAt,
+          }),
+        },
+      ));
     } catch (err) {
       // Reload first: a reload clears the error.
       await loadState().catch(() => undefined);
@@ -1852,12 +1879,8 @@ const App = () => {
     }
     // The card is planned: a failed reload is reported as such, not as a
     // failed plan.
+    const { task, waitingFor } = planningOf(planned, await reloadAfterWrite());
     setNotice(plannedNotice(task, waitingFor));
-    try {
-      await loadState();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load board");
-    }
   };
 
   /**
@@ -2882,7 +2905,9 @@ const App = () => {
                                 cardId={card.id}
                                 state={card.reviewState}
                                 reloadKey={`${card.updatedAt}|${loadCount}`}
-                                onChanged={() => loadState()}
+                                onChanged={async () => {
+                                  await loadState();
+                                }}
                               />
                             )}
                             {column === "planned" &&
@@ -3533,7 +3558,9 @@ const App = () => {
                 key={taskViewCard.id}
                 card={taskViewCard}
                 enabled={githubStatus?.enabled ?? false}
-                onChange={loadState}
+                onChange={async () => {
+                  await loadState();
+                }}
               />
             )}
 
@@ -3686,7 +3713,9 @@ const App = () => {
                   key={taskViewCard.id}
                   card={taskViewCard}
                   editable={!isTaskViewArchived}
-                  onChange={loadState}
+                  onChange={async () => {
+                    await loadState();
+                  }}
                 />
               )}
 
@@ -3742,7 +3771,9 @@ const App = () => {
             <TaskReviews
               cardId={taskViewCard?.id ?? taskViewIdea.id}
               reloadKey={`${taskViewCard?.updatedAt}|${loadCount}`}
-              onChanged={() => loadState()}
+              onChanged={async () => {
+                await loadState();
+              }}
             />
             <TaskRuns
               ideaId={taskViewIdea.id}

@@ -162,17 +162,30 @@ const boardApi = ({
             404,
           );
         }
-        for (const item of body.items) {
-          const planned = cards.find((each) => each.id === item.id);
-          if (planned) planned.column = item.column;
-        }
+        const planned = body.items.flatMap((item) => {
+          const target = cards.find((each) => each.id === item.id);
+          if (!target) return [];
+          target.column = item.column;
+          return [target];
+        });
         written = true;
-        return jsonResponse({ items: cards });
+        return jsonResponse({ items: planned });
       }
       return jsonResponse({ error: "Not found" }, 404);
     },
   );
-  return Object.assign(fetchMock, { remove });
+  /**
+   * Finishes a task elsewhere: no card waits for it any more, though the
+   * waiting cards keep their updatedAt.
+   */
+  const finish = (ideaId: string) => {
+    const finished = ideas.find((item) => item.id === ideaId);
+    if (finished) finished.status = "done";
+    for (const item of [...ideas, ...cards]) {
+      item.blockedBy = item.blockedBy.filter((id) => id !== ideaId);
+    }
+  };
+  return Object.assign(fetchMock, { remove, finish });
 };
 
 const renderBoard = async (options?: BoardOptions) => {
@@ -265,6 +278,21 @@ describe("planning a card from Ready", () => {
 
     expect(
       await screen.findByText("Planned VP-4; it waits for VP-2 and VP-3."),
+    ).toBeTruthy();
+  });
+
+  it("names the dependencies the card waits for when it was planned", async () => {
+    const fetchMock = await renderBoard();
+    fetchMock.finish("idea-3");
+
+    await userEvent.click(
+      within(cardFor("Waiting work")).getByRole("button", {
+        name: "Plan Waiting work",
+      }),
+    );
+
+    expect(
+      await screen.findByText("Planned VP-4; it waits for VP-2."),
     ).toBeTruthy();
   });
 
@@ -440,6 +468,28 @@ describe("planning every Ready card", () => {
     expect(
       screen.queryByRole("button", { name: "Plan all ready tasks" }),
     ).toBeNull();
+  });
+
+  it("names the tasks that still wait once the batch is written", async () => {
+    const fetchMock = await renderBoard();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Plan all ready tasks" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Plan Ready Tasks",
+    });
+    fetchMock.finish("idea-2");
+    fetchMock.finish("idea-3");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Plan Tasks" }),
+    );
+
+    expect(
+      await screen.findByText(
+        "Planned 2 ready tasks: workers will pick them up.",
+      ),
+    ).toBeTruthy();
   });
 
   it("plans nothing when the confirmation is cancelled", async () => {
