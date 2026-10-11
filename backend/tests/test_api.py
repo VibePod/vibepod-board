@@ -3,6 +3,7 @@
 import json
 from typing import Any
 
+import pytest
 from conftest import login, reset_schema
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine
@@ -104,7 +105,7 @@ def test_exports_projects_only_for_admins(client: TestClient, session: Session) 
     assert response.status_code == 200
     assert "application/json" in response.headers["content-type"]
     assert response.headers["content-disposition"] == 'attachment; filename="APP-project.json"'
-    expected = {"bundleVersion": 4, "project": {"id": project.id, "key": "APP"}}
+    expected = {"bundleVersion": 5, "project": {"id": project.id, "key": "APP"}}
     assert_subset(response.json(), expected)
     assert agent.get("/api/projects/missing/export").status_code == 404
 
@@ -323,6 +324,39 @@ REPOSITORY_UPDATE = {
     "repositoryLocalPath": "/workspace/vibepod-cli",
     "repositoryRemoteUrl": "git@github.com:vibepod/vibepod-cli.git",
 }
+
+
+@pytest.mark.parametrize(
+    "title_field,body_field",
+    [("prTitle", "prBody"), ("suggestedPrTitle", "suggestedPrBody")],
+)
+def test_edits_suggested_pull_request_through_board_api(
+    client: TestClient, title_field: str, body_field: str
+) -> None:
+    agent = login(client)
+    created = create_idea_via_api(agent, title="Implement widget")
+    mark_ready_via_api(agent, created["id"])
+    card_id = get_board(agent)["columns"]["ready"][0]["id"]
+    url = f"/api/board/{card_id}"
+    updated = agent.patch(url, json={title_field: "Add widget", body_field: "Adds **widget**."})
+    assert updated.status_code == 200
+    suggestion = updated.json()["item"]
+    assert suggestion["suggestedPrTitle"] == "Add widget"
+    assert suggestion["suggestedPrBody"] == "Adds **widget**."
+    assert suggestion["suggestedPrBy"] == "admin"
+    assert suggestion["suggestedPrAt"] == suggestion["updatedAt"]
+
+    updated = agent.patch(url, json={body_field: "Tests the widget."})
+    assert updated.status_code == 200
+    assert updated.json()["item"]["suggestedPrTitle"] == "Add widget"
+    assert updated.json()["item"]["suggestedPrBody"] == "Tests the widget."
+
+    cleared = agent.patch(url, json={title_field: "", body_field: ""})
+    assert cleared.status_code == 200
+    assert "suggestedPrTitle" not in cleared.json()["item"]
+    assert "suggestedPrBody" not in cleared.json()["item"]
+    assert "suggestedPrBy" not in cleared.json()["item"]
+    assert "suggestedPrAt" not in cleared.json()["item"]
 
 
 def test_updates_task_repository_metadata_and_syncs_it_to_the_board(client: TestClient) -> None:

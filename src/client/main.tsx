@@ -153,7 +153,11 @@ import {
   parseBoardSearch,
   parseNavigationPath,
 } from "./navigation.js";
-import { PullRequestBadge, PullRequestPanel } from "./PullRequest.js";
+import {
+  PullRequestBadge,
+  PullRequestPanel,
+  SuggestedPullRequest,
+} from "./PullRequest.js";
 import {
   downloadResponse,
   parseProjectBundleText,
@@ -3408,6 +3412,17 @@ const App = () => {
                 </Stack>
               </Paper>
             )}
+            {taskViewCard &&
+              (!isTaskViewArchived ||
+                taskViewCard.suggestedPrTitle ||
+                taskViewCard.suggestedPrBody) && (
+                <SuggestedPullRequest
+                  key={taskViewCard.id}
+                  card={taskViewCard}
+                  editable={!isTaskViewArchived}
+                  onChange={loadState}
+                />
+              )}
 
             {(taskViewBlockedBy.length > 0 || taskViewBlocks.length > 0) && (
               <Paper className="overview-section" withBorder radius="md" p="md">

@@ -76,7 +76,7 @@ def test_parses_pull_urls() -> None:
 # --- prefill ------------------------------------------------------------------------
 
 
-def test_prefills_title_base_and_body_from_the_task(
+def test_prefills_title_base_and_a_short_body_from_the_task(
     session: Session, project, github: GitHubClient
 ) -> None:
     card = pr_ready_card(
@@ -99,13 +99,117 @@ def test_prefills_title_base_and_body_from_the_task(
         ["main"],
     )
     assert not draft.draft
-    assert draft.body == (
-        "## Summary\nOpen the PR from the board\n\n"
-        "## Acceptance Criteria\n- [ ] Dialog is prefilled\n- [ ] Branch must be pushed\n\n"
-        "Closes #7\n\n"
-        "## Review\n- Review approved by admin\n\n"
-        "## Latest run\nAdded the Open PR dialog"
+    # Neither the criteria, the approvals nor the latest run: only the summary.
+    assert draft.body == "Open the PR from the board\n\nCloses #7"
+
+
+@pytest.mark.parametrize("linked", [False, True])
+def test_empty_summary_does_not_prefill_the_full_spec(
+    session: Session, project, github: GitHubClient, linked: bool
+) -> None:
+    card = pr_ready_card(
+        session,
+        project,
+        details="A long specification that should not become a PR description.",
+        github_issue_url=f"https://github.com/{REPO}/issues/7" if linked else None,
     )
+    draft = pull_requests.pull_request_draft(session, ADMIN, card.id, github)
+    assert draft.body == ("Closes #7" if linked else "")
+
+
+def test_prefills_from_the_suggested_pull_request(
+    session: Session, project, github: GitHubClient
+) -> None:
+    card = pr_ready_card(
+        session,
+        project,
+        summary="Open the PR from the board",
+        github_issue_url=f"https://github.com/{REPO}/issues/7",
+    )
+    board.update_card(
+        session,
+        ADMIN,
+        card.id,
+        suggested_pr_title="Add the Open PR dialog",
+        suggested_pr_body="Adds the dialog.\n\nTested by hand.",
+    )
+
+    draft = pull_requests.pull_request_draft(session, ADMIN, card.id, github)
+
+    assert draft.title == "Add the Open PR dialog"
+    assert draft.body == "Adds the dialog.\n\nTested by hand.\n\nCloses #7"
+
+
+@pytest.mark.parametrize(
+    "closing",
+    [
+        "Closes #7",
+        "fixes #7",
+        "Resolved: vibepod/board#7",
+        f"Closes https://github.com/{REPO}/issues/7",
+    ],
+)
+def test_keeps_a_suggestion_that_already_closes_the_issue(
+    session: Session, project, github: GitHubClient, closing: str
+) -> None:
+    card = pr_ready_card(session, project, github_issue_url=f"https://github.com/{REPO}/issues/7")
+    body = f"Adds the dialog.\n\n{closing}"
+    board.update_card(session, ADMIN, card.id, suggested_pr_body=body)
+
+    assert pull_requests.pull_request_draft(session, ADMIN, card.id, github).body == body
+
+
+def test_closes_the_issue_when_the_suggestion_only_mentions_it(
+    session: Session, project, github: GitHubClient
+) -> None:
+    card = pr_ready_card(session, project, github_issue_url=f"https://github.com/{REPO}/issues/7")
+    board.update_card(
+        session, ADMIN, card.id, suggested_pr_body="Follows #7, and closes #70 and other#7."
+    )
+
+    body = pull_requests.pull_request_draft(session, ADMIN, card.id, github).body
+    assert body.endswith("\n\nCloses #7")
+
+
+@pytest.mark.parametrize(
+    "example",
+    [
+        "Write `Closes #7` to close it.",
+        "```\nCloses #7\n```",
+        "~~~~md\nCloses #7\n~~~\n~~~~",
+        "> Closes #7",
+        "<!-- Closes #7 -->",
+        "<!--\nCloses #7\n-->",
+    ],
+)
+def test_closes_the_issue_when_the_suggestion_only_shows_an_example(
+    session: Session, project, github: GitHubClient, example: str
+) -> None:
+    card = pr_ready_card(session, project, github_issue_url=f"https://github.com/{REPO}/issues/7")
+    board.update_card(session, ADMIN, card.id, suggested_pr_body=f"Adds the dialog.\n\n{example}")
+
+    body = pull_requests.pull_request_draft(session, ADMIN, card.id, github).body
+    assert body.endswith("\n\nCloses #7")
+
+
+def test_keeps_a_suggestion_that_closes_the_issue_after_an_example(
+    session: Session, project, github: GitHubClient
+) -> None:
+    card = pr_ready_card(session, project, github_issue_url=f"https://github.com/{REPO}/issues/7")
+    body = "Adds the dialog.\n\n```\nexample\n```\n\n`code` and fixes #7"
+    board.update_card(session, ADMIN, card.id, suggested_pr_body=body)
+
+    assert pull_requests.pull_request_draft(session, ADMIN, card.id, github).body == body
+
+
+def test_a_suggested_title_alone_keeps_the_generated_body(
+    session: Session, project, github: GitHubClient
+) -> None:
+    card = pr_ready_card(session, project, summary="Why")
+    board.update_card(session, ADMIN, card.id, suggested_pr_title="Add it")
+
+    draft = pull_requests.pull_request_draft(session, ADMIN, card.id, github)
+    assert (draft.title, draft.body) == ("Add it", "Why")
 
 
 def test_closes_only_issues_in_the_same_repository(
@@ -208,7 +312,22 @@ def test_fills_left_out_fields_from_the_prefill(
 
     remote = fake.pulls[(REPO, 1)]
     assert (remote["title"], remote["draft"], remote["base"]["ref"]) == ("Open PRs", False, "main")
-    assert remote["body"].startswith("## Summary\nWhy")
+    assert remote["body"] == "Why"
+
+
+def test_opens_the_pr_with_the_suggestion_for_left_out_fields(
+    session: Session, project, fake: FakeGitHub, github: GitHubClient
+) -> None:
+    fake.branches[REPO].append("feature/pr")
+    card = pr_ready_card(session, project, summary="Why")
+    board.update_card(
+        session, ADMIN, card.id, suggested_pr_title="Add it", suggested_pr_body="Adds it."
+    )
+
+    pull_requests.open_pull_request(session, ADMIN, card.id, github, title="Mine")
+
+    remote = fake.pulls[(REPO, 1)]
+    assert (remote["title"], remote["body"]) == ("Mine", "Adds it.")
 
 
 def test_refuses_a_branch_that_is_not_on_github(

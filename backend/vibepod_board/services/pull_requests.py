@@ -5,6 +5,8 @@ identity and the state it had when it was opened or linked; keeping that state i
 not done here.
 """
 
+import re
+
 from sqlmodel import Session, col, select
 
 from vibepod_board.access import AccessContext
@@ -22,7 +24,7 @@ from vibepod_board.schemas import ApiModel, BoardCard, now
 from vibepod_board.services.board import get_card, require_active_card
 from vibepod_board.services.common import add_activity, lock, transactional
 from vibepod_board.services.history import actor_for, add_task_event
-from vibepod_board.tables import BoardCardRow, IdeaRow, TaskDependencyRow, TaskEventRow, TaskRunRow
+from vibepod_board.tables import BoardCardRow, IdeaRow, TaskDependencyRow
 
 INVALID_URL = "GitHub PR URL must look like https://github.com/owner/repo/pull/123"
 
@@ -83,33 +85,49 @@ def _dependency_branches(
     return branches
 
 
-def _body(session: Session, card: BoardCardRow, idea: IdeaRow | None, repository: str) -> str:
-    sections = []
-    summary = idea.summary if idea else ""
-    if summary or card.details:
-        sections.append(f"## Summary\n{summary or card.details}")
-    if idea and idea.acceptance_criteria:
-        criteria = "\n".join(f"- [ ] {item}" for item in idea.acceptance_criteria)
-        sections.append(f"## Acceptance Criteria\n{criteria}")
+_FENCE = re.compile(r" {0,3}(`{3,}|~{3,})")
+_QUOTE = re.compile(r" {0,3}>")
+_COMMENT = re.compile(r"<!--.*?(?:-->|$)", re.DOTALL)
+_INLINE_CODE = re.compile(r"(`+).+?\1", re.DOTALL)
+
+
+def _prose(body: str) -> str:
+    """The body without the Markdown that GitHub does not read keywords in: fenced code,
+    block quotes, HTML comments and inline code."""
+    lines = []
+    fence = ""
+    for line in body.splitlines():
+        opening = _FENCE.match(line)
+        if fence:
+            if opening and opening.group(1)[0] == fence[0] and len(opening.group(1)) >= len(fence):
+                if not line.strip().strip(fence[0]):
+                    fence = ""
+            continue
+        if opening:
+            fence = opening.group(1)
+            continue
+        if not _QUOTE.match(line):
+            lines.append(line)
+    return _INLINE_CODE.sub("", _COMMENT.sub("", "\n".join(lines)))
+
+
+def _closes(body: str, repository: str, number: int) -> bool:
+    """Whether the body already closes issue `number` of `repository` with a closing keyword
+    in its prose."""
+    name = re.escape(repository)
+    target = rf"(?:{name})?#{number}\b|https://github\.com/{name}/issues/{number}\b"
+    keyword = r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+"
+    return re.search(f"{keyword}(?:{target})", _prose(body), re.IGNORECASE) is not None
+
+
+def _body(card: BoardCardRow, idea: IdeaRow | None, repository: str) -> str:
+    """The card's suggested description, else the task summary; either closes the linked
+    issue when it is in the same repository."""
+    body = (card.suggested_pr_body or (idea.summary if idea else "") or "").strip()
     issue = parse_issue_url(card.github_issue_url or "")
-    if issue and issue.repository == repository:
-        sections.append(f"Closes #{issue.number}")
-    if idea:
-        approvals = session.exec(
-            select(TaskEventRow.message)
-            .where(TaskEventRow.idea_id == idea.id, TaskEventRow.kind == TaskEventKind.APPROVED)
-            .order_by(col(TaskEventRow.created_at))
-        ).all()
-        if approvals:
-            sections.append("## Review\n" + "\n".join(f"- {message}" for message in approvals))
-        run = session.exec(
-            select(TaskRunRow)
-            .where(TaskRunRow.idea_id == idea.id)
-            .order_by(col(TaskRunRow.created_at).desc(), col(TaskRunRow.id).desc())
-        ).first()
-        if run and run.summary.strip():
-            sections.append(f"## Latest run\n{run.summary.strip()}")
-    return "\n\n".join(sections)
+    if issue and issue.repository == repository and not _closes(body, repository, issue.number):
+        body = f"{body}\n\nCloses #{issue.number}" if body else f"Closes #{issue.number}"
+    return body
 
 
 def _draft(session: Session, card: BoardCardRow, client: GitHubClient) -> PullRequestDraft:
@@ -120,11 +138,11 @@ def _draft(session: Session, card: BoardCardRow, client: GitHubClient) -> PullRe
     bases = [default, *(branch for branch in stacked if branch != default)]
     return PullRequestDraft(
         repository=repository,
-        title=card.title,
+        title=card.suggested_pr_title or card.title,
         # A dependency still under review is what this work builds on.
         base=bases[1] if len(bases) > 1 else default,
         bases=bases,
-        body=_body(session, card, idea, repository),
+        body=_body(card, idea, repository),
     )
 
 

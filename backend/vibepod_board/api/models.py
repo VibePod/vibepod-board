@@ -6,6 +6,7 @@ from typing import Annotated, Any
 
 from pydantic import (
     AfterValidator,
+    AliasChoices,
     AwareDatetime,
     BeforeValidator,
     Field,
@@ -159,6 +160,13 @@ class BoardCardUpdate(ApiModel):
     repository_local_path: StrictStr | None = None
     repository_remote_url: StrictStr | None = None
     assignee: StrictStr | None = None
+    # The suggested pull request; an empty string clears a field.
+    suggested_pr_title: StrictStr | None = Field(
+        default=None, validation_alias=AliasChoices("prTitle", "suggestedPrTitle")
+    )
+    suggested_pr_body: StrictStr | None = Field(
+        default=None, validation_alias=AliasChoices("prBody", "suggestedPrBody")
+    )
     expected_updated_at: RequiredText | None = None
 
 
@@ -212,6 +220,10 @@ class HandoverRequest(ApiModel):
     head_sha: HeadSha | None = None
     note: StrictStr | None = None
     expected_updated_at: RequiredText | None = None
+    # The pull request title and markdown description for the work; together they replace the
+    # card's suggested pull request.
+    pr_title: StrictStr | None = None
+    pr_body: StrictStr | None = None
 
 
 class ReleaseRequest(ApiModel):
