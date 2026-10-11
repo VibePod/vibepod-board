@@ -60,6 +60,7 @@ import {
   Plus,
   RefreshCcw,
   Save,
+  Send,
   Sun,
   Trash2,
   Upload,
@@ -109,7 +110,7 @@ import {
   type ArchiveDoneTarget,
 } from "./ArchiveDoneDialog.js";
 import { ArchiveView } from "./ArchiveView.js";
-import { api, isConflict } from "./api.js";
+import { api, isConflict, isNotFound } from "./api.js";
 import { type ArchivedTaskRow, archivedTaskRows } from "./archiveUtils.js";
 import vibepodIconUrl from "./assets/icon.png";
 import {
@@ -159,6 +160,11 @@ import {
   parseNavigationPath,
 } from "./navigation.js";
 import {
+  PlanReadyDialog,
+  type PlanReadyTarget,
+  planReadyLimit,
+} from "./PlanReadyDialog.js";
+import {
   PullRequestBadge,
   PullRequestPanel,
   SuggestedPullRequest,
@@ -178,6 +184,8 @@ import { TaskRuns } from "./TaskRuns.js";
 import {
   isCardReadinessStale,
   isReadinessStale,
+  plannedManyNotice,
+  plannedNotice,
   readinessColor,
   taskListCardView,
 } from "./taskCardUtils.js";
@@ -453,6 +461,14 @@ const App = () => {
   >(null);
   const [archiveDoneTarget, setArchiveDoneTarget] =
     useState<ArchiveDoneTarget | null>(null);
+  const [planReadyTarget, setPlanReadyTarget] =
+    useState<PlanReadyTarget | null>(null);
+  // Cards whose Plan request is in flight. The ref refuses a second click that
+  // comes before the re-render disables the button.
+  const [planningCardIds, setPlanningCardIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const planningCardIdsRef = useRef(new Set<string>());
   const [createdToken, setCreatedToken] = useState<CreatedTokenState>(null);
   const [tokenDraft, setTokenDraft] = useState<CreateApiTokenInput>(
     emptyTokenDraft(),
@@ -477,8 +493,11 @@ const App = () => {
   // throw away an older one that succeeded.
   const loadOrder = useRef(createLoadOrder()).current;
 
-  /** A background reload keeps the error banner: the user has not read it yet. */
-  const loadState = async ({ background = false } = {}) => {
+  /**
+   * A background reload keeps the error banner: the user has not read it yet.
+   * Returns the loaded tasks, even when a newer load already replaced them.
+   */
+  const loadState = async ({ background = false } = {}): Promise<Idea[]> => {
     const ticket = loadOrder.start();
     if (!background) setError("");
     const [projects, ideas, board, archived, documents, github] =
@@ -493,7 +512,7 @@ const App = () => {
         // Sync buttons stay disabled when the status cannot be read.
         api<GitHubStatus>("/api/github").catch(() => null),
       ]);
-    if (!loadOrder.apply(ticket)) return;
+    if (!loadOrder.apply(ticket)) return ideas.items;
     setGitHubStatus(github);
     setState((prev) => ({
       projects: projects.items,
@@ -505,6 +524,7 @@ const App = () => {
     if (!archived) setError("Failed to load archived cards");
     setLoadCount((count) => count + 1);
     setIsLoading(false);
+    return ideas.items;
   };
 
   // The worker poll outlives renders; it reloads through the latest loadState.
@@ -1723,6 +1743,84 @@ const App = () => {
   const archivedCardForRow = (row: ArchivedTaskRow) =>
     state.archivedCards.find((card) => card.id === row.cardId);
 
+  /**
+   * A card's task key and the keys of the unfinished tasks it depends on, named
+   * from `ideas`. Pass the card a write returned: its `blockedBy` is what the
+   * write saw, while the board's copy may predate a dependency change.
+   */
+  const planningOf = (card: BoardCard, ideas: Map<string, Idea>) => {
+    const project = state.projects.find((item) => item.id === card.projectId);
+    const idea = card.ideaId ? ideas.get(card.ideaId) : undefined;
+    return {
+      task:
+        project && idea
+          ? formatTaskId(project.key, idea.taskNumber)
+          : card.title,
+      waitingFor: dependencyLinks(
+        card.blockedBy,
+        ideas,
+        project?.key ?? "",
+      ).map((link) => link.taskId),
+    };
+  };
+
+  /**
+   * Reloads the board after a write that succeeded and returns the reloaded
+   * tasks. A failed reload is reported, and the tasks already shown are returned.
+   */
+  const reloadAfterWrite = async (): Promise<Map<string, Idea>> => {
+    try {
+      const ideas = await loadState();
+      return new Map(ideas.map((idea) => [idea.id, idea]));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load board");
+      return ideaById;
+    }
+  };
+
+  /**
+   * Plans the Ready cards the dialog was opened for in one all-or-nothing batch,
+   * each guarded by the card the board showed. A stale card, or one removed
+   * meanwhile, refuses the whole batch: the dialog closes and the board reloads,
+   * so the column is checked again. Other errors are thrown for the dialog.
+   */
+  const confirmPlanReady = async ({ cards }: PlanReadyTarget) => {
+    const batch = cards.slice(0, planReadyLimit);
+    let planned: BoardCard[];
+    try {
+      ({ items: planned } = await api<{ items: BoardCard[] }>(
+        "/api/board/batch",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            items: batch.map((card) => ({
+              id: card.id,
+              column: "planned",
+              expectedUpdatedAt: card.updatedAt,
+            })),
+          }),
+        },
+      ));
+    } catch (err) {
+      if (!isConflict(err) && !isNotFound(err)) throw err;
+      setPlanReadyTarget(null);
+      await loadState().catch(() => undefined);
+      setError(
+        `${err.message}. The board was reloaded; check the cards again.`,
+      );
+      return;
+    }
+    // The cards are planned: close the dialog before refreshing, so a refresh
+    // failure is reported globally instead of inside the dialog.
+    setPlanReadyTarget(null);
+    const ideas = await reloadAfterWrite();
+    const waiting = planned
+      .map((card) => planningOf(card, ideas))
+      .filter((planning) => planning.waitingFor.length > 0)
+      .map((planning) => planning.task);
+    setNotice(plannedManyNotice(planned.length, waiting));
+  };
+
   const moveCard = async (card: BoardCard, column: BoardColumn) => {
     setError("");
     await api(`/api/board/${card.id}`, {
@@ -1730,6 +1828,59 @@ const App = () => {
       body: JSON.stringify({ column }),
     });
     await loadState();
+  };
+
+  /**
+   * Hands a Ready card to the workers by putting it in Planned, the way a drop
+   * does. Guarded by the card this board shows, and the notice says whether a
+   * worker picks it up or which unfinished dependencies it waits for. The
+   * card's Plan action is disabled until its request finishes, so a second
+   * click never sends a second, stale write.
+   */
+  const planCard = async (card: BoardCard) => {
+    if (planningCardIdsRef.current.has(card.id)) return;
+    const setPlanning = (planning: boolean) => {
+      if (planning) planningCardIdsRef.current.add(card.id);
+      else planningCardIdsRef.current.delete(card.id);
+      setPlanningCardIds(new Set(planningCardIdsRef.current));
+    };
+    setPlanning(true);
+    try {
+      await planCardOnce(card);
+    } finally {
+      setPlanning(false);
+    }
+  };
+
+  const planCardOnce = async (card: BoardCard) => {
+    setError("");
+    setNotice("");
+    let planned: BoardCard;
+    try {
+      ({ item: planned } = await api<{ item: BoardCard }>(
+        `/api/board/${card.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            column: "planned",
+            expectedUpdatedAt: card.updatedAt,
+          }),
+        },
+      ));
+    } catch (err) {
+      // Reload first: a reload clears the error.
+      await loadState().catch(() => undefined);
+      setError(
+        err instanceof Error
+          ? `${err.message}. The board was reloaded; check the card again.`
+          : "Failed to plan card",
+      );
+      return;
+    }
+    // The card is planned: a failed reload is reported as such, not as a
+    // failed plan.
+    const { task, waitingFor } = planningOf(planned, await reloadAfterWrite());
+    setNotice(plannedNotice(task, waitingFor));
   };
 
   /**
@@ -2583,6 +2734,24 @@ const App = () => {
                       {columnLabels[column]}
                     </Title>
                     <Group gap={6} wrap="nowrap">
+                      {column === "ready" &&
+                        (projectColumns.ready?.length ?? 0) > 0 && (
+                          <ActionIcon
+                            variant="subtle"
+                            color="gray"
+                            size="sm"
+                            aria-label="Plan all ready tasks"
+                            title="Plan all ready tasks"
+                            onClick={() =>
+                              setPlanReadyTarget({
+                                projectTitle: selectedProject.title,
+                                cards: projectColumns.ready,
+                              })
+                            }
+                          >
+                            <Send size={16} />
+                          </ActionIcon>
+                        )}
                       {column === "done" &&
                         (projectColumns.done?.length ?? 0) > 0 && (
                           <ActionIcon
@@ -2736,7 +2905,9 @@ const App = () => {
                                 cardId={card.id}
                                 state={card.reviewState}
                                 reloadKey={`${card.updatedAt}|${loadCount}`}
-                                onChanged={() => loadState()}
+                                onChanged={async () => {
+                                  await loadState();
+                                }}
                               />
                             )}
                             {column === "planned" &&
@@ -2977,6 +3148,7 @@ const App = () => {
                               </Group>
                             )}
                             {(cardTaskId ||
+                              column === "ready" ||
                               column === "done" ||
                               column === "review" ||
                               column === "pr_ready") && (
@@ -3023,6 +3195,28 @@ const App = () => {
                                     }
                                   >
                                     Request changes
+                                  </Button>
+                                )}
+                                {column === "ready" && (
+                                  <Button
+                                    type="button"
+                                    variant="subtle"
+                                    color="blue"
+                                    size="compact-xs"
+                                    mr="auto"
+                                    leftSection={<Send size={12} aria-hidden />}
+                                    aria-label={`Plan ${card.title}`}
+                                    disabled={planningCardIds.has(card.id)}
+                                    loading={planningCardIds.has(card.id)}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void planCard(card);
+                                    }}
+                                    onKeyDown={(event) =>
+                                      event.stopPropagation()
+                                    }
+                                  >
+                                    Plan
                                   </Button>
                                 )}
                                 {column === "done" && (
@@ -3364,7 +3558,9 @@ const App = () => {
                 key={taskViewCard.id}
                 card={taskViewCard}
                 enabled={githubStatus?.enabled ?? false}
-                onChange={loadState}
+                onChange={async () => {
+                  await loadState();
+                }}
               />
             )}
 
@@ -3517,7 +3713,9 @@ const App = () => {
                   key={taskViewCard.id}
                   card={taskViewCard}
                   editable={!isTaskViewArchived}
-                  onChange={loadState}
+                  onChange={async () => {
+                    await loadState();
+                  }}
                 />
               )}
 
@@ -3573,7 +3771,9 @@ const App = () => {
             <TaskReviews
               cardId={taskViewCard?.id ?? taskViewIdea.id}
               reloadKey={`${taskViewCard?.updatedAt}|${loadCount}`}
-              onChanged={() => loadState()}
+              onChanged={async () => {
+                await loadState();
+              }}
             />
             <TaskRuns
               ideaId={taskViewIdea.id}
@@ -3655,6 +3855,22 @@ const App = () => {
                     onClick={() => setReworkTarget(taskViewCard)}
                   >
                     Request changes
+                  </Button>
+                )}
+                {taskViewCard?.column === "ready" && (
+                  <Button
+                    type="button"
+                    variant="light"
+                    leftSection={<Send size={16} aria-hidden />}
+                    aria-label={`Plan ${taskViewCard.title}`}
+                    disabled={planningCardIds.has(taskViewCard.id)}
+                    onClick={() => {
+                      // The notice and a conflict show on the board.
+                      setTaskViewModal(null);
+                      void planCard(taskViewCard);
+                    }}
+                  >
+                    Plan
                   </Button>
                 )}
                 <Button
@@ -4029,6 +4245,11 @@ const App = () => {
         target={archiveDoneTarget}
         onCancel={() => setArchiveDoneTarget(null)}
         onConfirm={confirmArchiveDone}
+      />
+      <PlanReadyDialog
+        target={planReadyTarget}
+        onCancel={() => setPlanReadyTarget(null)}
+        onConfirm={confirmPlanReady}
       />
 
       <Modal

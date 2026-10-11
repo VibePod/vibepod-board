@@ -13,6 +13,10 @@ export class ApiError extends Error {
 export const isConflict = (error: unknown): error is ApiError =>
   error instanceof ApiError && error.status === 409;
 
+/** Whether a request was refused because the record no longer exists. */
+export const isNotFound = (error: unknown): error is ApiError =>
+  error instanceof ApiError && error.status === 404;
+
 /**
  * JSON request against the board API with the admin session cookie. A failed
  * request throws an ApiError with the server's error message.
