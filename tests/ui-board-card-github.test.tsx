@@ -285,4 +285,13 @@ describe("board card GitHub link", () => {
       within(view).getByRole("button", { name: "Copy local path" }),
     ).toBeTruthy();
   });
+
+  it("offers to add a suggested pull request in any column", async () => {
+    await renderBoard();
+
+    fireEvent.click(boardCard("Repository task"));
+    const view = await screen.findByRole("dialog");
+    expect(within(view).getByText(/No suggested description yet/)).toBeTruthy();
+    expect(within(view).getByRole("button", { name: "Add" })).toBeTruthy();
+  });
 });

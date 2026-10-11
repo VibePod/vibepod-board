@@ -3413,11 +3413,9 @@ const App = () => {
               </Paper>
             )}
             {taskViewCard &&
-              (taskViewCard.suggestedPrTitle ||
-                taskViewCard.suggestedPrBody ||
-                (!isTaskViewArchived &&
-                  (taskViewCard.column === "review" ||
-                    taskViewCard.column === "pr_ready"))) && (
+              (!isTaskViewArchived ||
+                taskViewCard.suggestedPrTitle ||
+                taskViewCard.suggestedPrBody) && (
                 <SuggestedPullRequest
                   key={taskViewCard.id}
                   card={taskViewCard}
