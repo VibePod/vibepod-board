@@ -180,6 +180,8 @@ export type Worker = {
   agent: string;
   machine: string;
   mode?: WorkerMode;
+  /** A short id of the running worker process, such as its container id. */
+  instance?: string;
   status: WorkerState;
   statusReason?: string;
   /** The task being worked on, and since when. */
@@ -188,6 +190,8 @@ export type Worker = {
   taskTitle?: string;
   step?: WorkerStep;
   taskStartedAt?: string;
+  /** The agent container or task running the task, as `vp task logs` takes it. */
+  runId?: string;
   startedAt: string;
   lastSeenAt: string;
   stoppedAt?: string;
@@ -202,6 +206,9 @@ export type AutomationState = {
   pausedAt?: string;
   reason?: string;
 };
+
+/** The workers a removal took out, in their last state. */
+export type RemovedWorkersResponse = { items: Worker[] };
 
 export type WorkerListResponse = {
   items: Worker[];

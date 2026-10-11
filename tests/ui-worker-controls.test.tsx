@@ -117,8 +117,21 @@ const jsonResponse = (body: unknown, status = 200) =>
     headers: { "Content-Type": "application/json" },
   });
 
-const boardApi = () => {
+const offlineWorker = (id: string, instance?: string): Worker => ({
+  id,
+  projectId: project.id,
+  name: holder,
+  agent: "claude",
+  machine: "laptop",
+  status: "offline",
+  instance,
+  startedAt: timestamp,
+  lastSeenAt: timestamp,
+});
+
+const boardApi = (initialWorkers: Worker[] = [worker]) => {
   let automation: AutomationState = { projectId: project.id, paused: false };
+  let workers = initialWorkers;
   let card = claimedCard;
   const columns = (): BoardColumns => ({
     ready: [],
@@ -140,7 +153,25 @@ const boardApi = () => {
     if (path === "/api/board") return jsonResponse({ columns: columns() });
     if (path === "/api/board/archived") return jsonResponse({ items: [] });
     if (path === `/api/workers?projectId=${project.id}`) {
-      return jsonResponse({ items: [worker], automation });
+      return jsonResponse({ items: workers, automation });
+    }
+    if (path === `/api/workers/remove-offline?projectId=${project.id}`) {
+      const removed = workers.filter((item) => item.status === "offline");
+      workers = workers.filter((item) => item.status !== "offline");
+      return jsonResponse({ items: removed });
+    }
+    const removal = path.match(/^\/api\/workers\/([^/]+)$/);
+    if (removal && method === "DELETE") {
+      const target = workers.find((item) => item.id === removal[1]);
+      if (!target) return jsonResponse({ error: "Worker not found" }, 404);
+      if (target.status !== "offline") {
+        return jsonResponse(
+          { error: `Worker ${target.name} is still connected; stop it first` },
+          409,
+        );
+      }
+      workers = workers.filter((item) => item.id !== target.id);
+      return jsonResponse({ item: target });
     }
     if (path === "/api/projects/project-1/automation/pause") {
       const body = JSON.parse(String(init?.body ?? "{}"));
@@ -178,7 +209,11 @@ const boardApi = () => {
 
 const posts = (fetchMock: ReturnType<typeof boardApi>) =>
   fetchMock.mock.calls
-    .filter(([, init]) => (init as RequestInit | undefined)?.method === "POST")
+    .filter(([, init]) =>
+      ["POST", "DELETE"].includes(
+        (init as RequestInit | undefined)?.method ?? "",
+      ),
+    )
     .map(([input, init]) => [
       String(input),
       (init as RequestInit).body
@@ -186,9 +221,9 @@ const posts = (fetchMock: ReturnType<typeof boardApi>) =>
         : null,
     ]);
 
-const renderBoard = async () => {
+const renderBoard = async (workers?: Worker[]) => {
   window.history.replaceState(null, "", `/projects/${project.id}/board`);
-  const fetchMock = boardApi();
+  const fetchMock = boardApi(workers);
   vi.stubGlobal("fetch", fetchMock);
   const { AppShell } = await import("../src/client/main.js");
   render(<AppShell />);
@@ -196,10 +231,8 @@ const renderBoard = async () => {
   return fetchMock;
 };
 
-const openWorkers = async () => {
-  await userEvent.click(
-    await screen.findByRole("button", { name: /1 worker/ }),
-  );
+const openWorkers = async (name: RegExp = /1 worker/) => {
+  await userEvent.click(await screen.findByRole("button", { name }));
   return screen.findByRole("dialog", { name: "Workers" });
 };
 
@@ -283,6 +316,91 @@ describe("worker controls", () => {
     expect(posts(fetchMock)).toEqual([["/api/workers/worker-1/stop", null]]);
     // A stopped offline worker's tasks went back to Planned: the board reloads.
     await waitFor(() => expect(boardLoads()).toBeGreaterThan(before));
+  });
+
+  it("removes an offline worker from the list", async () => {
+    const fetchMock = await renderBoard([
+      worker,
+      offlineWorker("worker-2", "c0ffee"),
+    ]);
+    const dialog = await openWorkers();
+
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: `Remove ${holder} (c0ffee)` }),
+    );
+
+    expect(await screen.findByText(`Removed ${holder}.`)).toBeTruthy();
+    expect(posts(fetchMock)).toEqual([["/api/workers/worker-2", null]]);
+    await waitFor(() =>
+      expect(
+        within(dialog).queryByRole("button", { name: /^Remove / }),
+      ).toBeNull(),
+    );
+    expect(within(dialog).getByText(holder)).toBeTruthy();
+  });
+
+  it("shows the refusal to remove a worker that came back", async () => {
+    const fetchMock = await renderBoard([offlineWorker("worker-2")]);
+    const deletes = () =>
+      fetchMock.mock.calls.filter(
+        ([, init]) => (init as RequestInit | undefined)?.method === "DELETE",
+      );
+    const dialog = await openWorkers(/Workers offline/);
+    // It reconnects before the removal reaches the board.
+    fetchMock.mockImplementationOnce(async () =>
+      jsonResponse(
+        { error: `Worker ${holder} is still connected; stop it first` },
+        409,
+      ),
+    );
+
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: /^Remove claude@laptop/ }),
+    );
+
+    expect(
+      await screen.findByText(
+        `Worker ${holder} is still connected; stop it first`,
+      ),
+    ).toBeTruthy();
+    expect(deletes()).toHaveLength(1);
+  });
+
+  it("removes every offline worker once confirmed", async () => {
+    const fetchMock = await renderBoard([
+      worker,
+      offlineWorker("worker-2"),
+      offlineWorker("worker-3"),
+    ]);
+    const dialog = await openWorkers();
+
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Remove offline workers" }),
+    );
+    expect(within(dialog).getByText("Remove 2 offline workers?")).toBeTruthy();
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Keep them" }),
+    );
+    expect(posts(fetchMock)).toEqual([]);
+
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Remove offline workers" }),
+    );
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Remove" }),
+    );
+
+    expect(await screen.findByText("Removed 2 offline workers.")).toBeTruthy();
+    expect(posts(fetchMock)).toEqual([
+      [`/api/workers/remove-offline?projectId=${project.id}`, null],
+    ]);
+    await waitFor(() =>
+      expect(
+        within(dialog).queryByRole("button", {
+          name: "Remove offline workers",
+        }),
+      ).toBeNull(),
+    );
   });
 
   it("cancels a run from the card after confirming", async () => {

@@ -59,6 +59,16 @@ export const workingWorkersByTask = (workers: Worker[]): Map<string, Worker> =>
 export const onlineWorkers = (workers: Worker[]): Worker[] =>
   workers.filter((worker) => worker.status !== "offline");
 
+export const offlineWorkers = (workers: Worker[]): Worker[] =>
+  workers.filter((worker) => worker.status === "offline");
+
+/**
+ * Tells registrations under one name apart: the instance the worker sent, such
+ * as its container id, or else the start of its board id.
+ */
+export const workerInstanceLabel = (worker: Worker): string =>
+  worker.instance ?? worker.id.slice(0, 8);
+
 /**
  * What the workers are doing, as far as the board is concerned. When it
  * changes between two polls, automation moved cards and the board reloads.
