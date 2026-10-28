@@ -9,7 +9,7 @@ from sqlmodel import SQLModel
 
 from vibepod_board.db import migrate
 
-HEAD = "0015"
+HEAD = "0016"
 LEGACY_SCHEMA = (Path(__file__).parent / "legacy_schema.sql").read_text()
 # The first TS schema, before repository, readiness and dependency support.
 ORIGINAL_SCHEMA = LEGACY_SCHEMA.split("alter table board_cards add column", 1)[0]
@@ -338,3 +338,27 @@ def test_0013_keeps_existing_review_run_verdicts(empty_db: Engine, pruned: bool)
             text("SELECT kind, verdict, feedback, verify_output FROM task_runs")
         ).one()
     assert tuple(result) == ("review", "approve", "Looks good", "Tests passed")
+
+
+def test_0016_keeps_existing_projects_active(empty_db: Engine) -> None:
+    from alembic import command
+
+    from vibepod_board.db import alembic_config
+
+    config = alembic_config()
+    with empty_db.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "0015")
+        connection.execute(
+            text(
+                "insert into projects (id, key, title, created_at, updated_at) "
+                "values ('p1', 'APP', 'App', now(), now())"
+            )
+        )
+
+    migrate(empty_db)
+
+    with empty_db.connect() as connection:
+        rows = connection.execute(text("select key, archived_at from projects")).all()
+    assert [tuple(row) for row in rows] == [("APP", None)]
+    assert revision(empty_db) == HEAD

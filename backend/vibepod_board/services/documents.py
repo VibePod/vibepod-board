@@ -12,6 +12,7 @@ from vibepod_board.enums import DocumentKind
 from vibepod_board.schemas import PlanDocument, now
 from vibepod_board.services.common import (
     add_activity,
+    assert_project_active,
     assert_title,
     document_from_row,
     new_id,
@@ -20,7 +21,7 @@ from vibepod_board.services.common import (
     transactional,
 )
 from vibepod_board.services.listing import ListFilter, list_scope, page_query, scoped
-from vibepod_board.services.projects import resolve_project_id_for_create
+from vibepod_board.services.projects import archived_project_ids, resolve_project_id_for_create
 from vibepod_board.services.references import resolve_project_id
 from vibepod_board.tables import DocumentRow
 
@@ -61,9 +62,10 @@ def create_document(
     assert_title(title, "Document")
     requested = resolve_project_id(session, project_id) if project_id else None
     resolved_project_id = resolve_project_id_for_create(
-        session, default_project_id_for_create(access, requested)
+        session, default_project_id_for_create(access, requested, archived_project_ids(session))
     )
     assert_can_access_project(access, resolved_project_id)
+    assert_project_active(session, resolved_project_id)
     timestamp = now()
     document = DocumentRow(
         id=new_id(),
@@ -95,6 +97,7 @@ def update_document(
 ) -> PlanDocument:
     document = require_document(session, document_id)
     assert_can_access_project(access, document.project_id)
+    assert_project_active(session, document.project_id)
     if title is not None:
         assert_title(title, "Document")
         document.title = title.strip()

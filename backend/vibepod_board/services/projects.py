@@ -1,10 +1,12 @@
+from sqlalchemy import func
 from sqlmodel import Session, col, select
 
 from vibepod_board.access import AccessContext, AdminAccess, assert_can_access_project
 from vibepod_board.errors import Conflict
-from vibepod_board.schemas import Project, now
+from vibepod_board.schemas import Project, ProjectListItem, now
 from vibepod_board.services.common import (
     add_activity,
+    assert_project_active,
     assert_title,
     new_id,
     normalize_project_key,
@@ -15,20 +17,50 @@ from vibepod_board.services.common import (
 from vibepod_board.services.history import actor_for
 from vibepod_board.services.open_reviews import promote_approved, validate_review_settings
 from vibepod_board.services.references import resolve_project_id
-from vibepod_board.tables import ProjectRow
+from vibepod_board.tables import BoardCardRow, IdeaRow, ProjectRow
 
 DEFAULT_PROJECT_KEY = "GEN"
 DEFAULT_PROJECT_SUMMARY = "Default project for uncategorized work."
 
 
-def list_projects(session: Session, access: AccessContext | None = None) -> list[Project]:
+def list_projects(
+    session: Session, access: AccessContext | None = None, archived: bool | None = False
+) -> list[ProjectListItem]:
+    """Active projects by default; `archived=True` lists only archived ones and `None` both.
+    Each carries its task and card counts."""
+    query = select(ProjectRow).order_by(col(ProjectRow.updated_at).desc(), col(ProjectRow.title))
+    if archived is not None:
+        archived_at = col(ProjectRow.archived_at)
+        query = query.where(archived_at.is_not(None) if archived else archived_at.is_(None))
+    if access is not None and not isinstance(access, AdminAccess):
+        query = query.where(col(ProjectRow.id).in_(access.project_ids))
+    rows = session.exec(query).all()
+    ids = [row.id for row in rows]
+    task_counts = _counts(session, IdeaRow, ids)
+    card_counts = _counts(session, BoardCardRow, ids)
+    return [
+        ProjectListItem(
+            **project_from_row(row).model_dump(),
+            task_count=task_counts.get(row.id, 0),
+            card_count=card_counts.get(row.id, 0),
+        )
+        for row in rows
+    ]
+
+
+def _counts(session: Session, table: type[IdeaRow] | type[BoardCardRow], ids: list[str]):
+    if not ids:
+        return {}
     rows = session.exec(
-        select(ProjectRow).order_by(col(ProjectRow.updated_at).desc(), col(ProjectRow.title))
+        select(table.project_id, func.count())
+        .where(col(table.project_id).in_(ids))
+        .group_by(table.project_id)
     ).all()
-    projects = [project_from_row(row) for row in rows]
-    if access is None or isinstance(access, AdminAccess):
-        return projects
-    return [project for project in projects if project.id in access.project_ids]
+    return {project_id: count for project_id, count in rows}
+
+
+def archived_project_ids(session: Session) -> set[str]:
+    return set(session.exec(select(ProjectRow.id).where(col(ProjectRow.archived_at).is_not(None))))
 
 
 def _assert_key_available(session: Session, key: str, current_id: str | None = None) -> None:
@@ -79,6 +111,7 @@ def update_project(
     max_review_rounds: int | None = None,
 ) -> Project:
     row = require_project(session, project_id)
+    assert_project_active(session, row.id)
     validate_review_settings(required_approvals, max_review_rounds)
     _apply_review_settings(row, required_approvals, max_review_rounds)
     timestamp = now()
@@ -130,6 +163,7 @@ def update_project_settings(
         .with_for_update()
         .execution_options(populate_existing=True)
     ).one()
+    assert_project_active(session, row.id)
     _apply_review_settings(row, required_approvals, max_review_rounds)
     timestamp = now()
     if required_approvals is not None:
@@ -163,20 +197,25 @@ def _keys_of_length(alphabet: str, length: int):
 
 
 def resolve_project_id_for_create(session: Session, requested: str | None) -> str:
-    """The requested project, else the oldest one, else a new "General" project."""
+    """The requested project, else the oldest active one, else a new "General" project."""
     if requested is not None:
         return resolve_project_id(session, requested)
 
     oldest = session.exec(
-        select(ProjectRow).order_by(col(ProjectRow.created_at), col(ProjectRow.id)).limit(1)
+        select(ProjectRow)
+        .where(col(ProjectRow.archived_at).is_(None))
+        .order_by(col(ProjectRow.created_at), col(ProjectRow.id))
+        .limit(1)
     ).first()
     if oldest:
         return oldest.id
 
     timestamp = now()
+    # Archived projects keep their keys.
+    used = set(session.exec(select(ProjectRow.key)))
     row = ProjectRow(
         id=new_id(),
-        key=next_available_project_key(set(), DEFAULT_PROJECT_KEY),
+        key=next_available_project_key(used, DEFAULT_PROJECT_KEY),
         title="General",
         summary=DEFAULT_PROJECT_SUMMARY,
         created_at=timestamp,

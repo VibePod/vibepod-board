@@ -20,6 +20,7 @@ from vibepod_board.errors import BadRequest, Conflict
 from vibepod_board.schemas import BoardCard, now
 from vibepod_board.services.common import (
     add_activity,
+    assert_project_active,
     assert_unchanged,
     card_from_row,
     lock,
@@ -44,6 +45,7 @@ def _locked_card(
 ) -> tuple[IdeaRow, BoardCardRow]:
     found = require_card_ref(session, access, reference)
     assert_can_access_project(access, found.project_id)
+    assert_project_active(session, found.project_id)
     if found.archived_at is not None:
         raise Conflict("Board card is archived; unarchive it first")
     if not found.idea_id:

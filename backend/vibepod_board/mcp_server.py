@@ -48,6 +48,7 @@ from vibepod_board.services import (
     github_sync,
     history,
     ideas,
+    project_archive,
     projects,
     pull_requests,
     readiness,
@@ -229,11 +230,67 @@ def create_mcp_server(
 
     @mcp.tool(
         title="List Projects",
-        description="List projects that contain tasks, board cards, and notes.",
+        description="List projects that contain tasks, board cards, and notes, with their "
+        "task and card counts. Active projects only by default; archived true lists only "
+        "archived projects, includeArchived true lists both.",
         annotations=READ_ONLY,
     )
-    def list_projects() -> dict[str, Any]:
-        return run(lambda s, a: {"items": projects.list_projects(s, a)})
+    def list_projects(
+        archived: bool = False,
+        includeArchived: bool = False,  # noqa: N803
+    ) -> dict[str, Any]:
+        selected = None if includeArchived else archived
+        return run(lambda s, a: {"items": projects.list_projects(s, a, selected)})
+
+    @mcp.tool(
+        title="Archive Project",
+        description="Archive a project: it leaves the project list and default listings, "
+        "writes to it are refused and its automation is paused; reads still work. Refused "
+        "while workers of the project are connected or its tasks are claimed or under review. "
+        "Undo with restore_project.",
+    )
+    def archive_project(
+        projectId: Annotated[  # noqa: N803
+            str, Field(min_length=1, description="Project id, key or title.")
+        ],
+    ) -> dict[str, Any]:
+        return run(
+            lambda s, a: {
+                "item": project_archive.archive_project(s, a, projectId, worker_timing(settings))
+            }
+        )
+
+    @mcp.tool(
+        title="Restore Project",
+        description="Restore an archived project to the active project list. Its automation "
+        "stays paused until resume_automation.",
+    )
+    def restore_project(
+        projectId: Annotated[  # noqa: N803
+            str, Field(min_length=1, description="Project id, key or title.")
+        ],
+    ) -> dict[str, Any]:
+        return run(lambda s, a: {"item": project_archive.restore_project(s, a, projectId)})
+
+    @mcp.tool(
+        title="Delete Project",
+        description="Permanently delete an archived project with all its tasks, board cards, "
+        "notes, workers and token links. This is irreversible: export the project first if "
+        "it may be needed again. Active projects are refused; archive them first. confirmKey "
+        "must repeat the project key.",
+        annotations={"destructiveHint": True},
+    )
+    def delete_project(
+        projectId: Annotated[  # noqa: N803
+            str, Field(min_length=1, description="Project id, key or title.")
+        ],
+        confirmKey: Annotated[  # noqa: N803
+            str, Field(min_length=1, description="The project key, to confirm the deletion.")
+        ],
+    ) -> dict[str, Any]:
+        return run(
+            lambda s, a: {"item": project_archive.delete_project(s, a, projectId, confirmKey)}
+        )
 
     @mcp.tool(
         title="Create Project",

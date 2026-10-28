@@ -69,9 +69,12 @@ Opening and reading pull requests uses the same `GITHUB_TOKEN` as issue sync (se
 - `POST /api/auth/login`
 - `POST /api/auth/logout`
 - `GET /api/auth/me`
-- `GET /api/projects`
+- `GET /api/projects` (`?archived=true`, `?includeArchived=true`)
 - `POST /api/projects`
 - `PATCH /api/projects/:id`
+- `DELETE /api/projects/:id`
+- `POST /api/projects/:id/archive`
+- `POST /api/projects/:id/restore`
 - `PATCH /api/projects/:id/settings`
 - `GET /api/projects/:id/export`
 - `POST /api/projects/import`
@@ -169,6 +172,9 @@ Tools:
 
 - `list_projects`
 - `create_project`
+- `archive_project`
+- `restore_project`
+- `delete_project`
 - `list_ideas`
 - `get_idea`
 - `get_board_card`
@@ -507,6 +513,20 @@ such as a Claude and a Codex one, can review the same task at once.
 ## Deleting Tasks
 
 **Delete** in the task view or the Edit Task dialog removes a task for good after a confirmation (also `DELETE /api/ideas/:id` and the `delete_idea` MCP tool, both limited to the caller's projects). Its board card, dependency links and readiness history go with it, documents stop linking to it, and tasks that depended on it lose that dependency. A linked GitHub issue is not touched, and task numbers are never reused. To reject work but keep the record, set the task's status to **Denied** instead.
+
+## Archiving Projects
+
+Finished or abandoned projects can be archived with **Archive project** on the project card or in the Edit Project dialog (also `POST /api/projects/:id/archive`, admin, or the `archive_project` MCP tool). Archiving is refused (`409`) while workers of the project are connected or its tasks are claimed or under review; the message names them. It also pauses the project's automation, so no worker can claim work in it.
+
+An archived project leaves the active views: the project list, project pickers, the sidebar project switcher, the default project of new work and of a token, and unscoped task, card and note lists. `GET /api/projects` and `list_projects` return active projects by default, `archived=true` only archived ones and `includeArchived=true` both, each with its task and card counts. Writes to an archived project (tasks, cards, notes, claims, worker registration) are refused with `Project X is archived`; reads that name it still work.
+
+**Archived projects** in the sidebar (`/archived-projects`) lists archived projects with their key, title, archived date and task and card counts. Opening one shows its tasks, board and notes read-only. From there a project can be:
+
+- **Exported** as the usual project bundle (`GET /api/projects/:id/export`).
+- **Restored** (`POST /api/projects/:id/restore`, `restore_project`): it returns to the project list with automation still paused until resumed.
+- **Deleted permanently** (`DELETE /api/projects/:id`, admin, or `delete_project`), after typing the project key; the dialog offers to export first. This removes the project and everything in it: tasks, cards, notes, workers and token links. It cannot be undone. Active projects are refused (`409`); archive them first. `DELETE` takes an optional `confirmKey` query parameter, and `delete_project` requires `confirmKey`, which must repeat the project key.
+
+Over MCP these tools act on the projects the token covers.
 
 ## Archiving Done Cards
 
