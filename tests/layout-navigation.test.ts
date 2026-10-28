@@ -31,6 +31,14 @@ describe("layout navigation helpers", () => {
     });
   });
 
+  it("opens a project picked from the archived projects view on tasks", () => {
+    expect(navigationForProjectSelection("archivedProjects", "p-1")).toEqual({
+      activeView: "ideas",
+      selectedProjectId: "p-1",
+    });
+    expect(shouldShowProjectSidebar("archivedProjects", true)).toBe(false);
+  });
+
   it("keeps the archive view when switching projects", () => {
     expect(navigationForProjectSelection("archive", "project-2")).toEqual({
       activeView: "archive",
@@ -55,5 +63,17 @@ describe("layout navigation helpers", () => {
       { value: "project-1", label: "WEB - Website" },
       { value: "project-2", label: "API - API" },
     ]);
+  });
+
+  it("leaves archived projects out of the selector", () => {
+    expect(
+      projectSelectorOptions([
+        project("project-1", "Website"),
+        {
+          ...project("project-2", "Legacy"),
+          archivedAt: "2026-10-01T00:00:00.000Z",
+        },
+      ]),
+    ).toEqual([{ value: "project-1", label: "WEB - Website" }]);
   });
 });
