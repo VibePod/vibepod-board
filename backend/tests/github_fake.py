@@ -14,11 +14,13 @@ class FakeGitHub:
     def __init__(self) -> None:
         self.issues: dict[tuple[str, int], dict[str, Any]] = {}
         self.pulls: dict[tuple[str, int], dict[str, Any]] = {}
+        self.reviews: dict[tuple[str, int], list[dict[str, Any]]] = {}
         # Pushed branches per repository; the first one is the default branch.
         self.branches: dict[str, list[str]] = {}
         self.requests: list[tuple[str, str]] = []
         self.clock = T0
         self.status_override: int | None = None
+        self.override_headers: dict[str, str] = {}
         self.transport = httpx.MockTransport(self._handle)
 
     def tick(self) -> str:
@@ -75,16 +77,41 @@ class FakeGitHub:
             "state": state,
             "draft": draft,
             "merged_at": self.tick() if merged else None,
-            "head": {"ref": head, "repo": {"full_name": head_repository or repository}},
+            "updated_at": self.tick(),
+            "head": {
+                "ref": head,
+                "sha": f"{number:040x}",
+                "repo": {"full_name": head_repository or repository},
+            },
             "base": {"ref": base},
         }
         self.pulls[(repository, number)] = pull
         return pull
 
+    def edit_pull(self, repository: str, number: int, **changes: Any) -> None:
+        """Changes a PR as GitHub would: `merged=True` merges it, `head` renames its branch,
+        `sha` pushes to it."""
+        pull = self.pulls[(repository, number)]
+        if changes.pop("merged", False):
+            changes.update(state="closed", merged_at=self.tick())
+        if "head" in changes:
+            pull["head"]["ref"] = changes.pop("head")
+        if "sha" in changes:
+            pull["head"]["sha"] = changes.pop("sha")
+        pull.update(changes, updated_at=self.tick())
+
+    def review(self, repository: str, number: int, login: str, state: str) -> None:
+        self.reviews.setdefault((repository, number), []).append(
+            {"user": {"login": login}, "state": state}
+        )
+        self.pulls[(repository, number)]["updated_at"] = self.tick()
+
     def _handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append((request.method, request.url.path))
         if self.status_override:
-            return httpx.Response(self.status_override, json={"message": "nope"})
+            return httpx.Response(
+                self.status_override, headers=self.override_headers, json={"message": "nope"}
+            )
         # Branch names may hold slashes, so they are read from the raw, still quoted path.
         parts = request.url.raw_path.decode().split("?")[0].strip("/").split("/")
         repository = f"{parts[1]}/{parts[2]}"
@@ -120,6 +147,8 @@ class FakeGitHub:
             pull = self.pulls.get((repository, int(rest[0])))
             if pull is None:
                 return httpx.Response(404, json={"message": "Not Found"})
+            if rest[1:] == ["reviews"]:
+                return httpx.Response(200, json=self.reviews.get((repository, int(rest[0])), []))
             return httpx.Response(200, json=pull)
         open_pulls = [
             pull

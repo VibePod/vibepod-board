@@ -59,9 +59,18 @@ A card in **PR ready** can open its pull request on GitHub, or link one opened b
 - **Open PR** in the task view (also `GET`/`POST /api/board/:id/pull-request`, MCP `open_pull_request`): a dialog prefilled from the card's suggested pull request — the title and description the agent wrote when it handed the task over — with the repository's default branch as the base (or, for stacked work, the branch of a dependency's open PR), plus a draft toggle. Without a suggestion the title is the task title and the body the task summary. `Closes #<n>` is appended when the linked issue is in the same repository and the body does not close it yet. The PR is created with the card's branch as head; the branch must already be on GitHub (the board never pushes), and a PR that already exists for that branch is linked instead of failing.
 - **Suggested pull request**: `hand_over_task` takes optional `prTitle` and `prBody` (markdown), stored on the card as `suggestedPrTitle`/`suggestedPrBody` with who suggested them and when. A later hand-over with either field replaces the suggestion, so it follows the head of the branch on rework. The task view shows it in a **Pull request** section with edit and preview, and `PATCH /api/board/:id` / `update_board_card` take `prTitle` and `prBody` (an empty string clears). The earlier `suggestedPrTitle` and `suggestedPrBody` names are also accepted.
 - **Link PR** takes a `https://github.com/owner/repo/pull/123` URL for PRs opened by hand (also `POST /api/board/:id/pull-request/link`, MCP `link_pull_request`); an empty URL unlinks.
-- History records when a PR was opened or linked and by whom. Keeping the stored PR state in sync afterwards is a follow-up.
+- **Sync PR** (also `POST /api/board/:id/pull-request/sync`, MCP `sync_pull_request`) pulls a linked PR's current state from GitHub: title and description (shown as Markdown in the task view's **Pull request** section, with the agent's suggestion below as **Suggested pull request**), open/closed/merged, draft, base and head branch, head SHA, merge time and the review decision (approved, changes requested or none). The time of the last sync shows next to the button. Nothing is written to GitHub.
+  - A **merged** PR moves the card to **Done** and records "PR #123 merged" in the history, which unblocks the tasks that depend on it.
+  - A PR **closed without merging** leaves the card where it is, with a "PR closed" warning badge.
+  - A **renamed head branch** becomes the card's `branchName` (not for PRs from forks).
+- Linked open PRs are also synced when their task view is opened, and in a periodic sweep of cards in **PR ready** and **Review**. The sweep costs one request per open PR per interval (plus one for the reviews when the PR changed); when GitHub rate-limits it (403/429), it waits twice as long, up to an hour or as long as GitHub asks.
+- History records when a PR was opened, linked, merged or closed, and by whom.
 
 Opening and reading pull requests uses the same `GITHUB_TOKEN` as issue sync (see above).
+
+```bash
+GITHUB_PR_SYNC_SECONDS=300     # how often linked open PRs are synced; 0 turns the sweep off
+```
 
 ## API
 

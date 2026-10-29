@@ -13,7 +13,14 @@ import {
   TextInput,
   Tooltip,
 } from "@mantine/core";
-import { GitPullRequest, Link, Link2, Pencil } from "lucide-react";
+import {
+  AlertTriangle,
+  GitPullRequest,
+  Link,
+  Link2,
+  Pencil,
+  RefreshCw,
+} from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import type { BoardCard } from "../shared/types.js";
 import { api } from "./api.js";
@@ -66,6 +73,45 @@ export const PullRequestBadge = ({
     </Badge>
   );
 };
+
+/** Warns that the linked pull request was closed without being merged. */
+export const PullRequestClosedBadge = ({
+  card,
+  size = "sm",
+}: {
+  card: Pick<BoardCard, "githubPrNumber" | "githubPrState">;
+  size?: "xs" | "sm";
+}) =>
+  card.githubPrNumber !== undefined &&
+  card.githubPrNumber !== null &&
+  card.githubPrState === "closed" ? (
+    <Badge
+      variant="light"
+      color="orange"
+      size={size}
+      leftSection={<AlertTriangle size={12} aria-hidden />}
+      title={`PR #${card.githubPrNumber} was closed without merging`}
+    >
+      PR closed
+    </Badge>
+  ) : null;
+
+const hasLinkedPr = (card: BoardCard): boolean =>
+  card.githubPrNumber !== undefined && card.githubPrNumber !== null;
+
+/** Whether opening the task view should sync its PR: a PR that may still change, not
+ * synced within the last minute. */
+export const shouldSyncOnOpen = (card: BoardCard, now = Date.now()): boolean =>
+  hasLinkedPr(card) &&
+  !card.archivedAt &&
+  (card.githubPrState === undefined || card.githubPrState === "open") &&
+  (!card.githubPrSyncedAt ||
+    now - new Date(card.githubPrSyncedAt).getTime() > 60_000);
+
+export const syncPullRequest = (card: BoardCard) =>
+  api<{ item: BoardCard }>(`/api/board/${card.id}/pull-request/sync`, {
+    method: "POST",
+  });
 
 type PullRequestDraft = {
   repository: string;
@@ -300,7 +346,8 @@ const LinkPullRequestDialog = ({
   );
 };
 
-/** The card's pull request: badge, Open PR for cards in PR ready, and Link PR. */
+/** The card's pull request: badge, Open PR for cards in PR ready, Link PR, and Sync PR
+ * once one is linked. */
 export const PullRequestPanel = ({
   card,
   enabled,
@@ -311,10 +358,22 @@ export const PullRequestPanel = ({
   onChange: () => Promise<void>;
 }) => {
   const [openDialog, setOpenDialog] = useState<"open" | "link" | null>(null);
-  const hasLivePr =
-    card.githubPrNumber !== undefined &&
-    card.githubPrNumber !== null &&
-    card.githubPrState !== "closed";
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncError, setSyncError] = useState("");
+  const hasLivePr = hasLinkedPr(card) && card.githubPrState !== "closed";
+
+  const sync = async () => {
+    setIsSyncing(true);
+    setSyncError("");
+    try {
+      await syncPullRequest(card);
+      await onChange();
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : "Request failed");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
   const canOpen =
     enabled &&
     card.column === "pr_ready" &&
@@ -322,69 +381,100 @@ export const PullRequestPanel = ({
     !hasLivePr;
 
   return (
-    <Group gap="sm" align="center" wrap="wrap">
-      <PullRequestBadge card={card} />
-      <Tooltip
-        label={
-          !enabled
-            ? "Set GITHUB_TOKEN to open pull requests"
-            : !card.branchName
-              ? "Set the card's branch first"
-              : hasLivePr
-                ? "Unlink the current pull request first"
-                : "Only cards in PR ready can open a pull request"
-        }
-        disabled={canOpen}
-      >
-        <Button
-          type="button"
-          size="xs"
-          variant="light"
-          leftSection={<GitPullRequest size={14} aria-hidden />}
-          disabled={!canOpen}
-          onClick={() => setOpenDialog("open")}
-        >
-          Open PR
-        </Button>
-      </Tooltip>
-      <Tooltip
-        label={
-          card.githubPrNumber
-            ? "Unlink or replace the pull request"
-            : "Link a pull request by URL"
-        }
-      >
-        <Button
-          type="button"
-          size="xs"
-          variant="default"
-          leftSection={
-            card.githubPrNumber ? (
-              <Link size={14} aria-hidden />
-            ) : (
-              <Link2 size={14} aria-hidden />
-            )
+    <Stack gap="xs">
+      <Group gap="sm" align="center" wrap="wrap">
+        <PullRequestBadge card={card} />
+        <PullRequestClosedBadge card={card} />
+        <Tooltip
+          label={
+            !enabled
+              ? "Set GITHUB_TOKEN to open pull requests"
+              : !card.branchName
+                ? "Set the card's branch first"
+                : hasLivePr
+                  ? "Unlink the current pull request first"
+                  : "Only cards in PR ready can open a pull request"
           }
-          onClick={() => setOpenDialog("link")}
+          disabled={canOpen}
         >
-          Link PR
-        </Button>
-      </Tooltip>
-      {openDialog === "open" && (
-        <OpenPullRequestDialog
-          card={card}
-          onClose={() => setOpenDialog(null)}
-          onOpen={onChange}
-        />
+          <Button
+            type="button"
+            size="xs"
+            variant="light"
+            leftSection={<GitPullRequest size={14} aria-hidden />}
+            disabled={!canOpen}
+            onClick={() => setOpenDialog("open")}
+          >
+            Open PR
+          </Button>
+        </Tooltip>
+        <Tooltip
+          label={
+            card.githubPrNumber
+              ? "Unlink or replace the pull request"
+              : "Link a pull request by URL"
+          }
+        >
+          <Button
+            type="button"
+            size="xs"
+            variant="default"
+            leftSection={
+              card.githubPrNumber ? (
+                <Link size={14} aria-hidden />
+              ) : (
+                <Link2 size={14} aria-hidden />
+              )
+            }
+            onClick={() => setOpenDialog("link")}
+          >
+            Link PR
+          </Button>
+        </Tooltip>
+        {hasLinkedPr(card) && (
+          <Tooltip
+            label="Set GITHUB_TOKEN to sync pull requests"
+            disabled={enabled}
+          >
+            <Button
+              type="button"
+              size="xs"
+              variant="default"
+              leftSection={<RefreshCw size={14} aria-hidden />}
+              loading={isSyncing}
+              disabled={!enabled}
+              onClick={() => void sync()}
+            >
+              Sync PR
+            </Button>
+          </Tooltip>
+        )}
+        {hasLinkedPr(card) && card.githubPrSyncedAt && (
+          <Text size="xs" c="dimmed">
+            Synced {formatSuggestedAt(card.githubPrSyncedAt)}
+          </Text>
+        )}
+        {openDialog === "open" && (
+          <OpenPullRequestDialog
+            card={card}
+            onClose={() => setOpenDialog(null)}
+            onOpen={onChange}
+          />
+        )}
+        {openDialog === "link" && (
+          <LinkPullRequestDialog
+            card={card}
+            onClose={() => setOpenDialog(null)}
+            onOpen={onChange}
+          />
+        )}
+      </Group>
+      {syncError && (
+        <Alert color="red" variant="light">
+          {syncError}
+        </Alert>
       )}
-      {openDialog === "link" && (
-        <LinkPullRequestDialog
-          card={card}
-          onClose={() => setOpenDialog(null)}
-          onOpen={onChange}
-        />
-      )}
-    </Group>
+    </Stack>
   );
 };
 
@@ -393,6 +483,63 @@ const formatSuggestedAt = (value: string) =>
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
+
+const reviewDecisionBadge = (decision: BoardCard["githubPrReviewDecision"]) =>
+  decision === "approved" ? (
+    <Badge variant="light" color="green" size="sm">
+      Approved
+    </Badge>
+  ) : decision === "changes_requested" ? (
+    <Badge variant="light" color="orange" size="sm">
+      Changes requested
+    </Badge>
+  ) : null;
+
+/** The linked pull request as the last sync found it on GitHub: title, description,
+ * branches, head commit and review decision. */
+export const LinkedPullRequest = ({ card }: { card: BoardCard }) => {
+  if (!hasLinkedPr(card) || !card.githubPrSyncedAt) return null;
+  return (
+    <Paper className="overview-section" withBorder radius="md" p="md">
+      <Group align="center" justify="space-between" mb="xs">
+        <Text size="xs" fw={700} tt="uppercase" c="dimmed">
+          Pull request
+        </Text>
+        <Group gap="xs">
+          <PullRequestBadge card={card} />
+          <PullRequestClosedBadge card={card} />
+          {reviewDecisionBadge(card.githubPrReviewDecision)}
+        </Group>
+      </Group>
+      <Stack gap="xs">
+        {card.githubPrTitle && <Text fw={600}>{card.githubPrTitle}</Text>}
+        {(card.githubPrHead || card.githubPrBase) && (
+          <Text size="sm" c="dimmed">
+            <code>{card.githubPrHead}</code> into{" "}
+            <code>{card.githubPrBase}</code>
+            {card.githubPrHeadSha && (
+              <>
+                {" "}
+                at <code>{card.githubPrHeadSha.slice(0, 7)}</code>
+              </>
+            )}
+            {card.githubPrMergedAt &&
+              `, merged ${formatSuggestedAt(card.githubPrMergedAt)}`}
+          </Text>
+        )}
+        {card.githubPrBody ? (
+          <div className="overview-markdown">
+            <MarkdownText>{card.githubPrBody}</MarkdownText>
+          </div>
+        ) : (
+          <Text c="dimmed" size="sm">
+            No description.
+          </Text>
+        )}
+      </Stack>
+    </Paper>
+  );
+};
 
 /**
  * The pull request title and description suggested for the card, usually by the
@@ -451,7 +598,9 @@ export const SuggestedPullRequest = ({
     <Paper className="overview-section" withBorder radius="md" p="md">
       <Group align="center" justify="space-between" mb="xs">
         <Text size="xs" fw={700} tt="uppercase" c="dimmed">
-          Pull request
+          {card.githubPrSyncedAt && hasLinkedPr(card)
+            ? "Suggested pull request"
+            : "Pull request"}
         </Text>
         {editable && !isEditing && (
           <Button

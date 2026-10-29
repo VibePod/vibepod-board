@@ -125,6 +125,7 @@ def settings(database_url: str) -> Settings:
         pool_size=5,
         # Tests expire claims explicitly; a background sweep would race them.
         claim_sweep_seconds=0,
+        github_pr_sync_seconds=0,
     )
 
 

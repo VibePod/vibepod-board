@@ -544,6 +544,18 @@ def create_mcp_server(
         return run(lambda s, a: {"item": pull_requests.link_pull_request(s, a, id, url, client)})
 
     @mcp.tool(
+        title="Sync Pull Request",
+        description="Pull the state of a card's linked pull request from GitHub: title, "
+        "description, open/closed/merged, draft, base and head branch, head SHA, merge time "
+        "and review decision. A merged PR moves the card to Done (unblocking its dependents); "
+        "a PR closed without merging leaves the card where it is; the card's branch follows "
+        "a renamed head branch. Nothing is written to GitHub. Needs GITHUB_TOKEN.",
+    )
+    def sync_pull_request(id: CardId) -> dict[str, Any]:
+        client = github()
+        return run(lambda s, a: {"item": pull_requests.sync_pull_request(s, a, id, client)})
+
+    @mcp.tool(
         title="Upsert GitHub Issue",
         description="Import a GitHub issue you fetched yourself: creates a task for it, or "
         "refreshes the task already linked to the same repository and number in the "

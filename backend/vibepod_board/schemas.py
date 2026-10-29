@@ -161,6 +161,15 @@ class BoardCard(ApiModel):
     github_pr_draft: bool | None = None
     github_pr_base: str | None = None
     github_pr_synced_at: Timestamp | None = None
+    # Pulled by a sync of the linked PR. The review decision is approved, changes_requested or
+    # unset.
+    github_pr_title: str | None = None
+    github_pr_body: str | None = None
+    github_pr_head: str | None = None
+    github_pr_head_sha: str | None = None
+    github_pr_merged_at: Timestamp | None = None
+    github_pr_updated_at: Timestamp | None = None
+    github_pr_review_decision: str | None = None
     # The pull request title and markdown description the agent suggests at hand-over.
     suggested_pr_title: str | None = None
     suggested_pr_body: str | None = None

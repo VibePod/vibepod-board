@@ -31,8 +31,9 @@ from vibepod_board.auth import AdminSessionManager
 from vibepod_board.config import Settings, get_settings
 from vibepod_board.db import create_db_engine, get_engine, migrate, set_engine
 from vibepod_board.errors import BoardError, NotFound
+from vibepod_board.github import GitHubClient, GitHubRateLimited
 from vibepod_board.mcp_server import create_mcp_server
-from vibepod_board.services import claims
+from vibepod_board.services import claims, pull_requests
 
 MiB = 1024 * 1024
 BODY_LIMIT = 2 * MiB
@@ -56,6 +57,32 @@ async def _sweep_claims(settings: Settings) -> None:
             await anyio.to_thread.run_sync(_expire_claims, settings)
         except Exception:
             logger.exception("Expiring task claims failed")
+
+
+def _sync_pull_requests(settings: Settings, transport: httpx.BaseTransport | None) -> int:
+    assert settings.github_token
+    client = GitHubClient(settings.github_token, transport)
+    with Session(get_engine(), expire_on_commit=False) as session:
+        return pull_requests.sync_due_pull_requests(session, client)
+
+
+async def _sweep_pull_requests(settings: Settings, transport: httpx.BaseTransport | None) -> None:
+    """Syncs linked open PRs of cards in PR ready and Review, so a merge on GitHub moves its
+    card to Done without anyone clicking. Each PR costs one request per interval; a rate limit
+    from GitHub makes the sweep wait longer, doubling up to an hour."""
+    interval = settings.github_pr_sync_seconds
+    delay = interval
+    while True:
+        await anyio.sleep(delay)
+        try:
+            await anyio.to_thread.run_sync(_sync_pull_requests, settings, transport)
+            delay = interval
+        except GitHubRateLimited as error:
+            delay = pull_requests.backoff_delay(interval, delay, error.retry_after)
+            logger.warning("GitHub rate-limited the pull request sync; next in %ss", delay)
+        except Exception:
+            logger.exception("Syncing pull requests failed")
+            delay = interval
 
 
 class BodyTooLarge(Exception):
@@ -175,14 +202,20 @@ def create_app(
             if settings.claim_sweep_seconds > 0
             else None
         )
+        pull_sweeper = (
+            asyncio.create_task(_sweep_pull_requests(settings, github_transport))
+            if settings.github_token and settings.github_pr_sync_seconds > 0
+            else None
+        )
         try:
             async with mcp_app.lifespan(app):
                 yield
         finally:
-            if sweeper is not None:
-                sweeper.cancel()
-                with suppress(asyncio.CancelledError):
-                    await sweeper
+            for task in (sweeper, pull_sweeper):
+                if task is not None:
+                    task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await task
 
     app = FastAPI(
         title="vibepod-board",

@@ -165,9 +165,13 @@ import {
   planReadyLimit,
 } from "./PlanReadyDialog.js";
 import {
+  LinkedPullRequest,
   PullRequestBadge,
+  PullRequestClosedBadge,
   PullRequestPanel,
   SuggestedPullRequest,
+  shouldSyncOnOpen,
+  syncPullRequest,
 } from "./PullRequest.js";
 import {
   downloadResponse,
@@ -949,6 +953,18 @@ const App = () => {
         ...state.archivedCards,
       ].find((card) => card.id === taskViewModal.card.id) ?? taskViewModal.card)
     : null;
+  // Opening a task with a linked open PR syncs it, so a merge or new description shows
+  // without clicking Sync PR. A failed sync leaves the view as it was.
+  const githubEnabled = githubStatus?.enabled ?? false;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only when a task view opens
+  useEffect(() => {
+    if (!taskViewCard || !githubEnabled || !shouldSyncOnOpen(taskViewCard)) {
+      return;
+    }
+    syncPullRequest(taskViewCard)
+      .then(() => loadState({ background: true }))
+      .catch(() => undefined);
+  }, [taskViewCard?.id, githubEnabled]);
   // Board cards only link to GitHub; the task view is where the path and remote show.
   // A card keeps its own repository fields (they can be set, or cleared, on the card
   // alone), so they win; the task's apply to a task that has no card.
@@ -2931,6 +2947,11 @@ const App = () => {
                                 {blockedBadge(card.blockedBy.length)}
                               </Group>
                             )}
+                            {card.githubPrState === "closed" && (
+                              <Group justify="flex-start">
+                                <PullRequestClosedBadge card={card} size="xs" />
+                              </Group>
+                            )}
                             {labelBadges(card.labels, "xs")}
                             {card.question ? (
                               <Stack className="board-card-needs-input" gap={4}>
@@ -3543,6 +3564,9 @@ const App = () => {
                   </Badge>
                   {githubIssueBadge(taskViewIdea)}
                   {taskViewCard && pullRequestBadge(taskViewCard)}
+                  {taskViewCard && (
+                    <PullRequestClosedBadge card={taskViewCard} />
+                  )}
                 </Group>
               ) : (
                 <GitHubSyncPanel
@@ -3704,6 +3728,9 @@ const App = () => {
                   )}
                 </Stack>
               </Paper>
+            )}
+            {taskViewCard && (
+              <LinkedPullRequest key={taskViewCard.id} card={taskViewCard} />
             )}
             {taskViewCard &&
               (!isTaskViewArchived ||

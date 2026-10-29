@@ -15,7 +15,12 @@ from vibepod_board.access import admin_access
 from vibepod_board.config import Settings
 from vibepod_board.enums import BoardColumn, RunOutcome, TaskEventKind
 from vibepod_board.errors import BadRequest, Conflict, NotFound
-from vibepod_board.github import GitHubClient, GitHubUnavailable, parse_pull_url
+from vibepod_board.github import (
+    GitHubClient,
+    GitHubRateLimited,
+    GitHubUnavailable,
+    parse_pull_url,
+)
 from vibepod_board.main import create_app
 from vibepod_board.schemas import BoardCard
 from vibepod_board.services import board, history, ideas, projects, pull_requests, runs, tokens
@@ -452,6 +457,251 @@ def test_unlinking_a_card_without_a_pr_records_nothing(session: Session, project
     assert events(session, card) == before
 
 
+# --- sync ---------------------------------------------------------------------------
+
+
+def linked_card(
+    session: Session, project, fake: FakeGitHub, github: GitHubClient, **pull
+) -> BoardCard:
+    """A card in PR ready on `feature/pr`, linked to a new PR for that branch."""
+    card = pr_ready_card(session, project, title=pull.pop("card_title", "Open PRs"))
+    remote = fake.add_pull(REPO, pull.pop("head", "feature/pr"), **pull)
+    return pull_requests.link_pull_request(session, ADMIN, card.id, remote["html_url"], github)
+
+
+def test_sync_stores_the_open_prs_title_description_and_state(
+    session: Session, project, fake: FakeGitHub, github: GitHubClient
+) -> None:
+    card = linked_card(session, project, fake, github, title="Add sync", draft=True)
+    fake.edit_pull(REPO, 1, title="Sync PRs", body="Pulls **state**.", draft=False, sha="a" * 40)
+    fake.review(REPO, 1, "alice", "APPROVED")
+
+    synced = pull_requests.sync_pull_request(session, ADMIN, card.id, github)
+
+    assert (synced.github_pr_title, synced.github_pr_body) == ("Sync PRs", "Pulls **state**.")
+    assert (synced.github_pr_state, synced.github_pr_draft) == ("open", False)
+    assert (synced.github_pr_base, synced.github_pr_head) == ("main", "feature/pr")
+    assert synced.github_pr_head_sha == "a" * 40
+    assert synced.github_pr_merged_at is None
+    assert synced.github_pr_review_decision == "approved"
+    assert synced.github_pr_synced_at is not None
+    assert (synced.column, synced.branch_name) == (BoardColumn.PR_READY, "feature/pr")
+    # Nothing happened that the history keeps.
+    assert events(session, card)[0] == (TaskEventKind.PR_LINKED, "PR #1 linked by admin")
+    # Nothing is written back to GitHub.
+    assert all(method == "GET" for method, _ in fake.requests)
+
+
+def test_an_unchanged_pr_costs_one_request_and_leaves_the_card_alone(
+    session: Session, project, fake: FakeGitHub, github: GitHubClient
+) -> None:
+    card = linked_card(session, project, fake, github)
+    first = pull_requests.sync_pull_request(session, ADMIN, card.id, github)
+    fake.requests.clear()
+
+    second = pull_requests.sync_pull_request(session, ADMIN, card.id, github)
+
+    assert fake.requests == [("GET", f"/repos/{REPO}/pulls/1")]
+    assert second.updated_at == first.updated_at
+    assert second.github_pr_synced_at > first.github_pr_synced_at
+
+
+@pytest.mark.parametrize(
+    ("reviews", "decision"),
+    [
+        ([], None),
+        ([("alice", "COMMENTED")], None),
+        ([("alice", "APPROVED"), ("bob", "CHANGES_REQUESTED")], "changes_requested"),
+        ([("bob", "CHANGES_REQUESTED"), ("bob", "APPROVED")], "approved"),
+        ([("bob", "CHANGES_REQUESTED"), ("bob", "COMMENTED")], "changes_requested"),
+        ([("alice", "APPROVED"), ("alice", "DISMISSED")], None),
+    ],
+)
+def test_sync_reads_the_review_decision(
+    session: Session,
+    project,
+    fake: FakeGitHub,
+    github: GitHubClient,
+    reviews: list[tuple[str, str]],
+    decision: str | None,
+) -> None:
+    card = linked_card(session, project, fake, github)
+    pull_requests.sync_pull_request(session, ADMIN, card.id, github)
+    for reviewer, state in reviews:
+        fake.review(REPO, 1, reviewer, state)
+
+    synced = pull_requests.sync_pull_request(session, ADMIN, card.id, github)
+    assert synced.github_pr_review_decision == decision
+
+
+def test_a_merged_pr_moves_the_card_to_done_and_unblocks_its_dependents(
+    session: Session, project, fake: FakeGitHub, github: GitHubClient
+) -> None:
+    card = linked_card(session, project, fake, github)
+    dependent = ideas.create_idea(
+        session, ADMIN, project_id=project.id, title="Next", depends_on=[card.idea_id]
+    )
+    assert ideas.get_idea(session, ADMIN, dependent.id).blocked_by == [card.idea_id]
+    fake.edit_pull(REPO, 1, merged=True)
+
+    synced = pull_requests.sync_pull_request(session, ADMIN, card.id, github)
+
+    assert synced.column == BoardColumn.DONE
+    assert synced.github_pr_state == "merged"
+    assert synced.github_pr_merged_at is not None
+    assert events(session, card)[0] == (TaskEventKind.PR_MERGED, "PR #1 merged")
+    assert ideas.get_idea(session, ADMIN, dependent.id).blocked_by == []
+
+    # Moved back by hand, the card stays where it was put on the next sync.
+    board.update_card(session, ADMIN, card.id, column=BoardColumn.PR_READY)
+    again = pull_requests.sync_pull_request(session, ADMIN, card.id, github)
+    assert again.column == BoardColumn.PR_READY
+    assert [kind for kind, _ in events(session, card)].count(TaskEventKind.PR_MERGED) == 1
+
+
+def test_a_merge_ends_the_open_reviews_of_a_card_in_review(
+    session: Session, project, fake: FakeGitHub, github: GitHubClient
+) -> None:
+    card = linked_card(session, project, fake, github)
+    board.update_card(session, ADMIN, card.id, column=BoardColumn.REVIEW)
+    fake.edit_pull(REPO, 1, merged=True)
+
+    synced = pull_requests.sync_pull_request(session, ADMIN, card.id, github)
+    assert synced.column == BoardColumn.DONE
+
+
+def test_a_pr_closed_without_merging_leaves_the_card_in_place(
+    session: Session, project, fake: FakeGitHub, github: GitHubClient
+) -> None:
+    card = linked_card(session, project, fake, github)
+    fake.edit_pull(REPO, 1, state="closed")
+
+    synced = pull_requests.sync_pull_request(session, ADMIN, card.id, github)
+
+    assert (synced.column, synced.github_pr_state) == (BoardColumn.PR_READY, "closed")
+    assert events(session, card)[0] == (TaskEventKind.PR_CLOSED, "PR #1 closed without merging")
+
+    fake.edit_pull(REPO, 1, state="open")
+    reopened = pull_requests.sync_pull_request(session, ADMIN, card.id, github)
+    assert reopened.github_pr_state == "open"
+    assert events(session, card)[0] == (TaskEventKind.PR_REOPENED, "PR #1 reopened")
+
+
+def test_the_cards_branch_follows_a_renamed_head_branch(
+    session: Session, project, fake: FakeGitHub, github: GitHubClient
+) -> None:
+    card = linked_card(session, project, fake, github)
+    fake.edit_pull(REPO, 1, head="issue-31")
+
+    synced = pull_requests.sync_pull_request(session, ADMIN, card.id, github)
+
+    assert (synced.branch_name, synced.github_pr_head) == ("issue-31", "issue-31")
+    assert events(session, card)[0] == (
+        TaskEventKind.BRANCH_RENAMED,
+        "Branch follows PR #1: `feature/pr` renamed to `issue-31`",
+    )
+
+
+def test_the_branch_does_not_follow_a_fork(
+    session: Session, project, fake: FakeGitHub, github: GitHubClient
+) -> None:
+    card = linked_card(session, project, fake, github, head="main", head_repository="someone/fork")
+    synced = pull_requests.sync_pull_request(session, ADMIN, card.id, github)
+    assert (synced.branch_name, synced.github_pr_head) == ("feature/pr", "main")
+
+
+def test_sync_needs_a_linked_pr(session: Session, project, github: GitHubClient) -> None:
+    card = pr_ready_card(session, project)
+    with pytest.raises(Conflict, match="no linked pull request"):
+        pull_requests.sync_pull_request(session, ADMIN, card.id, github)
+
+
+def test_unlinking_clears_what_a_sync_pulled(
+    session: Session, project, fake: FakeGitHub, github: GitHubClient
+) -> None:
+    card = linked_card(session, project, fake, github, body="Body")
+    fake.review(REPO, 1, "alice", "APPROVED")
+    pull_requests.sync_pull_request(session, ADMIN, card.id, github)
+
+    unlinked = pull_requests.link_pull_request(session, ADMIN, card.id, "")
+    assert (unlinked.github_pr_body, unlinked.github_pr_review_decision) == (None, None)
+    assert unlinked.github_pr_head_sha is None
+
+
+# --- sweep --------------------------------------------------------------------------
+
+
+def test_the_sweep_syncs_open_prs_of_cards_in_pr_ready_and_review(
+    session: Session, project, fake: FakeGitHub, github: GitHubClient
+) -> None:
+    merged = linked_card(session, project, fake, github, card_title="Merged", head="a")
+    reviewed = linked_card(session, project, fake, github, card_title="Reviewed", head="b")
+    board.update_card(session, ADMIN, reviewed.id, column=BoardColumn.REVIEW)
+    planned = linked_card(session, project, fake, github, card_title="Rework", head="c")
+    board.update_card(session, ADMIN, planned.id, column=BoardColumn.PLANNED)
+    closed = linked_card(session, project, fake, github, card_title="Closed", head="d")
+    fake.edit_pull(REPO, 4, state="closed")
+    pull_requests.sync_pull_request(session, ADMIN, closed.id, github)
+    for number in (1, 2, 3):
+        fake.edit_pull(REPO, number, merged=True)
+    fake.requests.clear()
+
+    assert pull_requests.sync_due_pull_requests(session, github) == 2
+
+    assert sorted(path for _, path in fake.requests if not path.endswith("/reviews")) == [
+        f"/repos/{REPO}/pulls/1",
+        f"/repos/{REPO}/pulls/2",
+    ]
+    assert board.get_card(session, ADMIN, merged.id).column == BoardColumn.DONE
+    assert board.get_card(session, ADMIN, reviewed.id).column == BoardColumn.DONE
+    assert board.get_card(session, ADMIN, planned.id).column == BoardColumn.PLANNED
+    assert (TaskEventKind.PR_MERGED, "PR #1 merged") in events(session, merged)
+    assert history.list_task_history(session, ADMIN, merged.idea_id)[0].actor == "GitHub sync"
+    # Done and merged, nothing is left to sweep.
+    assert pull_requests.due_pull_requests(session) == []
+
+
+def test_the_sweep_stops_on_a_rate_limit_and_skips_other_failures(
+    session: Session, project, fake: FakeGitHub, github: GitHubClient
+) -> None:
+    gone = linked_card(session, project, fake, github, card_title="Gone", head="a")
+    kept = linked_card(session, project, fake, github, card_title="Kept", head="b")
+    del fake.pulls[(REPO, 1)]
+    fake.edit_pull(REPO, 2, title="Renamed")
+
+    assert pull_requests.sync_due_pull_requests(session, github) == 1
+    assert board.get_card(session, ADMIN, kept.id).github_pr_title == "Renamed"
+    assert board.get_card(session, ADMIN, gone.id).github_pr_title == "PR"
+
+    fake.status_override = 403
+    fake.override_headers = {"x-ratelimit-remaining": "0", "retry-after": "120"}
+    with pytest.raises(GitHubRateLimited) as raised:
+        pull_requests.sync_due_pull_requests(session, github)
+    assert raised.value.retry_after == 120
+    assert len([r for r in fake.requests if r[1] == f"/repos/{REPO}/pulls/2"]) == 1 + 1
+
+
+def test_rate_limits_are_told_apart_from_a_rejected_token(
+    session: Session, project, fake: FakeGitHub, github: GitHubClient
+) -> None:
+    card = linked_card(session, project, fake, github)
+    fake.status_override = 429
+    with pytest.raises(GitHubRateLimited, match="rate limit"):
+        pull_requests.sync_pull_request(session, ADMIN, card.id, github)
+    fake.status_override = 403
+    with pytest.raises(GitHubUnavailable, match="rejected the token") as raised:
+        pull_requests.sync_pull_request(session, ADMIN, card.id, github)
+    assert not isinstance(raised.value, GitHubRateLimited)
+
+
+def test_backs_off_doubling_up_to_an_hour() -> None:
+    assert pull_requests.backoff_delay(300, 300, None) == 600
+    assert pull_requests.backoff_delay(300, 600, None) == 1200
+    assert pull_requests.backoff_delay(300, 3000, None) == 3600
+    assert pull_requests.backoff_delay(300, 300, 5000) == 5000
+    assert pull_requests.backoff_delay(300, 10, 0) == 300
+
+
 # --- REST ---------------------------------------------------------------------------
 
 
@@ -487,6 +737,21 @@ def test_rest_prefills_opens_and_links(
     assert unlinked.json()["item"].get("githubPrUrl") is None
     relinked = github_api.post(f"{path}/link", json={"url": f"https://github.com/{REPO}/pull/1"})
     assert relinked.json()["item"]["githubPrState"] == "open"
+
+
+def test_rest_syncs_a_linked_pr(
+    github_api: TestClient, session: Session, project, fake: FakeGitHub, github: GitHubClient
+) -> None:
+    card = linked_card(session, project, fake, github)
+    fake.edit_pull(REPO, 1, body="## Why\n\nBecause.", merged=True)
+
+    response = github_api.post(f"/api/board/{card.id}/pull-request/sync")
+
+    assert response.status_code == 200, response.text
+    item = response.json()["item"]
+    assert (item["column"], item["githubPrState"]) == ("done", "merged")
+    assert item["githubPrBody"] == "## Why\n\nBecause."
+    assert item["githubPrHeadSha"] == f"{1:040x}"
 
 
 def test_rest_refuses_unpushed_branches(github_api: TestClient, session: Session, project) -> None:
@@ -547,3 +812,7 @@ async def test_mcp_opens_and_links_pull_requests(
 
     assert (await link("")).get("githubPrNumber") is None
     assert (await link(f"https://github.com/{REPO}/pull/1"))["githubPrState"] == "open"
+
+    fake.edit_pull(REPO, 1, head="issue-31")
+    synced = await call(github_server_url, token, "sync_pull_request", id="APP-1")
+    assert synced["item"]["branchName"] == "issue-31"

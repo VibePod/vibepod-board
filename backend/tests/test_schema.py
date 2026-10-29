@@ -9,7 +9,7 @@ from sqlmodel import SQLModel
 
 from vibepod_board.db import migrate
 
-HEAD = "0015"
+HEAD = "0016"
 LEGACY_SCHEMA = (Path(__file__).parent / "legacy_schema.sql").read_text()
 # The first TS schema, before repository, readiness and dependency support.
 ORIGINAL_SCHEMA = LEGACY_SCHEMA.split("alter table board_cards add column", 1)[0]
@@ -338,3 +338,36 @@ def test_0013_keeps_existing_review_run_verdicts(empty_db: Engine, pruned: bool)
             text("SELECT kind, verdict, feedback, verify_output FROM task_runs")
         ).one()
     assert tuple(result) == ("review", "approve", "Looks good", "Tests passed")
+
+
+def test_0016_leaves_existing_pull_requests_unsynced(empty_db: Engine) -> None:
+    from alembic import command
+
+    from vibepod_board.db import alembic_config
+
+    config = alembic_config()
+    with empty_db.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "0015")
+        connection.execute(
+            text("""
+            INSERT INTO projects (id, key, title, created_at, updated_at)
+            VALUES ('p1', 'APP', 'App', now(), now());
+            INSERT INTO board_cards (id, project_id, title, column_name, github_pr_number,
+                github_pr_state, created_at, updated_at)
+            VALUES ('c1', 'p1', 'Linked work', 'pr_ready', 4, 'open', now(), now());
+        """)
+        )
+
+    migrate(empty_db)
+
+    with empty_db.connect() as connection:
+        row = connection.execute(
+            text(
+                "select github_pr_number, github_pr_state, github_pr_title, github_pr_body, "
+                "github_pr_head, github_pr_head_sha, github_pr_merged_at, "
+                "github_pr_updated_at, github_pr_review_decision from board_cards"
+            )
+        ).one()
+    assert tuple(row) == (4, "open", None, None, None, None, None, None, None)
+    assert revision(empty_db) == HEAD

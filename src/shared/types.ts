@@ -82,6 +82,14 @@ export type BoardCard = {
   githubPrDraft?: boolean;
   githubPrBase?: string;
   githubPrSyncedAt?: string;
+  /** Pulled by a sync of the linked PR. */
+  githubPrTitle?: string;
+  githubPrBody?: string;
+  githubPrHead?: string;
+  githubPrHeadSha?: string;
+  githubPrMergedAt?: string;
+  githubPrUpdatedAt?: string;
+  githubPrReviewDecision?: "approved" | "changes_requested";
   /** The pull request title and markdown description suggested at hand-over. */
   suggestedPrTitle?: string;
   suggestedPrBody?: string;
@@ -143,6 +151,10 @@ export const taskEventKinds = [
   "pr_opened",
   "pr_linked",
   "pr_unlinked",
+  "pr_merged",
+  "pr_closed",
+  "pr_reopened",
+  "branch_renamed",
 ] as const;
 
 export type TaskEventKind = (typeof taskEventKinds)[number];

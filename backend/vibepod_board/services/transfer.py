@@ -53,6 +53,14 @@ AUTOMATION_CARD_FIELDS = {
     "head_sha",
     "handed_over_at",
     "review_rounds",
+    # What a sync pulled from the linked PR; the next sync pulls it again.
+    "github_pr_title",
+    "github_pr_body",
+    "github_pr_head",
+    "github_pr_head_sha",
+    "github_pr_merged_at",
+    "github_pr_updated_at",
+    "github_pr_review_decision",
 }
 # Review settings are how a board automates the project, not part of the project's content.
 AUTOMATION_PROJECT_FIELDS = {"required_approvals", "max_review_rounds"}

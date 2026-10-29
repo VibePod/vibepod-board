@@ -98,3 +98,12 @@ def link_pull_request(
         else None
     )
     return Item(item=pull_requests.link_pull_request(session, access, card_id, body.url, client))
+
+
+@router.post("/board/{card_id}/pull-request/sync")
+def sync_pull_request(
+    card_id: str, session: SessionDep, access: AccessDep, client: ClientDep
+) -> Item[BoardCard]:
+    """Pulls the linked PR's state, title and description from GitHub. A merged PR moves the
+    card to Done; the card's branch follows a renamed head branch."""
+    return Item(item=pull_requests.sync_pull_request(session, access, card_id, client))

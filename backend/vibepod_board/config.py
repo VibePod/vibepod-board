@@ -33,6 +33,8 @@ class Settings:
     # are shown as offline.
     worker_heartbeat_seconds: int = 15
     worker_offline_seconds: int = 60
+    # How often linked open pull requests are synced from GitHub (0 turns the sweep off).
+    github_pr_sync_seconds: int = 300
 
     @property
     def sqlalchemy_url(self) -> str:
@@ -79,6 +81,7 @@ def get_settings() -> Settings:
         claim_sweep_seconds=_positive_int("CLAIM_SWEEP_SECONDS", 15, allow_zero=True),
         worker_heartbeat_seconds=heartbeat_seconds,
         worker_offline_seconds=offline_seconds,
+        github_pr_sync_seconds=_positive_int("GITHUB_PR_SYNC_SECONDS", 300, allow_zero=True),
     )
 
 

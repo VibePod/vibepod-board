@@ -6,8 +6,10 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  LinkedPullRequest,
   PullRequestPanel,
   SuggestedPullRequest,
+  shouldSyncOnOpen,
 } from "../src/client/PullRequest.js";
 import type { BoardCard } from "../src/shared/types.js";
 
@@ -248,5 +250,116 @@ describe("the suggested pull request", () => {
     );
     expect(screen.getByText(/No suggested description yet/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
+  });
+});
+
+describe("syncing a linked pull request", () => {
+  const linked = {
+    ...card,
+    githubPrUrl: "https://github.com/vibepod/vibepod-board/pull/38",
+    githubPrNumber: 38,
+    githubPrRepository: "vibepod/vibepod-board",
+    githubPrState: "open",
+    githubPrSyncedAt: "2026-10-29T08:00:00.000Z",
+  } as BoardCard;
+
+  it("syncs from the Sync PR button", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ item: linked }));
+    vi.stubGlobal("fetch", fetchMock);
+    const onChange = vi.fn(async () => undefined);
+
+    render(
+      <MantineProvider>
+        <PullRequestPanel card={linked} enabled onChange={onChange} />
+      </MantineProvider>,
+    );
+    expect(screen.getByText(/^Synced /)).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Sync PR" }));
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/board/card-1/pull-request/sync",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("shows why a sync failed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({ error: "GitHub rate limit reached; retry in 60s" }, 502),
+      ),
+    );
+
+    render(
+      <MantineProvider>
+        <PullRequestPanel card={linked} enabled onChange={vi.fn()} />
+      </MantineProvider>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Sync PR" }));
+
+    expect(
+      await screen.findByText("GitHub rate limit reached; retry in 60s"),
+    ).toBeTruthy();
+  });
+
+  it("has no Sync PR without a linked PR", () => {
+    render(
+      <MantineProvider>
+        <PullRequestPanel card={card} enabled onChange={vi.fn()} />
+      </MantineProvider>,
+    );
+    expect(screen.queryByRole("button", { name: "Sync PR" })).toBeNull();
+  });
+
+  it("warns about a PR closed without merging", () => {
+    render(
+      <MantineProvider>
+        <PullRequestPanel
+          card={{ ...linked, githubPrState: "closed" }}
+          enabled
+          onChange={vi.fn()}
+        />
+      </MantineProvider>,
+    );
+    expect(screen.getByText("PR closed")).toBeTruthy();
+  });
+
+  it("shows the synced title, branches and description as Markdown", () => {
+    render(
+      <MantineProvider>
+        <LinkedPullRequest
+          card={{
+            ...linked,
+            githubPrTitle: "Sync linked PRs",
+            githubPrBody: "## Why\n\nMerges **show up** by themselves.",
+            githubPrHead: "issue-31",
+            githubPrBase: "main",
+            githubPrHeadSha: "abcdef0123456789",
+            githubPrReviewDecision: "changes_requested",
+          }}
+        />
+      </MantineProvider>,
+    );
+    expect(screen.getByText("Sync linked PRs")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Why" })).toBeTruthy();
+    expect(screen.getByText("show up").tagName).toBe("STRONG");
+    expect(screen.getByText("abcdef0")).toBeTruthy();
+    expect(screen.getByText("Changes requested")).toBeTruthy();
+  });
+
+  it("syncs on open only a PR that may still change and was not just synced", () => {
+    const now = new Date("2026-10-29T08:05:00.000Z").getTime();
+    expect(shouldSyncOnOpen(linked, now)).toBe(true);
+    expect(
+      shouldSyncOnOpen(
+        { ...linked, githubPrSyncedAt: "2026-10-29T08:04:30.000Z" },
+        now,
+      ),
+    ).toBe(false);
+    expect(shouldSyncOnOpen({ ...linked, githubPrState: "merged" }, now)).toBe(
+      false,
+    );
+    expect(shouldSyncOnOpen(card, now)).toBe(false);
   });
 });

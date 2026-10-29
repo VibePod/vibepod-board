@@ -30,6 +30,15 @@ class GitHubUnavailable(BoardError):
     status_code = 502
 
 
+class GitHubRateLimited(GitHubUnavailable):
+    """GitHub answered 429, or 403 for a spent rate limit; `retry_after` is in seconds when
+    GitHub said how long to wait."""
+
+    def __init__(self, message: str, retry_after: int | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 @dataclass(frozen=True)
 class IssueRef:
     repository: str
@@ -68,6 +77,11 @@ class RemotePull:
     # The repository the head branch lives in: another one for a PR from a fork, None when
     # that fork was deleted.
     head_repository: str | None = None
+    title: str = ""
+    body: str = ""
+    head_sha: str | None = None
+    merged_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -124,6 +138,10 @@ def issue_body(summary: str, details: str, acceptance_criteria: list[str]) -> st
     return "\n\n".join(sections) or "Created from vibepod-board."
 
 
+def _timestamp(value: str | None) -> datetime | None:
+    return datetime.fromisoformat(value.replace("Z", "+00:00")) if value else None
+
+
 def _remote_issue(repository: str, data: dict[str, Any]) -> RemoteIssue:
     return RemoteIssue(
         ref=IssueRef(normalize_repository(repository), int(data["number"])),
@@ -132,7 +150,7 @@ def _remote_issue(repository: str, data: dict[str, Any]) -> RemoteIssue:
         body=data.get("body") or "",
         labels=[label["name"] if isinstance(label, dict) else label for label in data["labels"]],
         state=data["state"],
-        updated_at=datetime.fromisoformat(data["updated_at"].replace("Z", "+00:00")),
+        updated_at=_timestamp(data["updated_at"]),
     )
 
 
@@ -145,6 +163,53 @@ def _remote_pull(repository: str, data: dict[str, Any]) -> RemotePull:
         head=data["head"]["ref"],
         base=data["base"]["ref"],
         head_repository=_head_repository(data["head"]),
+        title=data.get("title") or "",
+        body=data.get("body") or "",
+        head_sha=data["head"].get("sha"),
+        merged_at=_timestamp(data.get("merged_at")),
+        updated_at=_timestamp(data.get("updated_at")),
+    )
+
+
+def review_decision(reviews: list[dict[str, Any]]) -> str | None:
+    """approved, changes_requested or None from a PR's reviews, oldest first.
+
+    Each reviewer counts with their latest approval, change request or dismissal; comments do
+    not change where they stand. One change request outweighs any approvals, as on GitHub.
+    """
+    latest: dict[str, str] = {}
+    for review in reviews:
+        user = review.get("user")
+        login = user.get("login") if isinstance(user, dict) else None
+        state = review.get("state")
+        if login and state in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
+            latest[login] = state
+    if "CHANGES_REQUESTED" in latest.values():
+        return "changes_requested"
+    if "APPROVED" in latest.values():
+        return "approved"
+    return None
+
+
+def _retry_after(response: httpx.Response) -> int | None:
+    """Seconds to wait from `Retry-After`, else until `X-RateLimit-Reset`."""
+    retry_after = response.headers.get("retry-after", "")
+    if retry_after.isdigit():
+        return int(retry_after)
+    reset = response.headers.get("x-ratelimit-reset", "")
+    if reset.isdigit():
+        return max(0, int(reset) - int(datetime.now().timestamp()))
+    return None
+
+
+def _rate_limited(response: httpx.Response) -> bool:
+    if response.status_code == 429:
+        return True
+    # A spent primary limit says so in its headers; a secondary limit sends Retry-After.
+    return response.status_code == 403 and (
+        response.headers.get("x-ratelimit-remaining") == "0"
+        or "retry-after" in response.headers
+        or "rate limit" in response.text.lower()
     )
 
 
@@ -192,6 +257,10 @@ class GitHubClient:
             response = self._http.request(method, path, **kwargs)
         except httpx.HTTPError as error:
             raise GitHubUnavailable(f"GitHub request failed: {error}") from error
+        if _rate_limited(response):
+            retry_after = _retry_after(response)
+            wait = f"; retry in {retry_after}s" if retry_after is not None else ""
+            raise GitHubRateLimited(f"GitHub rate limit reached{wait}", retry_after)
         if response.status_code in (401, 403):
             raise GitHubUnavailable("GitHub rejected the token")
         return response
@@ -258,6 +327,16 @@ class GitHubClient:
             f"Pull request not found on GitHub: {ref}",
         )
         return _remote_pull(ref.repository, data)
+
+    def get_review_decision(self, ref: PullRef) -> str | None:
+        """approved, changes_requested or None, from the PR's reviews."""
+        reviews = self._request(
+            "GET",
+            f"/repos/{ref.repository}/pulls/{ref.number}/reviews",
+            f"Pull request not found on GitHub: {ref}",
+            params={"per_page": 100},
+        )
+        return review_decision(reviews)
 
     def create_pull_request(
         self, repository: str, head: str, base: str, title: str, body: str, draft: bool

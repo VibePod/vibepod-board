@@ -91,6 +91,12 @@ class TaskEventKind(StrEnum):
     PR_OPENED = "pr_opened"
     PR_LINKED = "pr_linked"
     PR_UNLINKED = "pr_unlinked"
+    # What a sync of the linked PR found: merged (the card moved to Done), closed without
+    # merging, opened again, or a renamed head branch the card's branch followed.
+    PR_MERGED = "pr_merged"
+    PR_CLOSED = "pr_closed"
+    PR_REOPENED = "pr_reopened"
+    BRANCH_RENAMED = "branch_renamed"
 
 
 BOARD_COLUMNS: tuple[BoardColumn, ...] = tuple(BoardColumn)
