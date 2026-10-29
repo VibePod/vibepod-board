@@ -1,0 +1,18 @@
+[
+  {"name": "plain text is unchanged", "input": "All 42 tests passed", "expected": "All 42 tests passed"},
+  {"name": "newlines and tabs are kept", "input": "line one\n\tindented\nline three", "expected": "line one\n\tindented\nline three"},
+  {"name": "SGR colours", "input": "\u001b[1;33mwarning:\u001b[0m disk almost full", "expected": "warning: disk almost full"},
+  {"name": "256 and true colour", "input": "\u001b[38;5;196mred\u001b[48;2;0;0;255m on blue\u001b[m", "expected": "red on blue"},
+  {"name": "cursor visibility", "input": "\u001b[?25lWorking\u001b[?25h", "expected": "Working"},
+  {"name": "cursor moves and erasing", "input": "\u001b[2K\u001b[1GDone\u001b[3A\u001b[J", "expected": "Done"},
+  {"name": "OSC window title ended by BEL", "input": "\u001b]0;claude\u0007Ready", "expected": "Ready"},
+  {"name": "OSC hyperlink ended by ST", "input": "See \u001b]8;;https://example.com\u001b\\the docs\u001b]8;;\u001b\\.", "expected": "See the docs."},
+  {"name": "OSC cut off at the end", "input": "Done\u001b]0;unfinished title", "expected": "Done"},
+  {"name": "DCS string", "input": "a\u001bPq#0;2;0;0;0\u001b\\b", "expected": "ab"},
+  {"name": "charset and keypad escapes", "input": "\u001b(Bbox\u001b=\u001b7\u001b8", "expected": "box"},
+  {"name": "8-bit CSI", "input": "\u009b31mred\u009b0m", "expected": "red"},
+  {"name": "carriage returns are dropped", "input": "first\r\nsecond\rthird", "expected": "first\nsecondthird"},
+  {"name": "other C0 controls and DEL", "input": "bell\u0007 back\bspace\u0000 del\u007f form\ffeed", "expected": "bell backspace del formfeed"},
+  {"name": "lone ESC at the end", "input": "cut off\u001b", "expected": "cut off"},
+  {"name": "unicode text is kept", "input": "\u001b[32m✔\u001b[0m Grüße 🎉", "expected": "✔ Grüße 🎉"}
+]

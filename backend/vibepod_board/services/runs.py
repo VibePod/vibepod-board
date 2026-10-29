@@ -1,6 +1,7 @@
 """Run reports: every automated run adds one to its task, so the task keeps a history of its
 attempts. Long text is cut down to fit: the verify output keeps its head and its tail, where
-test runners print their summary."""
+test runners print their summary. Terminal escape codes are stripped first, so the limits
+count visible text."""
 
 from collections.abc import Sequence
 from datetime import datetime, timedelta
@@ -24,6 +25,7 @@ from vibepod_board.services.listing import Page
 from vibepod_board.services.references import require_idea_ref, task_keys
 from vibepod_board.services.workers import require_worker
 from vibepod_board.tables import IdeaRow, TaskReviewRow, TaskRunRow
+from vibepod_board.terminal_text import strip_terminal_codes
 
 VERIFY_OUTPUT_HEAD = 2_000
 VERIFY_OUTPUT_TAIL = 14_000
@@ -47,6 +49,10 @@ def truncate_end(text: str, limit: int) -> str:
     return text if len(text) <= limit else f"{text[:limit]}\n\n[… truncated …]"
 
 
+def _plain(text: str | None) -> str:
+    return strip_terminal_codes(text or "").strip()
+
+
 def task_run_from_row(row: TaskRunRow) -> TaskRun:
     return TaskRun.model_validate(row, from_attributes=True)
 
@@ -60,7 +66,7 @@ def _commits(commits: Sequence[Any]) -> list[dict[str, str]]:
         sha = str(data.get("sha", "")).strip()
         if not sha:
             raise BadRequest("Every commit needs a sha")
-        normalized.append({"sha": sha, "subject": str(data.get("subject") or "").strip()})
+        normalized.append({"sha": sha, "subject": _plain(str(data.get("subject") or ""))})
     return normalized
 
 
@@ -121,6 +127,8 @@ def add_run_report(
             if review is not None:
                 verdict = review.verdict
                 feedback = feedback if feedback is not None else review.feedback
+    verify_output = strip_terminal_codes(verify_output or "")
+    failure_reason = _plain(failure_reason)
     output, truncated = (
         truncate_middle(verify_output, VERIFY_OUTPUT_HEAD, VERIFY_OUTPUT_TAIL)
         if verify_output
@@ -144,9 +152,9 @@ def add_run_report(
         agent=normalize_optional_text(agent),
         kind=kind or ClaimMode.IMPLEMENT,
         verdict=verdict,
-        feedback=truncate_end((feedback or "").strip(), SUMMARY_LIMIT) or None,
+        feedback=truncate_end(_plain(feedback), SUMMARY_LIMIT) or None,
         outcome=outcome,
-        summary=truncate_end((summary or "").strip(), SUMMARY_LIMIT),
+        summary=truncate_end(_plain(summary), SUMMARY_LIMIT),
         commits=_commits(commits),
         branch_name=normalize_optional_text(branch_name),
         verify_command=normalize_optional_text(verify_command),
@@ -154,11 +162,7 @@ def add_run_report(
         verify_output=output,
         verify_output_truncated=truncated,
         duration_seconds=duration_seconds,
-        failure_reason=(
-            truncate_end(failure_reason.strip(), REASON_LIMIT)
-            if failure_reason and failure_reason.strip()
-            else None
-        ),
+        failure_reason=truncate_end(failure_reason, REASON_LIMIT) if failure_reason else None,
         started_at=started_at,
         finished_at=finished_at,
         created_at=timestamp,

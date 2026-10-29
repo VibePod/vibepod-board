@@ -424,6 +424,51 @@ def test_long_verify_output_keeps_its_head_and_tail(session: Session, vp) -> Non
     assert len(report.verify_output) < runs.VERIFY_OUTPUT_HEAD + runs.VERIFY_OUTPUT_TAIL + 100
 
 
+def test_run_reports_are_stored_without_terminal_codes(session: Session, vp) -> None:
+    task = planned(session, vp, "Colourful")
+
+    report = runs.add_run_report(
+        session,
+        ADMIN,
+        task.id,
+        RunOutcome.FAILED,
+        summary="\x1b[1;33mWarning:\x1b[0m tests\r\n\tfailed\x1b[?25h",
+        commits=[{"sha": "abc1234", "subject": "\x1b[32mFix\x1b[0m login"}],
+        verify_output="\x1b]0;pytest\x07\x1b[31m1 failed\x1b[0m\n\t2 passed\n",
+        failure_reason="\x1b[31m\x1b[0m",
+        feedback="\x1b[1mNeeds tests\x1b[0m",
+    )
+
+    assert report.summary == "Warning: tests\n\tfailed"
+    assert report.commits[0].subject == "Fix login"
+    assert report.verify_output == "1 failed\n\t2 passed\n"
+    assert report.failure_reason is None
+    assert report.feedback == "Needs tests"
+    stored = runs.list_run_reports(session, ADMIN, task.id).items[0]
+    assert (stored.summary, stored.verify_output) == (report.summary, report.verify_output)
+
+
+def test_limits_count_the_visible_text(session: Session, vp) -> None:
+    task = planned(session, vp, "Colourful and long")
+    colour = "\x1b[38;5;196m"
+    summary = colour + "s" * runs.SUMMARY_LIMIT
+    output = colour * 1_000 + "x" * (runs.VERIFY_OUTPUT_HEAD + runs.VERIFY_OUTPUT_TAIL)
+
+    report = runs.add_run_report(
+        session, ADMIN, task.id, RunOutcome.FAILED, summary=summary, verify_output=output
+    )
+
+    assert report.summary == "s" * runs.SUMMARY_LIMIT
+    assert report.verify_output_truncated is False
+    assert report.verify_output == "x" * (runs.VERIFY_OUTPUT_HEAD + runs.VERIFY_OUTPUT_TAIL)
+    long = runs.add_run_report(
+        session, ADMIN, task.id, RunOutcome.FAILED, verify_output=output + "\x1b[0my" * 10
+    )
+    assert long.verify_output_truncated is True
+    assert "[… 10 characters omitted …]" in long.verify_output
+    assert "\x1b" not in long.verify_output
+
+
 def test_run_reports_validate_their_input(session: Session, vp) -> None:
     other = projects.create_project(session, "OT", "Other")
     task = planned(session, vp, "Validated")
@@ -494,8 +539,8 @@ def test_rest_records_and_lists_run_reports(api: TestClient) -> None:
         "/api/ideas/VP-1/runs",
         json={
             "outcome": "timed_out",
-            "summary": "Ran out of time",
-            "commits": [{"sha": "abc1234", "subject": "WIP"}],
+            "summary": "\u001b[1;33mRan out of time\u001b[0m",
+            "commits": [{"sha": "abc1234", "subject": "\u001b[2mWIP\u001b[0m"}],
             "durationSeconds": 7200,
             "failureReason": "Timed out after 2h",
             "startedAt": "2026-09-29T08:00:00Z",
@@ -509,6 +554,7 @@ def test_rest_records_and_lists_run_reports(api: TestClient) -> None:
         "Timed out after 2h",
     )
     assert item["startedAt"] == "2026-09-29T08:00:00.000Z"
+    assert (item["summary"], item["commits"][0]["subject"]) == ("Ran out of time", "WIP")
     assert [run["id"] for run in api.get("/api/ideas/VP-1/runs").json()["items"]] == [item["id"]]
     second = api.post("/api/ideas/VP-1/runs", json={"outcome": "failed"}).json()["item"]
     page = api.get("/api/ideas/VP-1/runs", params={"limit": 1}).json()
@@ -566,7 +612,7 @@ async def test_mcp_steers_workers_and_reports_runs(server_url: str, session: Ses
         "add_run_report",
         id="VP-1",
         outcome="cancelled",
-        summary="Stopped early",
+        summary="Stopped \x1b[1mearly\x1b[0m\x1b[?25h",
         commits=[{"sha": "abc1234", "subject": "Partial"}],
         workerId=worker.id,
     )
@@ -582,6 +628,7 @@ async def test_mcp_steers_workers_and_reports_runs(server_url: str, session: Ses
         )
     reports = await call(server_url, token, "list_run_reports", id=task.id)
     assert [item["outcome"] for item in reports["items"]] == ["cancelled"]
+    assert reports["items"][0]["summary"] == "Stopped early"
     assert reports["nextCursor"] is None
     paged = await call(server_url, token, "list_run_reports", id=task.id, limit=1)
     assert paged["nextCursor"] is None
