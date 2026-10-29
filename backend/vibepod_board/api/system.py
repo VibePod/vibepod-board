@@ -63,6 +63,7 @@ MCP_INFO_TOOLS = (
     "sign_off_worker",
     "stop_worker",
     "submit_review",
+    "sync_pull_request",
     "unarchive_board_card",
     "update_board_card",
     "update_board_cards",
