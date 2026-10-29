@@ -66,11 +66,17 @@ def end_rebase_request(
     session: Session, card: BoardCardRow, reason: str, actor: str | None, timestamp: datetime
 ) -> None:
     """Ends a pending request of a locked card without a rebase, such as when it is moved by
-    hand; a worker holding it is told to cancel with its next heartbeat reply."""
+    hand; a worker holding it is told to cancel with its next heartbeat reply. A question the
+    rebase worker left goes with it: no request is taken while the card has a question, so one
+    asked while the request was pending is the rebase's."""
     if not rebase_pending(card) or not card.idea_id:
         return
     holder = card.rebase_holder if rebase_held(card, timestamp) else None
     end_request(card)
+    if card.question and (card.blocked_reason or "").startswith("Needs input:"):
+        card.question = None
+        card.blocked_at = None
+        card.blocked_reason = None
     who = f" by {holder}" if holder else ""
     add_task_event(
         session,

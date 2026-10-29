@@ -9,7 +9,7 @@ from conftest import call, login
 from fastapi.testclient import TestClient
 from fastmcp.exceptions import ToolError
 from sqlalchemy import Engine, text
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from vibepod_board.access import admin_access
 from vibepod_board.enums import (
@@ -41,6 +41,7 @@ from vibepod_board.services import (
     transfer,
     workers,
 )
+from vibepod_board.tables import BoardCardRow
 
 ADMIN = admin_access("admin")
 RUNNER = "Claude::Runner"
@@ -410,6 +411,53 @@ def test_needs_input_shows_the_question_and_the_answer_resumes_the_rebase(
     assert answered.rebase_target == RebaseTarget.BOTH
     assert claim(session).item.task.key == "VP-1"
     assert TaskEventKind.ANSWER in kinds(session, task)
+
+
+def asked_in_pr_ready(session: Session, project, title: str):
+    """A PR-ready task whose rebase worker asked a question."""
+    task = in_review(session, project, title)
+    board.update_card(session, ADMIN, task.id, column=BoardColumn.PR_READY)
+    rebases.request_rebase(session, ADMIN, "VP-1")
+    claim(session)
+    rebases.complete_rebase(
+        session, ADMIN, "VP-1", REBASER, RebaseOutcome.NEEDS_INPUT, note="Keep which side?"
+    )
+    return task
+
+
+def test_cancelling_a_rebase_that_asked_drops_its_question(session: Session, vp) -> None:
+    task = asked_in_pr_ready(session, vp, "Asked, then cancelled")
+
+    cancelled = rebases.cancel_rebase(session, ADMIN, "VP-1")
+
+    assert cancelled.column == BoardColumn.PR_READY
+    assert (cancelled.question, cancelled.blocked_at, cancelled.blocked_reason) == (None,) * 3
+    assert cancelled.rebase_target is None
+    with pytest.raises(Conflict):
+        conversation.answer_question(session, ADMIN, task.id, "Too late")
+    assert card(session, task).column == BoardColumn.PR_READY
+
+
+def test_moving_a_rebase_that_asked_by_hand_drops_its_question(session: Session, vp) -> None:
+    task = asked_in_pr_ready(session, vp, "Asked, then moved")
+
+    moved = board.update_card(session, ADMIN, task.id, column=BoardColumn.REVIEW)
+
+    assert moved.column == BoardColumn.REVIEW
+    assert (moved.question, moved.blocked_at, moved.blocked_reason) == (None,) * 3
+    assert moved.rebase_target is None
+
+
+def test_ending_a_rebase_leaves_other_blocks_alone(session: Session, vp) -> None:
+    task = in_review(session, vp, "Blocked elsewhere")
+    board.update_card(session, ADMIN, task.id, column=BoardColumn.PR_READY)
+    rebases.request_rebase(session, ADMIN, "VP-1")
+    row = session.exec(select(BoardCardRow).where(BoardCardRow.idea_id == task.id)).one()
+    row.question, row.blocked_at, row.blocked_reason = "Which infra?", now(), "Waiting on infra"
+
+    cancelled = rebases.cancel_rebase(session, ADMIN, "VP-1")
+
+    assert (cancelled.question, cancelled.blocked_reason) == ("Which infra?", "Waiting on infra")
 
 
 def test_a_failed_rebase_blocks_the_card_and_ends_the_request(session: Session, vp) -> None:
