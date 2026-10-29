@@ -68,8 +68,9 @@ def _sync_pull_requests(settings: Settings, transport: httpx.BaseTransport | Non
 
 async def _sweep_pull_requests(settings: Settings, transport: httpx.BaseTransport | None) -> None:
     """Syncs linked open PRs of cards in PR ready and Review, so a merge on GitHub moves its
-    card to Done without anyone clicking. Each PR costs one request per interval; a rate limit
-    from GitHub makes the sweep wait longer, doubling up to an hour."""
+    card to Done without anyone clicking. Each PR costs one request per interval, two when it
+    changed since the last sync (its reviews are read again); a rate limit from GitHub makes
+    the sweep wait longer, doubling up to an hour."""
     interval = settings.github_pr_sync_seconds
     delay = interval
     while True:

@@ -8,6 +8,7 @@ badge, and the card's branch follows a renamed head branch.
 
 import logging
 import re
+from datetime import datetime, timedelta
 
 from sqlmodel import Session, col, select
 
@@ -163,7 +164,7 @@ def pull_request_draft(
     return _draft(session, require_active_card(session, access, reference), client)
 
 
-def _store(card: BoardCardRow, pull: RemotePull) -> None:
+def _store(card: BoardCardRow, pull: RemotePull, synced_at: datetime | None = None) -> None:
     card.github_pr_url = pull.url
     card.github_pr_number = pull.ref.number
     card.github_pr_repository = pull.ref.repository
@@ -175,7 +176,7 @@ def _store(card: BoardCardRow, pull: RemotePull) -> None:
     card.github_pr_head = pull.head
     card.github_pr_head_sha = pull.head_sha
     card.github_pr_merged_at = pull.merged_at
-    card.github_pr_synced_at = now()
+    card.github_pr_synced_at = synced_at or now()
 
 
 _FIELDS = (
@@ -290,14 +291,23 @@ def link_pull_request(
     ref = parse_pull_url(url)
     if ref is None:
         raise BadRequest(INVALID_URL)
+    # Relinking the same PR keeps what the board already made of its state, so a merge that
+    # was handled, and a card moved back by hand since, is not handled again.
+    same = (card.github_pr_repository, card.github_pr_number) == (ref.repository, ref.number)
+    previous_state = card.github_pr_state if same else None
+    pull = client.get_pull_request(ref) if client else None
     _clear(card)
-    if client:
-        _store(card, client.get_pull_request(ref))
-    else:
-        card.github_pr_url = ref.url
-        card.github_pr_number = ref.number
-        card.github_pr_repository = ref.repository
-    return _record(session, access, card, TaskEventKind.PR_LINKED, f"PR #{ref.number} linked")
+    card.github_pr_url = ref.url
+    card.github_pr_number = ref.number
+    card.github_pr_repository = ref.repository
+    linked = _record(session, access, card, TaskEventKind.PR_LINKED, f"PR #{ref.number} linked")
+    if client is None or pull is None:
+        return linked
+    # Linked as a first sync: a PR already merged moves the card to Done, one already closed
+    # is recorded, and both after the link in the history.
+    card.github_pr_state = previous_state
+    _sync(session, card, client, actor_for(session, access), pull, after=linked.updated_at)
+    return get_card(session, access, card.id)
 
 
 def _pulled(card: BoardCardRow) -> tuple[object, ...]:
@@ -306,20 +316,37 @@ def _pulled(card: BoardCardRow) -> tuple[object, ...]:
     return (*fields, card.branch_name, card.column_name)
 
 
-def _sync(session: Session, card: BoardCardRow, client: GitHubClient, actor: str) -> None:
+def _sync(
+    session: Session,
+    card: BoardCardRow,
+    client: GitHubClient,
+    actor: str,
+    pull: RemotePull | None = None,
+    *,
+    after: datetime | None = None,
+) -> None:
+    """Applies the PR, fetched from GitHub unless given, to the card, dating what it records
+    later than `after`.
+
+    A merge or close is handled when the state differs from the stored one, so it is handled
+    once: a card moved back by hand after its PR merged stays where it was put."""
     if not card.github_pr_number or not card.github_pr_repository:
         raise Conflict("Card has no linked pull request")
     ref = PullRef(card.github_pr_repository, card.github_pr_number)
-    pull = client.get_pull_request(ref)
+    if pull is None:
+        pull = client.get_pull_request(ref)
     before = _pulled(card)
     previous_state = card.github_pr_state
-    # A new review changes the PR's `updated_at`, so an unchanged PR costs one request.
+    # A new review changes the PR's `updated_at`, so an unchanged PR costs one request and a
+    # changed one two.
     if pull.updated_at is None or pull.updated_at != card.github_pr_updated_at:
         card.github_pr_review_decision = client.get_review_decision(ref)
-    _store(card, pull)
+    timestamp = now()
+    if after is not None and timestamp <= after:
+        timestamp = after + timedelta(milliseconds=1)
+    _store(card, pull, timestamp)
     card.github_pr_updated_at = pull.updated_at
 
-    timestamp = card.github_pr_synced_at
     events: list[tuple[TaskEventKind, str]] = []
     number = ref.number
     if pull.state != previous_state:

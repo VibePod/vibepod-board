@@ -406,13 +406,14 @@ def test_links_and_unlinks_a_pr_by_url(
     session: Session, project, fake: FakeGitHub, github: GitHubClient
 ) -> None:
     card = pr_ready_card(session, project)
-    fake.add_pull("vibepod/other", "fix", base="develop", state="closed", merged=True)
+    fake.add_pull("vibepod/other", "feature/pr", base="develop", draft=True)
 
     linked = pull_requests.link_pull_request(
         session, ADMIN, card.id, "https://github.com/vibepod/other/pull/1", github
     )
     assert (linked.github_pr_repository, linked.github_pr_number) == ("vibepod/other", 1)
-    assert (linked.github_pr_state, linked.github_pr_base) == ("merged", "develop")
+    assert (linked.github_pr_state, linked.github_pr_base) == ("open", "develop")
+    assert linked.github_pr_draft is True
 
     unlinked = pull_requests.link_pull_request(session, ADMIN, card.id, " ")
     assert unlinked.github_pr_url is None
@@ -422,6 +423,68 @@ def test_links_and_unlinks_a_pr_by_url(
         (TaskEventKind.PR_UNLINKED, "PR #1 unlinked by admin"),
         (TaskEventKind.PR_LINKED, "PR #1 linked by admin"),
     ]
+
+
+def test_linking_an_already_merged_pr_moves_the_card_to_done(
+    session: Session, project, fake: FakeGitHub, github: GitHubClient
+) -> None:
+    card = pr_ready_card(session, project)
+    dependent = ideas.create_idea(
+        session, ADMIN, project_id=project.id, title="Next", depends_on=[card.idea_id]
+    )
+    fake.add_pull(REPO, "feature/pr", state="closed", merged=True)
+
+    linked = pull_requests.link_pull_request(
+        session, ADMIN, card.id, f"https://github.com/{REPO}/pull/1", github
+    )
+
+    assert (linked.column, linked.github_pr_state) == (BoardColumn.DONE, "merged")
+    assert events(session, card)[:2] == [
+        (TaskEventKind.PR_MERGED, "PR #1 merged"),
+        (TaskEventKind.PR_LINKED, "PR #1 linked by admin"),
+    ]
+    assert ideas.get_idea(session, ADMIN, dependent.id).blocked_by == []
+
+    # Moved back by hand, neither a sync nor linking the same PR again moves it.
+    board.update_card(session, ADMIN, card.id, column=BoardColumn.PR_READY)
+    pull_requests.sync_pull_request(session, ADMIN, card.id, github)
+    again = pull_requests.link_pull_request(
+        session, ADMIN, card.id, f"https://github.com/{REPO}/pull/1", github
+    )
+    assert again.column == BoardColumn.PR_READY
+    assert [kind for kind, _ in events(session, card)].count(TaskEventKind.PR_MERGED) == 1
+
+
+def test_linking_an_already_closed_pr_records_it_and_leaves_the_card_in_place(
+    session: Session, project, fake: FakeGitHub, github: GitHubClient
+) -> None:
+    card = pr_ready_card(session, project)
+    fake.add_pull(REPO, "feature/pr", state="closed")
+
+    linked = pull_requests.link_pull_request(
+        session, ADMIN, card.id, f"https://github.com/{REPO}/pull/1", github
+    )
+
+    assert (linked.column, linked.github_pr_state) == (BoardColumn.PR_READY, "closed")
+    assert events(session, card)[:2] == [
+        (TaskEventKind.PR_CLOSED, "PR #1 closed without merging"),
+        (TaskEventKind.PR_LINKED, "PR #1 linked by admin"),
+    ]
+
+
+def test_linking_an_open_pr_records_only_the_link(
+    session: Session, project, fake: FakeGitHub, github: GitHubClient
+) -> None:
+    card = pr_ready_card(session, project)
+    fake.add_pull(REPO, "feature/pr")
+
+    linked = pull_requests.link_pull_request(
+        session, ADMIN, card.id, f"https://github.com/{REPO}/pull/1", github
+    )
+
+    assert (linked.column, linked.github_pr_state) == (BoardColumn.PR_READY, "open")
+    assert linked.github_pr_synced_at is not None
+    assert events(session, card)[0] == (TaskEventKind.PR_LINKED, "PR #1 linked by admin")
 
 
 def test_links_without_a_token_by_identity_only(session: Session, project) -> None:
