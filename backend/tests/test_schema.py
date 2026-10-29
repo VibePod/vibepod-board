@@ -9,7 +9,7 @@ from sqlmodel import SQLModel
 
 from vibepod_board.db import migrate
 
-HEAD = "0015"
+HEAD = "0016"
 LEGACY_SCHEMA = (Path(__file__).parent / "legacy_schema.sql").read_text()
 # The first TS schema, before repository, readiness and dependency support.
 ORIGINAL_SCHEMA = LEGACY_SCHEMA.split("alter table board_cards add column", 1)[0]
@@ -338,3 +338,73 @@ def test_0013_keeps_existing_review_run_verdicts(empty_db: Engine, pruned: bool)
             text("SELECT kind, verdict, feedback, verify_output FROM task_runs")
         ).one()
     assert tuple(result) == ("review", "approve", "Looks good", "Tests passed")
+
+
+def test_0016_strips_terminal_codes_from_stored_run_reports(empty_db: Engine) -> None:
+    from alembic import command
+
+    from vibepod_board.db import alembic_config
+
+    config = alembic_config()
+    with empty_db.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "0015")
+        connection.execute(
+            text("""
+            INSERT INTO projects (id, key, title, created_at, updated_at)
+            VALUES ('p', 'VP', 'VibePod', now(), now());
+            INSERT INTO ideas (id, project_id, task_number, title, status, created_at, updated_at)
+            VALUES ('t', 'p', 1, 'Task', 'ready', now(), now());
+            """)
+        )
+        insert = text("""
+            INSERT INTO task_runs (id, idea_id, outcome, summary, feedback, failure_reason,
+                verify_output, verify_output_truncated, commits, created_at)
+            VALUES (:id, 't', 'failed', :summary, :feedback, :reason, :output, :truncated,
+                CAST(:commits AS jsonb), now())
+        """)
+        connection.execute(
+            insert,
+            {
+                "id": "noisy",
+                "summary": "\x1b[1;33mWarning:\x1b[0m tests\n\tfailed\x1b[?25h",
+                "feedback": "\x1b[1m\x1b[0m",
+                "reason": "\x1b]0;claude\x07Agent exited with 1",
+                "output": "\x1b[31m1 failed\x1b[0m\r\n\t2 passed\n\n[… 9 characters omitted …]",
+                "truncated": True,
+                "commits": '[{"sha": "abc1234", "subject": "\\u001b[32mFix\\u001b[0m login"}]',
+            },
+        )
+        connection.execute(
+            insert,
+            {
+                "id": "clean",
+                "summary": "  Already plain  ",
+                "feedback": None,
+                "reason": None,
+                "output": "ok\n",
+                "truncated": False,
+                "commits": "[]",
+            },
+        )
+    migrate(empty_db)
+    with empty_db.connect() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT id, summary, feedback, failure_reason, verify_output, "
+                "verify_output_truncated, commits FROM task_runs ORDER BY id"
+            )
+        ).all()
+    assert [tuple(row) for row in rows] == [
+        ("clean", "  Already plain  ", None, None, "ok\n", False, []),
+        (
+            "noisy",
+            "Warning: tests\n\tfailed",
+            None,
+            "Agent exited with 1",
+            "1 failed\n\t2 passed\n\n[… 9 characters omitted …]",
+            True,
+            [{"sha": "abc1234", "subject": "Fix login"}],
+        ),
+    ]
+    assert revision(empty_db) == HEAD
