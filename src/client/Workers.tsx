@@ -13,7 +13,7 @@ import {
 } from "@mantine/core";
 import { Bot, Pause, Play, Square, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { AutomationState, Worker } from "../shared/types.js";
+import type { AutomationState, Worker, WorkerMode } from "../shared/types.js";
 import {
   elapsedSince,
   formatElapsed,
@@ -36,10 +36,30 @@ export const useNow = (intervalMs = 1000): number => {
   return now;
 };
 
+const workerRoles: Record<WorkerMode, string> = {
+  implement: "",
+  review: "reviewer",
+  rebase: "rebaser",
+};
+const workerModeColors: Record<WorkerMode, string> = {
+  implement: "blue",
+  review: "cyan",
+  rebase: "indigo",
+};
+const workerActivityPrefixes: Record<WorkerMode, string> = {
+  implement: "",
+  review: "reviewing ",
+  rebase: "rebasing ",
+};
+
 const workerStepLabel = (worker: Worker) => {
   if (worker.mode === "review") {
     if (worker.step === "agent_running") return "Reviewing";
     if (worker.step === "handing_over") return "Submitting verdict";
+  }
+  if (worker.mode === "rebase") {
+    if (worker.step === "agent_running") return "Rebasing";
+    if (worker.step === "handing_over") return "Reporting the rebase";
   }
   return worker.step ? workerStepLabels[worker.step] : "";
 };
@@ -111,7 +131,7 @@ export const WorkersList = ({
                   {[
                     worker.agent,
                     worker.machine,
-                    worker.mode === "review" ? "reviewer" : "",
+                    workerRoles[worker.mode ?? "implement"],
                   ]
                     .filter(Boolean)
                     .join(" · ")}
@@ -130,7 +150,7 @@ export const WorkersList = ({
               <Group gap={6} wrap="nowrap">
                 <Badge
                   variant="outline"
-                  color={worker.mode === "review" ? "cyan" : "blue"}
+                  color={workerModeColors[worker.mode ?? "implement"]}
                 >
                   {worker.mode ?? "implement"}
                 </Badge>
@@ -193,7 +213,7 @@ export const WorkersList = ({
                   size="sm"
                   onClick={() => onOpenTask(worker.taskId as string)}
                 >
-                  {worker.mode === "review" ? "reviewing " : ""}
+                  {workerActivityPrefixes[worker.mode ?? "implement"]}
                   {[worker.taskKey, worker.taskTitle].filter(Boolean).join(" ")}
                 </Anchor>
                 {worker.step && (

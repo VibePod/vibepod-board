@@ -47,6 +47,7 @@ import {
   FolderKanban,
   Fullscreen,
   GitBranch,
+  GitMerge,
   KeyRound,
   List,
   Lock,
@@ -101,6 +102,7 @@ import {
   type Project,
   type ProjectBundle,
   type ReadinessEvent,
+  type RebaseTarget,
   type RemovedWorkersResponse,
   type Worker,
   type WorkerListResponse,
@@ -128,6 +130,7 @@ import {
 import {
   AnswerDialog,
   ApproveDialog,
+  RebaseDialog,
   ReworkDialog,
 } from "./ConversationDialogs.js";
 import { CopyableCode } from "./CopyableCode.js";
@@ -175,6 +178,13 @@ import {
   projectBundlePreview,
   projectExportFileName,
 } from "./projectTransfer.js";
+import {
+  canRequestRebase,
+  isBlockedForRebase,
+  isRebaseHeld,
+  rebaseStatusText,
+  rebaseTargetShortLabels,
+} from "./rebaseUtils.js";
 import { githubRepositoryLink } from "./repositoryUtils.js";
 import { Sidebar } from "./Sidebar.js";
 import { TaskGraph } from "./TaskGraph.js";
@@ -478,6 +488,10 @@ const App = () => {
   const [answerTarget, setAnswerTarget] = useState<BoardCard | null>(null);
   const [approveTarget, setApproveTarget] = useState<BoardCard | null>(null);
   const [reworkTarget, setReworkTarget] = useState<BoardCard | null>(null);
+  // The card a rebase is being asked for.
+  const [rebaseDialogCard, setRebaseDialogCard] = useState<BoardCard | null>(
+    null,
+  );
   const [automation, setAutomation] = useState<
     WorkerListResponse["automation"] | null
   >(null);
@@ -1959,7 +1973,11 @@ const App = () => {
       return;
     }
     setAnswerTarget(null);
-    setNotice(`Answered ${card.title}; it is planned again.`);
+    setNotice(
+      card.rebaseTarget
+        ? `Answered ${card.title}; the rebase is pending again.`
+        : `Answered ${card.title}; it is planned again.`,
+    );
     await loadState();
   };
 
@@ -2008,6 +2026,58 @@ const App = () => {
     setReworkTarget(null);
     setNotice(`Sent ${card.title} back for rework.`);
     await loadState();
+  };
+
+  /**
+   * Asks a rebase worker to rebase the card's branch, guarded by the card the
+   * dialog shows. Throws for the dialog.
+   */
+  const requestRebase = async (card: BoardCard, target: RebaseTarget) => {
+    try {
+      await api(`/api/board/${card.id}/rebase`, {
+        method: "POST",
+        body: JSON.stringify({ target, expectedUpdatedAt: card.updatedAt }),
+      });
+    } catch (err) {
+      if (!isConflict(err)) throw err;
+      const message = await refreshConversationTarget(
+        card,
+        setRebaseDialogCard,
+        (current) => canRequestRebase(current),
+      );
+      if (message) throw new Error(message);
+      return;
+    }
+    setRebaseDialogCard(null);
+    setNotice(
+      `Asked for a rebase of ${card.title} onto ${rebaseTargetShortLabels[target]}.`,
+    );
+    await loadState();
+  };
+
+  /** Withdraws the pending rebase of a card; a worker holding it cancels. */
+  const cancelRebase = async (card: BoardCard) => {
+    if (
+      isRebaseHeld(card) &&
+      !window.confirm(
+        `${card.rebaseHolder} is rebasing ${card.title}. Cancel the rebase?`,
+      )
+    ) {
+      return;
+    }
+    setError("");
+    setNotice("");
+    try {
+      await api(`/api/board/${card.id}/rebase/cancel`, { method: "POST" });
+      await loadState();
+      setNotice(`Cancelled the rebase of ${card.title}.`);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to cancel the rebase",
+      );
+      await loadState().catch(() => undefined);
+    }
+    setWorkersVersion((version) => version + 1);
   };
 
   /** A move by hand, dragged or picked from a card's Move to menu. */
@@ -2987,22 +3057,49 @@ const App = () => {
                                   >
                                     Blocked
                                   </Badge>
-                                  <Button
-                                    type="button"
-                                    variant="subtle"
-                                    color="gray"
-                                    size="compact-xs"
-                                    aria-label={`Unblock ${card.title}`}
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      void unblockCard(card);
-                                    }}
-                                    onKeyDown={(event) =>
-                                      event.stopPropagation()
-                                    }
-                                  >
-                                    Unblock
-                                  </Button>
+                                  <Group gap={2} wrap="nowrap">
+                                    {canRequestRebase(card) && (
+                                      <Button
+                                        type="button"
+                                        variant={
+                                          isBlockedForRebase(card)
+                                            ? "light"
+                                            : "subtle"
+                                        }
+                                        color="indigo"
+                                        size="compact-xs"
+                                        leftSection={
+                                          <GitMerge size={12} aria-hidden />
+                                        }
+                                        aria-label={`Rebase ${card.title}`}
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          setRebaseDialogCard(card);
+                                        }}
+                                        onKeyDown={(event) =>
+                                          event.stopPropagation()
+                                        }
+                                      >
+                                        Rebase
+                                      </Button>
+                                    )}
+                                    <Button
+                                      type="button"
+                                      variant="subtle"
+                                      color="gray"
+                                      size="compact-xs"
+                                      aria-label={`Unblock ${card.title}`}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        void unblockCard(card);
+                                      }}
+                                      onKeyDown={(event) =>
+                                        event.stopPropagation()
+                                      }
+                                    >
+                                      Unblock
+                                    </Button>
+                                  </Group>
                                 </Group>
                                 {card.blockedReason && (
                                   <Text
@@ -3013,6 +3110,55 @@ const App = () => {
                                     {card.blockedReason}
                                   </Text>
                                 )}
+                              </Stack>
+                            ) : card.rebaseTarget ? (
+                              <Stack
+                                className="board-card-rebase-pending"
+                                gap={4}
+                              >
+                                <Group gap={6} justify="space-between">
+                                  <Badge
+                                    variant="light"
+                                    color="indigo"
+                                    size="sm"
+                                    leftSection={
+                                      <GitMerge size={12} aria-hidden />
+                                    }
+                                  >
+                                    {isRebaseHeld(card)
+                                      ? "Rebasing"
+                                      : "Rebase pending"}
+                                  </Badge>
+                                  <Button
+                                    type="button"
+                                    variant="subtle"
+                                    color="gray"
+                                    size="compact-xs"
+                                    aria-label={`Cancel rebase of ${card.title}`}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void cancelRebase(card);
+                                    }}
+                                    onKeyDown={(event) =>
+                                      event.stopPropagation()
+                                    }
+                                  >
+                                    Cancel
+                                  </Button>
+                                </Group>
+                                <Text
+                                  className="board-card-rebase-status"
+                                  size="xs"
+                                  c="dimmed"
+                                  lineClamp={3}
+                                  title={
+                                    card.rebaseRequestedAt
+                                      ? `Requested ${formatDateTime(card.rebaseRequestedAt)}`
+                                      : undefined
+                                  }
+                                >
+                                  {rebaseStatusText(card)}
+                                </Text>
                               </Stack>
                             ) : (
                               (card.attempts ?? 0) > 0 && (
@@ -3145,6 +3291,30 @@ const App = () => {
                                 >
                                   {card.branchName}
                                 </Badge>
+                                {!card.blockedAt &&
+                                  !card.rebaseTarget &&
+                                  canRequestRebase(card) && (
+                                    <Button
+                                      type="button"
+                                      variant="subtle"
+                                      color="indigo"
+                                      size="compact-xs"
+                                      ml="auto"
+                                      leftSection={
+                                        <GitMerge size={12} aria-hidden />
+                                      }
+                                      aria-label={`Rebase ${card.title}`}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        setRebaseDialogCard(card);
+                                      }}
+                                      onKeyDown={(event) =>
+                                        event.stopPropagation()
+                                      }
+                                    >
+                                      Rebase
+                                    </Button>
+                                  )}
                               </Group>
                             )}
                             {(cardTaskId ||
@@ -3601,14 +3771,64 @@ const App = () => {
                     <Text size="sm">{taskViewCard.blockedReason}</Text>
                   )}
                   {!isTaskViewArchived && (
+                    <Group gap="xs">
+                      {canRequestRebase(taskViewCard) && (
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant={
+                            isBlockedForRebase(taskViewCard)
+                              ? "filled"
+                              : "light"
+                          }
+                          color="indigo"
+                          leftSection={<GitMerge size={14} aria-hidden />}
+                          onClick={() => setRebaseDialogCard(taskViewCard)}
+                        >
+                          Rebase
+                        </Button>
+                      )}
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="light"
+                        color="red"
+                        onClick={() => void unblockCard(taskViewCard)}
+                      >
+                        Unblock
+                      </Button>
+                    </Group>
+                  )}
+                </Stack>
+              </Alert>
+            )}
+            {taskViewCard?.rebaseTarget && !taskViewCard.question && (
+              <Alert
+                className="overview-rebase"
+                color="indigo"
+                variant="light"
+                title={
+                  isRebaseHeld(taskViewCard) ? "Rebasing" : "Rebase pending"
+                }
+                icon={<GitMerge size={18} />}
+              >
+                <Stack gap="xs" align="flex-start">
+                  <Text size="sm">
+                    {rebaseStatusText(taskViewCard)}
+                    {taskViewCard.rebaseRequestedAt
+                      ? ` (${formatDateTime(taskViewCard.rebaseRequestedAt)})`
+                      : ""}
+                    .
+                  </Text>
+                  {!isTaskViewArchived && (
                     <Button
                       type="button"
                       size="xs"
                       variant="light"
-                      color="red"
-                      onClick={() => void unblockCard(taskViewCard)}
+                      color="gray"
+                      onClick={() => void cancelRebase(taskViewCard)}
                     >
-                      Unblock
+                      Cancel rebase
                     </Button>
                   )}
                 </Stack>
@@ -3857,6 +4077,20 @@ const App = () => {
                     Request changes
                   </Button>
                 )}
+                {taskViewCard &&
+                  !taskViewCard.blockedAt &&
+                  !taskViewCard.rebaseTarget &&
+                  canRequestRebase(taskViewCard) && (
+                    <Button
+                      type="button"
+                      variant="light"
+                      color="indigo"
+                      leftSection={<GitMerge size={16} aria-hidden />}
+                      onClick={() => setRebaseDialogCard(taskViewCard)}
+                    >
+                      Rebase
+                    </Button>
+                  )}
                 {taskViewCard?.column === "ready" && (
                   <Button
                     type="button"
@@ -3904,6 +4138,11 @@ const App = () => {
         card={reworkTarget}
         onClose={() => setReworkTarget(null)}
         onSubmit={requestRework}
+      />
+      <RebaseDialog
+        card={rebaseDialogCard}
+        onClose={() => setRebaseDialogCard(null)}
+        onSubmit={requestRebase}
       />
 
       <Modal

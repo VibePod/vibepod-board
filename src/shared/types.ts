@@ -119,9 +119,29 @@ export type BoardCard = {
   handedOverAt?: string;
   /** Rework verdicts in a row since the card was last moved by hand or approved. */
   reviewRounds?: number;
+  /**
+   * A pending rebase of the card's branch, asked for from the board: what to
+   * rebase onto, by whom and when. The card stays in its column, unblocked,
+   * while it is pending.
+   */
+  rebaseTarget?: RebaseTarget;
+  rebaseRequestedBy?: string;
+  rebaseRequestedAt?: string;
+  /** The rebase worker holding the request, until `rebaseExpiresAt`. */
+  rebaseHolder?: string;
+  rebaseClaimedAt?: string;
+  rebaseExpiresAt?: string;
   createdAt: string;
   updatedAt: string;
 };
+
+export const rebaseTargets = ["both", "origin", "default_branch"] as const;
+
+/**
+ * What a requested rebase brings a task's branch onto: origin's task branch,
+ * the project's default branch, or both.
+ */
+export type RebaseTarget = (typeof rebaseTargets)[number];
 
 export const taskEventKinds = [
   "claimed",
@@ -143,6 +163,10 @@ export const taskEventKinds = [
   "pr_opened",
   "pr_linked",
   "pr_unlinked",
+  "rebase_requested",
+  "rebase_started",
+  "rebased",
+  "rebase_ended",
 ] as const;
 
 export type TaskEventKind = (typeof taskEventKinds)[number];
@@ -170,8 +194,11 @@ export type WorkerState = (typeof workerStates)[number];
 export type WorkerStep = (typeof workerSteps)[number];
 
 /** An automated runner connected to a project. */
-/** What a worker claims tasks for: implementing planned work or reviewing it. */
-export type WorkerMode = "implement" | "review";
+/**
+ * What a worker claims tasks for: implementing planned work, reviewing it, or
+ * rebasing branches on request.
+ */
+export type WorkerMode = "implement" | "review" | "rebase";
 
 export type Worker = {
   id: string;

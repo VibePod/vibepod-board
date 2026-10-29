@@ -61,6 +61,10 @@ export const taskEventLabels: Record<TaskEventKind, string> = {
   pr_opened: "PR opened",
   pr_linked: "PR linked",
   pr_unlinked: "PR unlinked",
+  rebase_requested: "Rebase requested",
+  rebase_started: "Rebase started",
+  rebased: "Rebased",
+  rebase_ended: "Rebase ended",
 };
 
 export const taskEventColors: Record<TaskEventKind, string> = {
@@ -83,6 +87,10 @@ export const taskEventColors: Record<TaskEventKind, string> = {
   approved: "green",
   rework_requested: "orange",
   review_ended: "gray",
+  rebase_requested: "indigo",
+  rebase_started: "indigo",
+  rebased: "teal",
+  rebase_ended: "gray",
 };
 
 export const runOutcomeLabels: Record<RunOutcome, string> = {
