@@ -20,6 +20,8 @@ from vibepod_board.enums import (
     ClaimMode,
     DocumentKind,
     IdeaStatus,
+    RebaseOutcome,
+    RebaseTarget,
     ReleaseOutcome,
     ReviewVerdict,
     RunOutcome,
@@ -201,7 +203,8 @@ class ClaimRequest(ApiModel):
     )
     # How long the claim lasts unless renewed; the server default applies when omitted.
     lease_seconds: LeaseSeconds | None = None
-    # implement takes a planned task; review takes a task in Review for a review.
+    # implement takes a planned task; review takes a task in Review for a review; rebase takes
+    # a pending rebase request.
     mode: ClaimMode = ClaimMode.IMPLEMENT
 
 
@@ -269,7 +272,7 @@ class WorkerRegistration(ApiModel):
     name: RequiredText
     agent: StrictStr = ""
     machine: StrictStr = ""
-    # implement or review: what the worker claims tasks for.
+    # implement, review or rebase: what the worker claims tasks for.
     mode: ClaimMode = ClaimMode.IMPLEMENT
     # A short id of the running worker process, such as its container id.
     instance: StrictStr | None = None
@@ -362,3 +365,34 @@ class CancelReviewRequest(ApiModel):
 class ApproveRequest(ApiModel):
     note: StrictStr | None = None
     expected_updated_at: RequiredText | None = None
+
+
+class RebaseRequestBody(ApiModel):
+    # What to rebase the branch onto; both when omitted.
+    target: RebaseTarget | None = None
+    # Refuses the request (409) when the card changed since this updatedAt.
+    expected_updated_at: RequiredText | None = None
+
+
+class CancelRebaseRequest(ApiModel):
+    reason: StrictStr | None = None
+
+
+class RenewRebaseRequest(ApiModel):
+    assignee: RequiredText
+    lease_seconds: LeaseSeconds | None = None
+
+
+class ReleaseRebaseRequest(ApiModel):
+    assignee: RequiredText
+    note: StrictStr | None = None
+
+
+class RebaseResultRequest(ApiModel):
+    # The rebase worker holding the request.
+    assignee: RequiredText
+    outcome: RebaseOutcome
+    # The commit the rebased branch ends at; required when rebased.
+    head_sha: HeadSha | None = None
+    # The question for needs_input, the reason for failed, else an optional note.
+    note: StrictStr | None = None

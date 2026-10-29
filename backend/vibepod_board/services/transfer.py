@@ -53,6 +53,12 @@ AUTOMATION_CARD_FIELDS = {
     "head_sha",
     "handed_over_at",
     "review_rounds",
+    "rebase_target",
+    "rebase_requested_by",
+    "rebase_requested_at",
+    "rebase_holder",
+    "rebase_claimed_at",
+    "rebase_expires_at",
 }
 # Review settings are how a board automates the project, not part of the project's content.
 AUTOMATION_PROJECT_FIELDS = {"required_approvals", "max_review_rounds"}

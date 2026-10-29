@@ -30,6 +30,8 @@ from vibepod_board.enums import (
     ClaimMode,
     DocumentKind,
     IdeaStatus,
+    RebaseOutcome,
+    RebaseTarget,
     ReleaseOutcome,
     ReviewVerdict,
     RunOutcome,
@@ -51,6 +53,7 @@ from vibepod_board.services import (
     projects,
     pull_requests,
     readiness,
+    rebases,
     reviews,
     runs,
     state,
@@ -143,7 +146,7 @@ Mode = Annotated[
     ClaimMode,
     Field(
         description="implement (default) takes planned tasks to work on; review takes tasks "
-        "in Review to judge."
+        "in Review to judge; rebase takes pending rebase requests."
     ),
 ]
 MCP_LIST_LIMIT = 200
@@ -772,7 +775,11 @@ def create_mcp_server(
         "the next task in Review for a review instead: the card stays in Review, and the "
         "result's review names the headSha to judge. Tasks without a branch, blocked tasks, "
         "tasks you already reviewed at their head commit and tasks with enough approvals and "
-        "open reviews are skipped. Report the verdict with submit_review.",
+        "open reviews are skipped. Report the verdict with submit_review. With mode rebase it "
+        "takes the oldest pending rebase request instead: the card stays in its column, and "
+        "the result's rebase names the target (origin, default_branch or both) and branch. "
+        "Only one worker holds a request at a time; renew it with renew_task_rebase and report "
+        "with report_rebase or release_task_rebase.",
     )
     def claim_next_task(
         projectId: Annotated[  # noqa: N803
@@ -967,8 +974,8 @@ def create_mcp_server(
         "claim_next_task). A connected name is refused unless replace is true; an offline "
         "registration is replaced and removed, keeping its claims. `instance` is a short id "
         "of the worker process, such as its container id. Send worker_heartbeat every "
-        "heartbeatSeconds, and sign_off_worker when done. A worker in review mode claims "
-        "with mode review.",
+        "heartbeatSeconds, and sign_off_worker when done. A worker in review or rebase mode "
+        "claims with that mode.",
     )
     def register_worker(
         projectId: Annotated[  # noqa: N803
@@ -1272,6 +1279,94 @@ def create_mcp_server(
         return run(lambda s, a: reviews.cancel_review(s, a, id, reviewId, reason))
 
     @mcp.tool(
+        title="Request Rebase",
+        description="Ask a rebase worker to rebase the branch of a task in Planned, Review or PR "
+        "ready, such as one blocked because its branch diverged from origin's or fell behind. "
+        "target is origin (onto origin's task branch), default_branch (onto the project's "
+        "default branch) or both (default). The card stays in its column; its block is cleared "
+        "and implementation and review claims skip it while the request is pending. Asking "
+        "again before a worker took it changes the target.",
+    )
+    def request_rebase(
+        id: CardId,
+        target: RebaseTarget | None = None,
+        expectedUpdatedAt: ExpectedUpdatedAt = None,  # noqa: N803
+        view: ViewArg = None,
+    ) -> dict[str, Any]:
+        return run(
+            lambda s, a: echo_card(
+                s, rebases.request_rebase(s, a, id, target, expectedUpdatedAt), view
+            )
+        )
+
+    @mcp.tool(
+        title="Cancel Rebase",
+        description="Withdraw the pending rebase request of a task; a worker holding it is "
+        "told to cancel. The card stays where it is.",
+    )
+    def cancel_rebase(
+        id: CardId, reason: str | None = None, view: ViewArg = None
+    ) -> dict[str, Any]:
+        return run(lambda s, a: echo_card(s, rebases.cancel_rebase(s, a, id, reason), view))
+
+    @mcp.tool(
+        title="Renew Task Rebase",
+        description="Extend a rebase you hold (from claim_next_task with mode rebase) so it "
+        "does not expire; worker heartbeats do the same.",
+        annotations=IDEMPOTENT,
+    )
+    def renew_task_rebase(
+        id: CardId,
+        assignee: Holder,
+        leaseSeconds: LeaseSeconds = None,  # noqa: N803
+        view: ViewArg = None,
+    ) -> dict[str, Any]:
+        return run(
+            lambda s, a: echo_card(
+                s,
+                rebases.renew_rebase(
+                    s, a, id, assignee, leaseSeconds, settings.claim_lease_seconds
+                ),
+                view,
+            )
+        )
+
+    @mcp.tool(
+        title="Release Task Rebase",
+        description="Give back a rebase you hold without doing it, such as on shutdown; the "
+        "request stays pending for the next rebase worker.",
+    )
+    def release_task_rebase(
+        id: CardId, assignee: Holder, note: str | None = None, view: ViewArg = None
+    ) -> dict[str, Any]:
+        return run(
+            lambda s, a: echo_card(s, rebases.release_rebase(s, a, id, assignee, note), view)
+        )
+
+    @mcp.tool(
+        title="Report Rebase",
+        description="Report a rebase you hold. rebased (with headSha, the commit the rebased "
+        "branch ends at) ends the request and leaves the card unblocked in its column; a task "
+        "in Review is reviewed again at the new head. needs_input (note is the question, such "
+        "as for unclear conflicts or commits that would be lost) blocks the card until someone "
+        "answers; the request then waits for the next rebase worker. failed (note is the "
+        "reason) ends the request and blocks the card.",
+    )
+    def report_rebase(
+        id: CardId,
+        assignee: Holder,
+        outcome: RebaseOutcome,
+        headSha: HeadSha = None,  # noqa: N803
+        note: str | None = None,
+        view: ViewArg = None,
+    ) -> dict[str, Any]:
+        return run(
+            lambda s, a: echo_card(
+                s, rebases.complete_rebase(s, a, id, assignee, outcome, headSha, note), view
+            )
+        )
+
+    @mcp.tool(
         title="Update Project Settings",
         description="Change the review settings of a project: requiredApprovals, the approvals "
         "a task needs for its head commit to move to PR ready, and maxReviewRounds, the "
@@ -1300,7 +1395,9 @@ def create_mcp_server(
         title="Answer Task Question",
         description="Answer the question a task waits on after its automated run asked for "
         "input; the task goes back to Planned and the next run gets the answer. A question "
-        "from a reviewer is answered in Review, where the reviewers pick the task up again. "
+        "from a reviewer is answered in Review, where the reviewers pick the task up again; "
+        "one from a rebase worker is answered in the card's column, and the rebase is taken "
+        "up again. "
         "Pass the "
         "expectedUpdatedAt you read to refuse an answer to a question that has since changed.",
     )

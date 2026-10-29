@@ -110,6 +110,7 @@ def project_cards(
             attempts=card.attempts or None,
             blocked_reason=card.blocked_reason,
             question=card.question,
+            rebase_target=card.rebase_target,
             readiness_score=card.readiness_score,
             details_length=len(card.details),
             updated_at=card.updated_at,

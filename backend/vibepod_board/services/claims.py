@@ -16,6 +16,7 @@ time never get the same task: the second waits for the first to commit and then 
 in progress.
 
 A claim in review mode takes a task in Review for a review worker instead; see `reviews.py`.
+A claim in rebase mode takes a pending rebase request for a rebase worker; see `rebases.py`.
 """
 
 import re
@@ -118,6 +119,8 @@ def _obstacle(
         return f"its card is in {_column_label(card.column_name)}, not planned"
     if card.blocked_at is not None:
         return f"it is blocked: {card.blocked_reason}"
+    if card.rebase_target is not None:
+        return "a rebase of its branch is pending"
     if idea.status == IdeaStatus.DENIED:
         return "it was denied"
     if idea.assignee:
@@ -263,6 +266,14 @@ def claim_task(
         return claim_review(
             session, access, project_row, holder, task, wanted, min_readiness, skipped, lease
         )
+
+    if ClaimMode(mode) == ClaimMode.REBASE:
+        if paused:
+            return _paused(project_row)
+        from vibepod_board.services.rebases import claim_rebase
+
+        skipped = {_excluded_id(session, access, reference) for reference in exclude or []}
+        return claim_rebase(session, access, project_row, holder, task, skipped, lease)
 
     if task:
         idea = require_idea_ref(session, access, task)
@@ -613,6 +624,10 @@ def _expire(
     if expired:
         add_activity(session, "board.claims_expired", f"Expired {expired} task claims", timestamp)
     expired += _expire_reviews(session, timestamp, project_id)
+    # Imported here: the rebase flow builds on this module.
+    from vibepod_board.services.rebases import expire_rebases
+
+    expired += expire_rebases(session, timestamp, project_id)
     session.flush()
     return expired
 

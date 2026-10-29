@@ -9,13 +9,18 @@ from vibepod_board.api.models import (
     ArchiveDoneRequest,
     BoardCardBatch,
     BoardCardUpdate,
+    CancelRebaseRequest,
     CancelReviewRequest,
     CancelRunRequest,
     ClaimRequest,
     HandoverRequest,
     ReadinessRequest,
+    RebaseRequestBody,
+    RebaseResultRequest,
+    ReleaseRebaseRequest,
     ReleaseRequest,
     RenewClaimRequest,
+    RenewRebaseRequest,
     RenewReviewRequest,
     ReviewRequest,
     ReworkRequest,
@@ -43,7 +48,7 @@ from vibepod_board.schemas import (
     ReviewState,
     TaskReview,
 )
-from vibepod_board.services import board, claims, conversation, readiness, reviews
+from vibepod_board.services import board, claims, conversation, readiness, rebases, reviews
 from vibepod_board.services.views import View, project_cards
 
 router = APIRouter(prefix="/api/board", tags=["board"])
@@ -96,7 +101,9 @@ def claim_task(
     """Claims the next planned task of a project in the work order, or the named task: its
     card moves to In progress and `assignee` becomes its holder. `claimed` is false when
     nothing can be claimed. In `review` mode it takes a task in Review for a review instead:
-    the card stays in Review, and `review` carries the review with the `headSha` to judge."""
+    the card stays in Review, and `review` carries the review with the `headSha` to judge. In
+    `rebase` mode it takes the oldest pending rebase request: the card stays in its column,
+    and `rebase` carries the request with its target."""
     return claims.claim_task(
         session,
         access,
@@ -319,5 +326,79 @@ def approve_review(
     return Item(
         item=conversation.approve_review(
             session, access, card_id, body.note, body.expected_updated_at
+        )
+    )
+
+
+@router.post("/{card_id}/rebase")
+def request_rebase(
+    card_id: str,
+    session: SessionDep,
+    access: AccessDep,
+    body: RebaseRequestBody | None = None,
+) -> Item[BoardCard]:
+    """Asks a rebase worker to rebase the card's branch onto origin's task branch, the
+    project's default branch, or both (the default). The card stays in its column, and its
+    block is cleared while the request is pending."""
+    return Item(
+        item=rebases.request_rebase(
+            session,
+            access,
+            card_id,
+            body.target if body else None,
+            body.expected_updated_at if body else None,
+        )
+    )
+
+
+@router.post("/{card_id}/rebase/cancel")
+def cancel_rebase(
+    card_id: str,
+    session: SessionDep,
+    access: AccessDep,
+    body: CancelRebaseRequest | None = None,
+) -> Item[BoardCard]:
+    """Withdraws a pending rebase request; a worker holding it is told to cancel."""
+    return Item(item=rebases.cancel_rebase(session, access, card_id, body.reason if body else None))
+
+
+@router.post("/{card_id}/rebase/renew")
+def renew_rebase(
+    card_id: str,
+    body: RenewRebaseRequest,
+    session: SessionDep,
+    access: AccessDep,
+    settings: SettingsDep,
+) -> Item[BoardCard]:
+    return Item(
+        item=rebases.renew_rebase(
+            session,
+            access,
+            card_id,
+            body.assignee,
+            body.lease_seconds,
+            settings.claim_lease_seconds,
+        )
+    )
+
+
+@router.post("/{card_id}/rebase/release")
+def release_rebase(
+    card_id: str, body: ReleaseRebaseRequest, session: SessionDep, access: AccessDep
+) -> Item[BoardCard]:
+    """Gives a rebase back without doing it; the request stays pending for the next worker."""
+    return Item(item=rebases.release_rebase(session, access, card_id, body.assignee, body.note))
+
+
+@router.post("/{card_id}/rebase/result")
+def complete_rebase(
+    card_id: str, body: RebaseResultRequest, session: SessionDep, access: AccessDep
+) -> Item[BoardCard]:
+    """Reports the rebase `assignee` holds: rebased (with the new `headSha`) leaves the card
+    unblocked in its column; needs_input blocks it with the note as the question; failed ends
+    the request and blocks it with the note."""
+    return Item(
+        item=rebases.complete_rebase(
+            session, access, card_id, body.assignee, body.outcome, body.head_sha, body.note
         )
     )

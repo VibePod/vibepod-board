@@ -102,6 +102,8 @@ def _review_obstacle(
         return f"its card is in {card.column_name.replace('_', ' ')}, not review"
     if card.blocked_at is not None:
         return f"it is blocked: {card.blocked_reason}"
+    if card.rebase_target is not None:
+        return "a rebase of its branch is pending"
     if idea.status == IdeaStatus.DENIED:
         return "it was denied"
     if not card.branch_name:

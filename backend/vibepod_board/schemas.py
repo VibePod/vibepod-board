@@ -20,6 +20,7 @@ from vibepod_board.enums import (
     DocumentKind,
     IdeaStatus,
     InstructionType,
+    RebaseTarget,
     ReviewVerdict,
     RunOutcome,
     TaskEventKind,
@@ -191,6 +192,14 @@ class BoardCard(ApiModel):
     handed_over_at: Timestamp | None = None
     # Rework verdicts in a row since the card was last moved by hand or approved.
     review_rounds: int = 0
+    # A pending rebase request: what to rebase onto, by whom and when, and the rebase worker
+    # holding it until its lease runs out.
+    rebase_target: RebaseTarget | None = None
+    rebase_requested_by: str | None = None
+    rebase_requested_at: Timestamp | None = None
+    rebase_holder: str | None = None
+    rebase_claimed_at: Timestamp | None = None
+    rebase_expires_at: Timestamp | None = None
     created_at: Timestamp
     updated_at: Timestamp
 
@@ -249,6 +258,8 @@ class CompactBoardCard(ApiModel):
     attempts: int | None = None
     blocked_reason: str | None = None
     question: str | None = None
+    # Set while a rebase of the card's branch is pending.
+    rebase_target: RebaseTarget | None = None
     readiness_score: int | None = None
     details_length: int
     updated_at: Timestamp
@@ -313,12 +324,29 @@ class Claim(ApiModel):
     card: KeyedBoardCard
 
 
+class RebaseRequest(ApiModel):
+    """A pending rebase of a card's branch, and the worker holding it, if any."""
+
+    target: RebaseTarget
+    branch_name: str | None = None
+    # The commit the branch ended at when the rebase was asked for, if the board knew it.
+    head_sha: str | None = None
+    column: BoardColumn
+    requested_by: str | None = None
+    requested_at: Timestamp
+    holder: str | None = None
+    claimed_at: Timestamp | None = None
+    lease_expires_at: Timestamp | None = None
+
+
 class ClaimResult(ApiModel):
     claimed: bool
     # The claimed task and its card; left out when nothing was claimed.
     item: Claim | None = None
     # A review claim: the review to report the verdict on, with the head commit to review.
     review: TaskReview | None = None
+    # A rebase claim: the request to rebase the card's branch for.
+    rebase: RebaseRequest | None = None
     # Why nothing was claimed.
     reason: str | None = None
     # True when nothing was claimed because automation of the project is paused.

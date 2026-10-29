@@ -118,6 +118,11 @@ Opening and reading pull requests uses the same `GITHUB_TOKEN` as issue sync (se
 - `POST /api/board/:id/review/renew`
 - `POST /api/board/:id/reviews/:reviewId/cancel`
 - `POST /api/board/:id/rework`
+- `POST /api/board/:id/rebase`
+- `POST /api/board/:id/rebase/cancel`
+- `POST /api/board/:id/rebase/renew`
+- `POST /api/board/:id/rebase/release`
+- `POST /api/board/:id/rebase/result`
 - `GET /api/projects/:id/automation`
 - `POST /api/projects/:id/automation/pause`
 - `POST /api/projects/:id/automation/resume`
@@ -213,6 +218,11 @@ Tools:
 - `renew_task_review`
 - `list_task_reviews`
 - `cancel_task_review`
+- `request_rebase`
+- `cancel_rebase`
+- `renew_task_rebase`
+- `release_task_rebase`
+- `report_rebase`
 - `update_project_settings`
 - `list_idea_readiness`
 - `list_readiness`
@@ -503,6 +513,41 @@ such as a Claude and a Codex one, can review the same task at once.
   their reviewer, `headSha`, verdict and feedback, and its approvals for the current head
   commit. The history records `review_started`, `approved`, `rework_requested` and
   `review_ended` events with the reviewer and the commit.
+
+### Rebase Workers
+
+When a task's branch has diverged from origin's or fallen far behind the default branch, its
+card is blocked until the branch is brought together again. Instead of fixing it by hand, ask
+a *rebase worker* (a regular worker started in rebase mode) to do it.
+
+- **Request** with **Rebase** on a card with a branch in Planned, Review or PR ready, which
+  is shown prominently on a blocked card, or with `POST /api/board/:id/rebase`
+  (`request_rebase`). The optional `target` is `origin` (onto origin's task branch),
+  `default_branch` (onto the project's default branch) or `both` (the default). The card
+  stores the request (`rebaseTarget`, `rebaseRequestedBy`, `rebaseRequestedAt`) and shows it.
+  The card stays in its column, its block is cleared, open reviews of its head end, and
+  implementation and review claims skip it while the request is pending. Asking again before a
+  worker took the request changes its target. **Cancel** withdraws it
+  (`POST /api/board/:id/rebase/cancel`, `cancel_rebase`), as does moving the card by hand.
+- **Claim** with `mode: "rebase"` (`POST /api/board/claim`, `claim_next_task`; register the
+  worker with `mode: "rebase"`). The board hands out the oldest pending request of the project;
+  the result's `rebase` carries the `target`, `branchName` and current `headSha`. Only one
+  worker holds a request at a time (`rebaseHolder`, until `rebaseExpiresAt`).
+- **Lease.** Heartbeats renew the hold (also `POST /api/board/:id/rebase/renew`,
+  `renew_task_rebase`). A hold that lapses, one released with
+  `POST /api/board/:id/rebase/release` (`release_task_rebase`), and the holds of a worker that
+  signs off leave the request pending for the next rebase worker.
+- **Outcome** with `POST /api/board/:id/rebase/result` (`report_rebase`), naming the
+  `assignee` that holds the request:
+  - `rebased` (with the new `headSha`) ends the request and leaves the card unblocked in its
+    column at the new head: a planned task can be claimed again, and one in Review is reviewed
+    again from the new head.
+  - `needs_input` (`note` is the question, such as for unclear conflicts or commits that would
+    be lost) blocks the card with the question; answering unblocks it in its column, and the
+    request waits for the next rebase worker.
+  - `failed` (`note` is the reason) ends the request and blocks the card.
+- **History.** The history records `rebase_requested`, `rebase_started`, `rebased` and
+  `rebase_ended` events, and run reports from a rebase worker have `kind: "rebase"`.
 
 ## Deleting Tasks
 

@@ -201,6 +201,15 @@ class BoardCardRow(SQLModel, table=True):
     review_rounds: int = Field(
         default=0, sa_column=Column(Integer, nullable=False, server_default=text("0"))
     )
+    # A rebase of the card's branch asked for from the board: what to rebase onto, by whom and
+    # when. It is pending while the target is set, and the card stays in its column meanwhile.
+    rebase_target: str | None = _text()
+    rebase_requested_by: str | None = _text()
+    rebase_requested_at: datetime | None = _timestamp(nullable=True)
+    # The rebase worker holding the request, leased like a claim.
+    rebase_holder: str | None = _text()
+    rebase_claimed_at: datetime | None = _timestamp(nullable=True)
+    rebase_expires_at: datetime | None = _timestamp(nullable=True)
     created_at: datetime = _timestamp()
     updated_at: datetime = _timestamp()
 
@@ -231,7 +240,7 @@ class WorkerRow(SQLModel, table=True):
     name: str = Field(sa_column=Column(Text, nullable=False))
     agent: str = _text("")
     machine: str = _text("")
-    # implement or review: what the worker claims tasks for.
+    # implement, review or rebase: what the worker claims tasks for.
     mode: str = _text("implement")
     # A short id of the running worker process, such as its container id: tells restarts under
     # the same name apart.

@@ -7,7 +7,9 @@ question, the answer and the feedback stay in the task history, where the next r
 a task sent back keeps its branch, so the next run continues the work there.
 
 A review worker asks its question the same way, but the card stays blocked in Review, and the
-answer unblocks it there for the reviewers (see `reviews.py`).
+answer unblocks it there for the reviewers (see `reviews.py`). A rebase worker's question
+blocks the card in its column, and the answer unblocks it there with the rebase pending again
+(see `rebases.py`).
 """
 
 from datetime import datetime
@@ -29,6 +31,7 @@ from vibepod_board.services.common import (
 )
 from vibepod_board.services.dependencies import decorate_card
 from vibepod_board.services.history import actor_for, add_task_event
+from vibepod_board.services.open_rebases import answer_rebase_question
 from vibepod_board.services.open_reviews import (
     approvers,
     end_open_reviews,
@@ -83,7 +86,11 @@ def answer_question(
     timestamp = now()
     actor = actor_for(session, access)
     add_task_event(session, idea.id, TaskEventKind.ANSWER, answer, actor, timestamp)
-    if card.column_name == BoardColumn.REVIEW:
+    if answer_rebase_question(card, timestamp):
+        # A rebase worker's question: the card stays in its column and the rebase is pending
+        # again, for the next rebase worker to take with the answer.
+        idea.updated_at = timestamp
+    elif card.column_name == BoardColumn.REVIEW:
         # A reviewer's question: the task waits in Review for the reviewers again.
         card.blocked_at = None
         card.blocked_reason = None

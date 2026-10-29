@@ -44,6 +44,32 @@ class ClaimMode(StrEnum):
     IMPLEMENT = "implement"
     # Take a task in Review and decide whether its branch needs rework or is ready for a PR.
     REVIEW = "review"
+    # Take a task whose rebase was requested from the board and rebase its branch.
+    REBASE = "rebase"
+
+
+class RebaseTarget(StrEnum):
+    """What a requested rebase brings the task's branch onto."""
+
+    # The task's branch on origin, when the local and remote branch diverged.
+    ORIGIN = "origin"
+    # The project's default branch, such as main, when the branch fell behind.
+    DEFAULT_BRANCH = "default_branch"
+    # Origin's task branch first, then the default branch.
+    BOTH = "both"
+
+
+class RebaseOutcome(StrEnum):
+    """How a rebase worker reports a rebase it holds."""
+
+    # The branch was rebased; the new head commit comes with it, and the card is unblocked
+    # in its column.
+    REBASED = "rebased"
+    # The worker cannot rebase without a human, such as for unclear conflicts or commits
+    # that would be lost; the note is the question. The request waits for the answer.
+    NEEDS_INPUT = "needs_input"
+    # The rebase failed; the request ends and the card is blocked with the note.
+    FAILED = "failed"
 
 
 class ReviewVerdict(StrEnum):
@@ -91,6 +117,13 @@ class TaskEventKind(StrEnum):
     PR_OPENED = "pr_opened"
     PR_LINKED = "pr_linked"
     PR_UNLINKED = "pr_unlinked"
+    # Rebase runs: requested from the board, taken by a rebase worker, and how they ended. A
+    # rebase that ends without rebasing (released, expired, cancelled, a move by hand) is
+    # recorded as ended.
+    REBASE_REQUESTED = "rebase_requested"
+    REBASE_STARTED = "rebase_started"
+    REBASED = "rebased"
+    REBASE_ENDED = "rebase_ended"
 
 
 BOARD_COLUMNS: tuple[BoardColumn, ...] = tuple(BoardColumn)

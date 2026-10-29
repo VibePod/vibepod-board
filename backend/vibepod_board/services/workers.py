@@ -44,7 +44,9 @@ from vibepod_board.services.common import (
 )
 from vibepod_board.services.history import actor_for
 from vibepod_board.services.listing import list_scope, scoped
+from vibepod_board.services.open_rebases import rebase_held
 from vibepod_board.services.open_reviews import end_review
+from vibepod_board.services.rebases import release_rebases_of, renew_rebases_of
 from vibepod_board.services.references import (
     require_idea_ref,
     resolve_project_id,
@@ -193,7 +195,7 @@ def register_worker(
 ) -> WorkerSession:
     """Connects a worker to a project. It shows up as idle right away. `instance` is a short
     id of the running worker process, such as its container id. `mode` says whether it
-    implements planned tasks or reviews tasks in Review."""
+    implements planned tasks, reviews tasks in Review or rebases branches on request."""
     timing = timing or WorkerTiming()
     mode = ClaimMode(mode)
     name = (name or "").strip()
@@ -279,11 +281,12 @@ def register_worker(
 
 
 def _renew_claims(session: Session, row: WorkerRow, expires_at: datetime) -> None:
-    """Keeps the claims and reviews the worker holds alive. `updated_at` is left alone, like
-    any renewal. A claim whose lease already ran out stays over: the sweep ends it and counts
-    the attempt, as it does for a report from its holder (see `claims._held`)."""
+    """Keeps the claims, reviews and rebases the worker holds alive. `updated_at` is left
+    alone, like any renewal. A claim whose lease already ran out stays over: the sweep ends it
+    and counts the attempt, as it does for a report from its holder (see `claims._held`)."""
     session.flush()
     renew_reviews_of(session, row.project_id, row.name, expires_at, row.id)
+    renew_rebases_of(session, row.project_id, row.name, expires_at)
     session.execute(
         update(BoardCardRow)
         .where(
@@ -307,6 +310,7 @@ def _lost_claim_reason(session: Session, idea_id: str) -> str:
     if event is not None and event.kind not in (
         TaskEventKind.CLAIMED,
         TaskEventKind.REVIEW_STARTED,
+        TaskEventKind.REBASE_STARTED,
     ):
         return event.message
     return "The task is no longer claimed by this worker"
@@ -337,9 +341,13 @@ def instructions_for(session: Session, row: WorkerRow) -> list[WorkerInstruction
             and card is not None
             and (card.claim_expires_at is None or card.claim_expires_at <= now())
         )
-        # A review worker holds a review instead of the card's claim, but only of a task
-        # still on the board.
-        lost = card is None or ((not claimed or lapsed) and _open_review(session, row) is None)
+        # A review worker holds a review instead of the card's claim, and a rebase worker
+        # the card's rebase request, but only of a task still on the board.
+        lost = card is None or (
+            (not claimed or lapsed)
+            and _open_review(session, row) is None
+            and not (card.rebase_holder == row.name and rebase_held(card))
+        )
         if lost:
             reason = (
                 "The claim expired before the worker reported again"
@@ -567,7 +575,7 @@ def _release_claims(
     timestamp: datetime,
 ) -> None:
     """Gives the claims under the worker's name back to Planned without counting an attempt,
-    and ends its open reviews.
+    ends its open reviews and gives its rebases back, pending.
     A registration signed off before workers were removed on sign-off (`stopped_at`) holds
     none: the claims under its name belong to whoever registered it since."""
     if row.stopped_at is not None:
@@ -595,6 +603,7 @@ def _release_claims(
             # The claim ended since it was listed, such as by a cancel from the board.
             continue
     _release_reviews(session, row, timestamp, reason[:1].lower() + reason[1:])
+    release_rebases_of(session, row.project_id, row.name, reason, timestamp)
 
 
 def _release_reviews(session: Session, row: WorkerRow, timestamp: datetime, reason: str) -> None:
