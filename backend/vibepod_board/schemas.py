@@ -64,8 +64,23 @@ class Project(ApiModel):
     # a row after which it is blocked for a human.
     required_approvals: int = 1
     max_review_rounds: int = 3
+    # Set while the project is archived: hidden from the active views, read-only.
+    archived_at: Timestamp | None = None
     created_at: Timestamp
     updated_at: Timestamp
+
+
+class ProjectListItem(Project):
+    """A project as the project list shows it, with how much it holds."""
+
+    task_count: int = 0
+    card_count: int = 0
+
+
+class DeletedProject(ApiModel):
+    id: str
+    key: str
+    title: str
 
 
 class ProjectRef(ApiModel):

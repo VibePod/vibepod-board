@@ -73,6 +73,8 @@ class ProjectRow(SQLModel, table=True):
     max_review_rounds: int = Field(
         default=3, sa_column=Column(Integer, nullable=False, server_default=text("3"))
     )
+    # Set while the project is archived: it leaves the active views and refuses writes.
+    archived_at: datetime | None = _timestamp(nullable=True)
     created_at: datetime = _timestamp()
     updated_at: datetime = _timestamp()
 

@@ -156,6 +156,13 @@ def require_project(session: Session, project_id: str) -> ProjectRow:
     return row
 
 
+def assert_project_active(session: Session, project_id: str) -> None:
+    """Refuses writes to an archived project; reads still work."""
+    project = session.get(ProjectRow, project_id)
+    if project is not None and project.archived_at is not None:
+        raise Conflict(f"Project {project.key} is archived")
+
+
 def require_idea(session: Session, idea_id: str) -> IdeaRow:
     row = session.get(IdeaRow, idea_id)
     if row is None:

@@ -37,6 +37,7 @@ from vibepod_board.services.automation import pause_reason
 from vibepod_board.services.claims import DEFAULT_LEASE_SECONDS, apply_release, lease_for
 from vibepod_board.services.common import (
     add_activity,
+    assert_project_active,
     lock,
     new_id,
     normalize_optional_text,
@@ -206,6 +207,7 @@ def register_worker(
     project_row = session.exec(
         select(ProjectRow).where(ProjectRow.id == project_id).with_for_update()
     ).one()
+    assert_project_active(session, project_id)
     # Lock and refresh the current registration so concurrent heartbeats and sign-offs
     # finish before we decide whether it is live.
     current = session.exec(

@@ -37,6 +37,7 @@ from vibepod_board.errors import BadRequest, Conflict, NotFound
 from vibepod_board.schemas import BoardCard, Claim, ClaimResult, now
 from vibepod_board.services.common import (
     add_activity,
+    assert_project_active,
     assert_unchanged,
     card_from_row,
     lock,
@@ -249,6 +250,7 @@ def claim_task(
         raise BadRequest("minReadiness must be an integer from 1 to 10")
 
     project_row = _lock_project(session, project_id)
+    assert_project_active(session, project_id)
     timestamp = now()
     _expire(session, timestamp, max_attempts, project_id)
     paused = project_row.automation_paused_at is not None

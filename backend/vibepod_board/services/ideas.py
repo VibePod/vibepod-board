@@ -27,6 +27,7 @@ from vibepod_board.services.board import (
 )
 from vibepod_board.services.common import (
     add_activity,
+    assert_project_active,
     assert_title,
     assert_unchanged,
     idea_from_row,
@@ -49,7 +50,11 @@ from vibepod_board.services.listing import (
     with_cursor,
 )
 from vibepod_board.services.open_reviews import end_open_reviews
-from vibepod_board.services.projects import list_projects, resolve_project_id_for_create
+from vibepod_board.services.projects import (
+    archived_project_ids,
+    list_projects,
+    resolve_project_id_for_create,
+)
 from vibepod_board.services.readiness import apply_idea_readiness
 from vibepod_board.services.references import (
     require_idea_ref,
@@ -98,9 +103,10 @@ def get_idea(session: Session, access: AccessContext, reference: str) -> Idea:
 def _project_for_create(session: Session, access: AccessContext, reference: str | None) -> str:
     requested = resolve_project_id(session, reference) if reference else None
     project_id = resolve_project_id_for_create(
-        session, default_project_id_for_create(access, requested)
+        session, default_project_id_for_create(access, requested, archived_project_ids(session))
     )
     assert_can_access_project(access, project_id)
+    assert_project_active(session, project_id)
     return project_id
 
 
@@ -260,6 +266,7 @@ def _apply_idea_update(
     many of them atomically. Also says whether the task joined the board."""
     resolved = require_idea_ref(session, access, reference)
     assert_can_access_project(access, resolved.project_id)
+    assert_project_active(session, resolved.project_id)
     idea = lock(session, IdeaRow, resolved.id)
     assert_unchanged(_label(session, idea), expected_updated_at, idea.updated_at)
     previous_status = idea.status
@@ -373,6 +380,7 @@ def set_board_availability(
     readiness score given along is recorded in the same write."""
     idea = require_idea_ref(session, access, idea_id)
     assert_can_access_project(access, idea.project_id)
+    assert_project_active(session, idea.project_id)
     idea = lock(session, IdeaRow, idea.id)
     timestamp = now()
 
@@ -407,7 +415,7 @@ def work_order(
 ) -> TaskWorkOrder:
     tasks = list_ideas(session, access, project_id)
     cards = list_cards(session, access, filters=CardFilter(project=project_id))
-    keys = {project.id: project.key for project in list_projects(session, access)}
+    keys = {project.id: project.key for project in list_projects(session, access, None)}
     return build_work_order(tasks, cards, keys)
 
 
@@ -417,6 +425,7 @@ def delete_idea(session: Session, access: AccessContext, idea_id: str) -> Delete
     with it, and documents stop linking to it. A linked GitHub issue is left alone."""
     idea = require_idea_ref(session, access, idea_id)
     assert_can_access_project(access, idea.project_id)
+    assert_project_active(session, idea.project_id)
     # Task before card, the order every write takes.
     idea = lock(session, IdeaRow, idea.id)
     project = require_project(session, idea.project_id)

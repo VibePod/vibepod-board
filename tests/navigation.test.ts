@@ -83,6 +83,33 @@ describe("client navigation URLs", () => {
   });
 });
 
+describe("archived projects URLs", () => {
+  it("parses the archived projects list and one archived project", () => {
+    expect(parseNavigationPath("/archived-projects")).toEqual({
+      activeView: "archivedProjects",
+      selectedProjectId: "",
+    });
+    expect(parseNavigationPath("/archived-projects/project%201/")).toEqual({
+      activeView: "archivedProjects",
+      selectedProjectId: "project 1",
+    });
+  });
+
+  it("formats and round-trips archived project URLs", () => {
+    const list = {
+      activeView: "archivedProjects",
+      selectedProjectId: "",
+    } as const;
+    const one = { ...list, selectedProjectId: "project 1" };
+    expect(formatNavigationPath(list)).toBe("/archived-projects");
+    expect(formatNavigationPath(one)).toBe("/archived-projects/project%201");
+    expect(parseNavigationPath(formatNavigationPath(one))).toEqual(one);
+    expect(formatNavigationUrl(one, "ignored")).toBe(
+      "/archived-projects/project%201",
+    );
+  });
+});
+
 describe("board search URLs", () => {
   it("reads the board search from the q parameter", () => {
     expect(parseBoardSearch("?q=VP-85")).toBe("VP-85");

@@ -12,12 +12,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from sqlalchemy import false, or_, tuple_
-from sqlmodel import Session, col
+from sqlmodel import Session, col, select
 
 from vibepod_board.access import AccessContext, AdminAccess, assert_can_access_project
 from vibepod_board.errors import BadRequest
 from vibepod_board.schemas import format_timestamp
 from vibepod_board.services.references import resolve_project_id
+from vibepod_board.tables import ProjectRow
 
 BATCH_LIMIT = 50
 
@@ -56,14 +57,20 @@ def parse_timestamp(value: str | datetime | None, name: str) -> datetime | None:
 
 def list_scope(session: Session, access: AccessContext, project: str | None) -> list[str] | None:
     """Project ids a list is restricted to: None means no predicate (an admin listing
-    everything), an empty list means the caller can see nothing."""
+    everything), an empty list means the caller can see nothing. Without a project, archived
+    projects are left out; naming one still lists it."""
     if project:
         project_id = resolve_project_id(session, project)
         assert_can_access_project(access, project_id)
         return [project_id]
+    archived = col(ProjectRow.archived_at).is_not(None)
     if isinstance(access, AdminAccess):
-        return None
-    return list(access.project_ids)
+        if session.exec(select(ProjectRow.id).where(archived).limit(1)).first() is None:
+            return None
+        active = col(ProjectRow.archived_at).is_(None)
+        return list(session.exec(select(ProjectRow.id).where(active)))
+    hidden = set(session.exec(select(ProjectRow.id).where(archived)))
+    return [project_id for project_id in access.project_ids if project_id not in hidden]
 
 
 def scoped(query, project_column, scope: list[str] | None):
