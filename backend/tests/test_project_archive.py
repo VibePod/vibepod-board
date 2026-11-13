@@ -11,7 +11,7 @@ from sqlalchemy import Engine, func, text
 from sqlmodel import Session, select
 
 from vibepod_board.access import admin_access, token_access
-from vibepod_board.enums import BoardColumn, ClaimMode
+from vibepod_board.enums import BoardColumn, ClaimMode, RunOutcome, WorkerStatus
 from vibepod_board.errors import BadRequest, Conflict, Forbidden
 from vibepod_board.services import (
     automation,
@@ -21,6 +21,7 @@ from vibepod_board.services import (
     ideas,
     project_archive,
     projects,
+    runs,
     tokens,
     transfer,
     workers,
@@ -33,6 +34,7 @@ from vibepod_board.tables import (
     IdeaRow,
     ProjectRow,
     TaskEventRow,
+    TaskRunRow,
     WorkerRow,
 )
 
@@ -170,6 +172,42 @@ def test_writes_to_an_archived_project_are_refused(session: Session, app) -> Non
         claims.claim_task(session, ADMIN, "APP", RUNNER)
     with pytest.raises(Conflict, match=refused):
         workers.register_worker(session, ADMIN, "APP", RUNNER)
+    with pytest.raises(Conflict, match=refused):
+        runs.add_run_report(session, ADMIN, task.id, RunOutcome.FAILED, summary="Late")
+    assert count(session, TaskRunRow, idea_id=task.id) == 0
+
+
+def test_a_worker_coming_back_to_an_archived_project_is_turned_away(
+    db: Engine, session: Session, app
+) -> None:
+    worker = workers.register_worker(session, ADMIN, "APP", RUNNER).item
+    go_silent(db, worker.id)
+    archive(session)
+    seen = session.get(WorkerRow, worker.id).last_seen_at
+
+    with pytest.raises(Conflict, match="Project APP is archived"):
+        workers.heartbeat(session, ADMIN, worker.id, WorkerStatus.IDLE)
+
+    session.expire_all()
+    assert session.get(WorkerRow, worker.id).last_seen_at == seen
+    # Signing off is how it leaves, and stays possible.
+    assert workers.sign_off(session, ADMIN, worker.id).stopped_at is not None
+
+
+def test_automation_of_an_archived_project_cannot_be_changed(session: Session, app) -> None:
+    archive(session)
+
+    refused = "Project APP is archived"
+    with pytest.raises(Conflict, match=refused):
+        automation.resume_automation(session, ADMIN, "APP")
+    with pytest.raises(Conflict, match=refused):
+        automation.pause_automation(session, ADMIN, "APP", "Mine")
+
+    # So restoring leaves it paused as archiving paused it, whatever was tried meanwhile.
+    project_archive.restore_project(session, ADMIN, "APP")
+    state = automation.get_automation(session, ADMIN, "APP")
+    assert (state.paused, state.reason) == (True, "Project archived")
+    assert not automation.resume_automation(session, ADMIN, "APP").paused
 
 
 def test_reads_of_an_archived_project_still_work(session: Session, app) -> None:

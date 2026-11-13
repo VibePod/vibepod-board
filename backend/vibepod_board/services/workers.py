@@ -391,6 +391,8 @@ def heartbeat(
     status = WorkerStatus(status)
     lease = lease_for(lease_seconds, timing.lease_seconds)
     row = require_worker(session, access, worker_id, for_update=True)
+    # A worker that was offline when its project was archived is turned away as it returns.
+    assert_project_active(session, row.project_id)
     if row.stopped_at is not None:
         raise Conflict(f"Worker {row.name} is signed off; register again to reconnect")
     reason = normalize_optional_text(status_reason)

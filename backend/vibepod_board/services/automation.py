@@ -1,6 +1,7 @@
 """Pausing automation of a project from the board. While paused, claims are refused and every
 worker of the project is told to pause with its heartbeat reply; resuming lifts both. A run
-already in progress finishes; cancel it to stop it."""
+already in progress finishes; cancel it to stop it. An archived project keeps the pause it
+was archived with: neither changes until it is restored."""
 
 from sqlmodel import Session, select
 
@@ -8,6 +9,7 @@ from vibepod_board.access import AccessContext, assert_can_access_project
 from vibepod_board.schemas import AutomationState, now
 from vibepod_board.services.common import (
     add_activity,
+    assert_project_active,
     normalize_optional_text,
     require_project,
     transactional,
@@ -57,6 +59,7 @@ def pause_automation(
     session: Session, access: AccessContext, project: str, reason: str | None = None
 ) -> AutomationState:
     row = _locked(session, access, project)
+    assert_project_active(session, row.id)
     timestamp = now()
     if row.automation_paused_at is None:
         row.automation_paused_at = timestamp
@@ -73,6 +76,7 @@ def pause_automation(
 @transactional
 def resume_automation(session: Session, access: AccessContext, project: str) -> AutomationState:
     row = _locked(session, access, project)
+    assert_project_active(session, row.id)
     if row.automation_paused_at is not None:
         row.automation_paused_at = None
         row.automation_paused_reason = None
