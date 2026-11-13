@@ -109,6 +109,10 @@ import {
   ArchiveDoneDialog,
   type ArchiveDoneTarget,
 } from "./ArchiveDoneDialog.js";
+import {
+  ArchivedProjectsView,
+  ArchiveProjectDialog,
+} from "./ArchivedProjects.js";
 import { ArchiveView } from "./ArchiveView.js";
 import { api, isConflict, isNotFound } from "./api.js";
 import { type ArchivedTaskRow, archivedTaskRows } from "./archiveUtils.js";
@@ -416,6 +420,14 @@ const App = () => {
   const [projectModal, setProjectModal] = useState<ProjectModalState | null>(
     null,
   );
+  // Archived projects stay out of `state.projects`; they are listed on their own.
+  const [archivedProjects, setArchivedProjects] = useState<Project[]>([]);
+  // Whether the list was read at least once, and whether its last read failed:
+  // an unread list is neither empty nor missing a project.
+  const [archivedProjectsLoaded, setArchivedProjectsLoaded] = useState(false);
+  const [archivedProjectsFailed, setArchivedProjectsFailed] = useState(false);
+  const [archiveProjectTarget, setArchiveProjectTarget] =
+    useState<Project | null>(null);
   const [projectImport, setProjectImport] = useState<ProjectImportState | null>(
     null,
   );
@@ -500,7 +512,7 @@ const App = () => {
   const loadState = async ({ background = false } = {}): Promise<Idea[]> => {
     const ticket = loadOrder.start();
     if (!background) setError("");
-    const [projects, ideas, board, archived, documents, github] =
+    const [projects, ideas, board, archived, documents, github, retired] =
       await Promise.all([
         api<{ items: Project[] }>("/api/projects"),
         api<{ items: Idea[] }>("/api/ideas"),
@@ -511,9 +523,18 @@ const App = () => {
         api<{ items: PlanDocument[] }>("/api/documents"),
         // Sync buttons stay disabled when the status cannot be read.
         api<GitHubStatus>("/api/github").catch(() => null),
+        // Archived projects keep the last list when it cannot be read.
+        api<{ items: Project[] }>("/api/projects?archived=true").catch(
+          () => null,
+        ),
       ]);
     if (!loadOrder.apply(ticket)) return ideas.items;
     setGitHubStatus(github);
+    if (retired) {
+      setArchivedProjects(retired.items);
+      setArchivedProjectsLoaded(true);
+    }
+    setArchivedProjectsFailed(!retired);
     setState((prev) => ({
       projects: projects.items,
       ideas: ideas.items,
@@ -736,6 +757,9 @@ const App = () => {
   // Workers of the open project: their status, and the live indicator on the
   // cards they work on. When what they do changes, automation moved cards, so
   // the board reloads too, and it reloads regularly while any worker is online.
+  // Only whether the view has workers to watch: the poll must not start over
+  // with every switch between the views of a project.
+  const isArchivedView = activeView === "archivedProjects";
   // biome-ignore lint/correctness/useExhaustiveDependencies: workersVersion asks for an immediate refresh
   useEffect(() => {
     // Another project's workers must not show while this one's load; a refresh
@@ -745,7 +769,12 @@ const App = () => {
       setWorkers([]);
       setAutomation(null);
     }
-    if (auth.status !== "authenticated" || !selectedProjectId) {
+    // An archived project opened read-only has no workers to watch.
+    if (
+      auth.status !== "authenticated" ||
+      !selectedProjectId ||
+      isArchivedView
+    ) {
       setWorkers([]);
       setAutomation(null);
       return;
@@ -790,7 +819,7 @@ const App = () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [auth.status, selectedProjectId, workersVersion]);
+  }, [auth.status, selectedProjectId, workersVersion, isArchivedView]);
 
   useEffect(() => {
     if (
@@ -840,8 +869,14 @@ const App = () => {
     (project) => project.id === selectedProjectId,
   );
   const importPreview = projectImport?.bundle
-    ? projectBundlePreview(projectImport.bundle, state.projects)
+    ? projectBundlePreview(projectImport.bundle, [
+        ...state.projects,
+        ...archivedProjects,
+      ])
     : null;
+  const replacesProject =
+    Boolean(importPreview?.existingProjectId) &&
+    !importPreview?.existingProjectArchived;
   const projectIdeas = useMemo(
     () =>
       selectedProject
@@ -1317,7 +1352,8 @@ const App = () => {
     }
   };
 
-  const exportProject = async (project: Project) => {
+  /** Downloads the project bundle; says whether it worked. */
+  const exportProject = async (project: Project): Promise<boolean> => {
     setError("");
     setNotice("");
     try {
@@ -1332,9 +1368,62 @@ const App = () => {
       }
       await downloadResponse(response, projectExportFileName(project));
       setNotice(`Project ${project.key} exported successfully.`);
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to export project");
+      return false;
     }
+  };
+
+  /**
+   * Errors of the archiving are left to the confirmation dialog, which shows
+   * them; a reload that fails afterwards is reported on the page.
+   */
+  const archiveProject = async (project: Project) => {
+    await api<{ item: Project }>(`/api/projects/${project.id}/archive`, {
+      method: "POST",
+    });
+    setArchiveProjectTarget(null);
+    setProjectModal(null);
+    setNotice(
+      `Project ${project.key} archived. It is listed under Archived projects.`,
+    );
+    if (selectedProjectId === project.id && activeView !== "projects") {
+      returnToProjects();
+    }
+    await reloadAfterWrite();
+  };
+
+  const restoreProject = async (project: Project) => {
+    setError("");
+    setNotice("");
+    try {
+      await api<{ item: Project }>(`/api/projects/${project.id}/restore`, {
+        method: "POST",
+      });
+      await loadState();
+      setNotice(
+        `Project ${project.key} restored. Its automation stays paused until resumed.`,
+      );
+      navigateTo({ activeView: "ideas", selectedProjectId: project.id });
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to restore project",
+      );
+    }
+  };
+
+  /**
+   * Errors of the deletion are left to the confirmation dialog, which shows
+   * them; a reload that fails afterwards is reported on the page.
+   */
+  const deleteProject = async (project: Project) => {
+    await api(
+      `/api/projects/${project.id}?confirmKey=${encodeURIComponent(project.key)}`,
+      { method: "DELETE" },
+    );
+    setNotice(`Project ${project.key} deleted permanently.`);
+    await reloadAfterWrite();
   };
 
   const submitProjectImport = async (event: FormEvent) => {
@@ -1343,7 +1432,13 @@ const App = () => {
       return;
     }
     const bundle = projectImport.bundle;
-    const preview = projectBundlePreview(bundle, state.projects);
+    const preview = projectBundlePreview(bundle, [
+      ...state.projects,
+      ...archivedProjects,
+    ]);
+    if (preview.existingProjectArchived) {
+      return;
+    }
     setProjectImport((current) =>
       current ? { ...current, error: "", isSubmitting: true } : current,
     );
@@ -2070,7 +2165,7 @@ const App = () => {
 
   return (
     <main
-      className={`shell ${activeView === "projects" ? "home-shell" : "project-shell"}`}
+      className={`shell ${activeView === "projects" || activeView === "archivedProjects" ? "home-shell" : "project-shell"}`}
     >
       <header className="app-topbar">
         <a
@@ -2089,6 +2184,30 @@ const App = () => {
           </span>
           <span>vibepod-board</span>
         </a>
+        <nav className="app-topnav" aria-label="Projects">
+          {(
+            [
+              ["projects", "Projects"],
+              ["archivedProjects", "Archived projects"],
+            ] as const
+          ).map(([view, label]) => (
+            <a
+              key={view}
+              className={activeView === view ? "active" : ""}
+              aria-current={activeView === view ? "page" : undefined}
+              href={formatNavigationPath({
+                activeView: view,
+                selectedProjectId: "",
+              })}
+              onClick={(event) => {
+                event.preventDefault();
+                navigateTo({ activeView: view, selectedProjectId: "" });
+              }}
+            >
+              {label}
+            </a>
+          ))}
+        </nav>
         <Select
           className="project-jump"
           aria-label="Project"
@@ -2158,7 +2277,9 @@ const App = () => {
             <Text c="dimmed">
               {activeView === "projects"
                 ? `${state.projects.length} projects`
-                : `${listedProjectIdeas.length} tasks, ${countCards(projectColumns)} cards, ${projectDocuments.length} notes`}
+                : activeView === "archivedProjects"
+                  ? `${archivedProjects.length} archived projects`
+                  : `${listedProjectIdeas.length} tasks, ${countCards(projectColumns)} cards, ${projectDocuments.length} notes`}
             </Text>
           </div>
           <Group className="topbar-actions" gap="xs">
@@ -2347,6 +2468,19 @@ const App = () => {
                         </Button>
                         <Button
                           type="button"
+                          variant="light"
+                          color="orange"
+                          leftSection={<Archive size={16} />}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            setArchiveProjectTarget(project);
+                          }}
+                        >
+                          Archive
+                        </Button>
+                        <Button
+                          type="button"
                           component="a"
                           href={formatNavigationPath({
                             activeView: "board",
@@ -2371,23 +2505,66 @@ const App = () => {
           </>
         )}
 
-        {activeView !== "projects" && !selectedProject && (
-          <Paper className="empty-state" withBorder radius="md" p="lg">
-            <Stack gap="sm" align="flex-start">
-              <Title order={3}>Select a project</Title>
-              <Text c="dimmed">
-                Tasks, board cards, and notes live inside a project.
-              </Text>
-              <Button
-                type="button"
-                leftSection={<FolderKanban size={18} />}
-                onClick={returnToProjects}
-              >
-                View Projects
-              </Button>
-            </Stack>
-          </Paper>
+        {activeView === "archivedProjects" && (
+          <ArchivedProjectsView
+            projects={archivedProjects}
+            loaded={archivedProjectsLoaded}
+            loadFailed={archivedProjectsFailed}
+            projectId={selectedProjectId}
+            reloadKey={loadCount}
+            navigateTo={navigateTo}
+            onExport={exportProject}
+            onRestore={restoreProject}
+            onDelete={deleteProject}
+          />
         )}
+
+        {activeView !== "projects" &&
+          activeView !== "archivedProjects" &&
+          !selectedProject && (
+            <Paper className="empty-state" withBorder radius="md" p="lg">
+              <Stack gap="sm" align="flex-start">
+                {archivedProjects.some(
+                  (project) => project.id === selectedProjectId,
+                ) ? (
+                  <>
+                    <Title order={3}>This project is archived</Title>
+                    <Text c="dimmed">
+                      Archived projects are read-only and listed under Archived
+                      projects, where they can be opened, exported, restored or
+                      deleted.
+                    </Text>
+                    <Button
+                      type="button"
+                      leftSection={<Archive size={18} />}
+                      onClick={() =>
+                        navigateTo({
+                          activeView: "archivedProjects",
+                          selectedProjectId,
+                        })
+                      }
+                    >
+                      Open Archived Project
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <Title order={3}>Select a project</Title>
+                    <Text c="dimmed">
+                      Tasks, board cards, and notes live inside a project.
+                    </Text>
+                    <Button
+                      type="button"
+                      leftSection={<FolderKanban size={18} />}
+                      onClick={returnToProjects}
+                    >
+                      View Projects
+                    </Button>
+                  </>
+                )}
+              </Stack>
+            </Paper>
+          )}
 
         {activeView === "ideas" && selectedProject && (
           <Stack gap="sm">
@@ -3390,13 +3567,18 @@ const App = () => {
                       {importPreview.documents === 1 ? "document" : "documents"}
                     </Badge>
                   </Group>
-                  {importPreview.existingProjectId && (
+                  {importPreview.existingProjectArchived ? (
+                    <Alert color="red" variant="light">
+                      Project {importPreview.key} is archived. Restore it, or
+                      delete it permanently, before importing this project.
+                    </Alert>
+                  ) : importPreview.existingProjectId ? (
                     <Alert color="red" variant="light">
                       This will replace all current project data for{" "}
                       {importPreview.key}. API token access to the destination
                       project will be retained.
                     </Alert>
-                  )}
+                  ) : null}
                 </Stack>
               )}
               <Group justify="flex-end">
@@ -3410,20 +3592,27 @@ const App = () => {
                 </Button>
                 <Button
                   type="submit"
-                  color={importPreview?.existingProjectId ? "red" : "teal"}
+                  color={replacesProject ? "red" : "teal"}
                   loading={projectImport.isSubmitting}
-                  disabled={!projectImport.bundle}
+                  disabled={
+                    !projectImport.bundle ||
+                    Boolean(importPreview?.existingProjectArchived)
+                  }
                   leftSection={<Upload size={16} />}
                 >
-                  {importPreview?.existingProjectId
-                    ? "Replace Project"
-                    : "Import Project"}
+                  {replacesProject ? "Replace Project" : "Import Project"}
                 </Button>
               </Group>
             </Stack>
           </form>
         )}
       </Modal>
+
+      <ArchiveProjectDialog
+        project={archiveProjectTarget}
+        onCancel={() => setArchiveProjectTarget(null)}
+        onConfirm={archiveProject}
+      />
 
       <Modal
         opened={!!projectModal}
@@ -3497,6 +3686,23 @@ const App = () => {
                 />
               </Group>
               <Group justify="flex-end">
+                {projectModal.mode === "edit" && (
+                  <Button
+                    type="button"
+                    variant="light"
+                    color="orange"
+                    mr="auto"
+                    leftSection={<Archive size={16} />}
+                    onClick={() => {
+                      const project = state.projects.find(
+                        (item) => item.id === projectModal.draft.id,
+                      );
+                      if (project) setArchiveProjectTarget(project);
+                    }}
+                  >
+                    Archive project
+                  </Button>
+                )}
                 <Button
                   type="button"
                   variant="default"
@@ -4729,6 +4935,9 @@ const blockedBadge = (blockedByCount: number): ReactNode => (
 const viewTitle = (activeView: ActiveView, project: Project | undefined) => {
   if (activeView === "projects") {
     return "Projects";
+  }
+  if (activeView === "archivedProjects") {
+    return "Archived Projects";
   }
   if (!project) {
     return "Select a Project";

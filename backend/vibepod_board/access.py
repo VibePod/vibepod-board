@@ -1,5 +1,6 @@
 """Who is calling: the admin (full access) or an API token scoped to a set of projects."""
 
+from collections.abc import Collection
 from dataclasses import dataclass, field
 
 from vibepod_board.errors import Forbidden
@@ -44,8 +45,11 @@ def require_admin(access: AccessContext) -> None:
         raise Forbidden("Admin access required")
 
 
-def default_project_id_for_create(access: AccessContext, requested: str | None) -> str | None:
-    """Admins may leave the project open; a token falls back to its first mapped project."""
+def default_project_id_for_create(
+    access: AccessContext, requested: str | None, archived: Collection[str] = ()
+) -> str | None:
+    """Admins may leave the project open; a token falls back to its first mapped project
+    that is not archived."""
     if isinstance(access, AdminAccess):
         return requested
     if requested:
@@ -53,4 +57,7 @@ def default_project_id_for_create(access: AccessContext, requested: str | None) 
         return requested
     if not access.project_ids:
         raise Forbidden("Token is not mapped to any projects")
-    return access.project_ids[0]
+    active = [project_id for project_id in access.project_ids if project_id not in archived]
+    if not active:
+        raise Forbidden("Token is not mapped to any active projects")
+    return active[0]

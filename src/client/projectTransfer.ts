@@ -45,16 +45,21 @@ export const parseProjectBundleText = (text: string): ProjectBundle => {
 export const projectBundlePreview = (
   bundle: ProjectBundle,
   projects: Project[],
-) => ({
-  key: bundle.project.key,
-  title: bundle.project.title,
-  tasks: bundle.ideas.length,
-  cards: bundle.boardCards.length,
-  documents: bundle.documents.length,
-  existingProjectId: projects.find(
+) => {
+  const existing = projects.find(
     (project) => project.key === bundle.project.key,
-  )?.id,
-});
+  );
+  return {
+    key: bundle.project.key,
+    title: bundle.project.title,
+    tasks: bundle.ideas.length,
+    cards: bundle.boardCards.length,
+    documents: bundle.documents.length,
+    existingProjectId: existing?.id,
+    /** An archived project is not replaced: it is restored or deleted first. */
+    existingProjectArchived: Boolean(existing?.archivedAt),
+  };
+};
 
 export const projectExportFileName = (project: Project) =>
   `${project.key}-project.json`;

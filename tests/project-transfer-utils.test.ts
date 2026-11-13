@@ -115,9 +115,24 @@ describe("project transfer browser helpers", () => {
       cards: 1,
       documents: 1,
       existingProjectId: "destination-project",
+      existingProjectArchived: false,
     });
     expect(projectBundlePreview(bundle, [])).toMatchObject({
       existingProjectId: undefined,
+      existingProjectArchived: false,
+    });
+    // An archived project holds the key too, but is not there to be replaced.
+    expect(
+      projectBundlePreview(bundle, [
+        {
+          ...bundle.project,
+          id: "archived-project",
+          archivedAt: "2026-10-20T09:30:00.000Z",
+        },
+      ]),
+    ).toMatchObject({
+      existingProjectId: "archived-project",
+      existingProjectArchived: true,
     });
     expect(projectExportFileName(bundle.project)).toBe("APP-project.json");
   });

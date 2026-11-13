@@ -292,7 +292,7 @@ describe("the archive view", () => {
   it("opens from the sidebar below Board and lists archived tasks", async () => {
     await renderApp(`/projects/${project.id}/board`);
 
-    const nav = await screen.findByRole("navigation");
+    const nav = await screen.findByRole("navigation", { name: "Project" });
     const links = within(nav)
       .getAllByRole("link")
       .map((link) => link.textContent);
@@ -305,7 +305,7 @@ describe("the archive view", () => {
     expect(screen.getByText("APP-2")).toBeTruthy();
     expect(screen.getByText("vp-export")).toBeTruthy();
     expect(screen.getByText("export")).toBeTruthy();
-    expect(screen.getByText(/^Archived /)).toBeTruthy();
+    expect(screen.getByText(/^Archived (?!projects)/)).toBeTruthy();
   });
 
   it("searches archived tasks and restores one to Done", async () => {

@@ -15,6 +15,7 @@ from vibepod_board.errors import BadRequest
 from vibepod_board.schemas import TaskRun, now
 from vibepod_board.services.common import (
     add_activity,
+    assert_project_active,
     lock,
     new_id,
     normalize_optional_text,
@@ -89,6 +90,7 @@ def add_run_report(
 ) -> TaskRun:
     idea = require_idea_ref(session, access, reference)
     assert_can_access_project(access, idea.project_id)
+    assert_project_active(session, idea.project_id)
     outcome = RunOutcome(outcome)
     if duration_seconds is not None and duration_seconds < 0:
         raise BadRequest("durationSeconds must not be negative")

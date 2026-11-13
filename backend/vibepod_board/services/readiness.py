@@ -15,6 +15,7 @@ from vibepod_board.schemas import BoardCard, Idea, ReadinessEvent, now
 from vibepod_board.services.board import ARCHIVED_MESSAGE
 from vibepod_board.services.common import (
     add_activity,
+    assert_project_active,
     card_from_row,
     new_id,
     normalize_readiness,
@@ -57,6 +58,7 @@ def set_idea_readiness(
     score, reason = normalize_readiness(score, reason)
     idea = require_idea_ref(session, access, idea_id)
     assert_can_access_project(access, idea.project_id)
+    assert_project_active(session, idea.project_id)
     timestamp = now()
     apply_idea_readiness(session, idea, score, reason, timestamp)
     decorated = decorate_idea(session, idea)
@@ -69,6 +71,7 @@ def set_card_readiness(
 ) -> BoardCard:
     card = require_card_ref(session, access, card_id)
     assert_can_access_project(access, card.project_id)
+    assert_project_active(session, card.project_id)
 
     if card.idea_id:
         set_idea_readiness(session, access, card.idea_id, score, reason)

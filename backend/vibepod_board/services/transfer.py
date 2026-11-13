@@ -54,8 +54,9 @@ AUTOMATION_CARD_FIELDS = {
     "handed_over_at",
     "review_rounds",
 }
-# Review settings are how a board automates the project, not part of the project's content.
-AUTOMATION_PROJECT_FIELDS = {"required_approvals", "max_review_rounds"}
+# Review settings are how a board automates the project, not part of the project's content,
+# and whether it is archived is up to the board it lives on: an import is always active.
+AUTOMATION_PROJECT_FIELDS = {"required_approvals", "max_review_rounds", "archived_at"}
 
 
 def export_project(session: Session, project_id: str) -> ProjectBundle:
@@ -237,6 +238,8 @@ def import_project(
         raise Conflict(
             f"Project key {bundle.project.key} already exists; replacement confirmation is required"
         )
+    if existing and existing.archived_at is not None:
+        raise Conflict(f"Project {existing.key} is archived; restore it before replacing it")
 
     destination = existing.id if existing else bundle.project.id
     if not existing and session.get(ProjectRow, bundle.project.id):

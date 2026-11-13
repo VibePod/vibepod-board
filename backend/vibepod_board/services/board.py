@@ -19,6 +19,7 @@ from vibepod_board.errors import BadRequest, BoardError, Conflict
 from vibepod_board.schemas import BoardCard, BoardColumns, now
 from vibepod_board.services.common import (
     add_activity,
+    assert_project_active,
     assert_unchanged,
     card_details_for_idea,
     card_from_row,
@@ -291,6 +292,7 @@ ARCHIVED_MESSAGE = "Board card is archived; unarchive it first"
 def require_active_card(session: Session, access: AccessContext, reference: str) -> BoardCardRow:
     card = require_card_ref(session, access, reference)
     assert_can_access_project(access, card.project_id)
+    assert_project_active(session, card.project_id)
     if card.archived_at is not None:
         raise Conflict(ARCHIVED_MESSAGE)
     return card
@@ -441,6 +443,7 @@ def _archive(session: Session, card: BoardCardRow, timestamp: datetime) -> None:
 def archive_card(session: Session, access: AccessContext, card_id: str) -> BoardCard:
     card = require_card_ref(session, access, card_id)
     assert_can_access_project(access, card.project_id)
+    assert_project_active(session, card.project_id)
     if card.archived_at is not None:
         raise Conflict("Board card is already archived")
     if card.column_name != BoardColumn.DONE:
@@ -454,6 +457,7 @@ def archive_done_cards(session: Session, access: AccessContext, project_id: str)
     """Archives every active card in the project's done column."""
     project = require_project(session, resolve_project_id(session, project_id))
     assert_can_access_project(access, project.id)
+    assert_project_active(session, project.id)
     rows = session.exec(
         _ordered(
             select(BoardCardRow).where(
@@ -474,6 +478,7 @@ def unarchive_card(session: Session, access: AccessContext, card_id: str) -> Boa
     """Puts an archived card back on the board, in the done column it was archived from."""
     card = require_card_ref(session, access, card_id)
     assert_can_access_project(access, card.project_id)
+    assert_project_active(session, card.project_id)
     if card.archived_at is None:
         raise Conflict("Board card is not archived")
     timestamp = now()

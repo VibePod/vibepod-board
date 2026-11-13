@@ -1,21 +1,37 @@
 import json
+from typing import Annotated
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Query, Response, status
 
+from vibepod_board.api.deps import SettingsDep, worker_timing
 from vibepod_board.api.models import PauseRequest, ProjectCreate, ProjectSettings, ProjectUpdate
 from vibepod_board.api.responses import Item, Items
 from vibepod_board.auth import AccessDep, AdminDep
 from vibepod_board.bundle import ImportProjectRequest
 from vibepod_board.db import SessionDep
-from vibepod_board.schemas import AutomationState, ImportProjectResult, Project
-from vibepod_board.services import automation, projects, transfer
+from vibepod_board.schemas import (
+    AutomationState,
+    DeletedProject,
+    ImportProjectResult,
+    Project,
+    ProjectListItem,
+)
+from vibepod_board.services import automation, project_archive, projects, transfer
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
 @router.get("")
-def list_projects(session: SessionDep, access: AccessDep) -> Items[Project]:
-    return Items(items=projects.list_projects(session, access))
+def list_projects(
+    session: SessionDep,
+    access: AccessDep,
+    archived: bool = False,
+    include_archived: Annotated[bool, Query(alias="includeArchived")] = False,
+) -> Items[ProjectListItem]:
+    """Active projects by default; `archived=true` lists only archived projects and
+    `includeArchived=true` both."""
+    selected = None if include_archived else archived
+    return Items(items=projects.list_projects(session, access, selected))
 
 
 @router.post("/import", responses={200: {"model": ImportProjectResult}})
@@ -69,6 +85,36 @@ def export_project(project_id: str, session: SessionDep, _admin: AdminDep) -> Re
             "Content-Disposition": f'attachment; filename="{bundle.project.key}-project.json"'
         },
     )
+
+
+@router.post("/{project_id}/archive")
+def archive_project(
+    project_id: str, session: SessionDep, admin: AdminDep, settings: SettingsDep
+) -> Item[Project]:
+    """Archives the project and pauses its automation. Refused (409) while workers of the
+    project are connected or its tasks are claimed or under review."""
+    return Item(
+        item=project_archive.archive_project(session, admin, project_id, worker_timing(settings))
+    )
+
+
+@router.post("/{project_id}/restore")
+def restore_project(project_id: str, session: SessionDep, admin: AdminDep) -> Item[Project]:
+    """Brings an archived project back; its automation stays paused until resumed."""
+    return Item(item=project_archive.restore_project(session, admin, project_id))
+
+
+@router.delete("/{project_id}")
+def delete_project(
+    project_id: str,
+    session: SessionDep,
+    admin: AdminDep,
+    confirm_key: Annotated[str | None, Query(alias="confirmKey")] = None,
+) -> DeletedProject:
+    """Deletes an archived project for good, with all its tasks, cards, notes, workers and
+    token links. Active projects are refused (409). `confirmKey`, when given, must be the
+    project key."""
+    return project_archive.delete_project(session, admin, project_id, confirm_key)
 
 
 @router.get("/{project_id}/automation")

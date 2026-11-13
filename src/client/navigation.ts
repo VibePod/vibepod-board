@@ -4,6 +4,7 @@ export const navigationViews = [
   "board",
   "archive",
   "documents",
+  "archivedProjects",
 ] as const;
 
 export type NavigationView = (typeof navigationViews)[number];
@@ -13,14 +14,19 @@ export type NavigationState = {
   selectedProjectId: string;
 };
 
-const projectSections: Record<Exclude<NavigationView, "projects">, string> = {
+/** Top-level views that are not a section of an open project. */
+type TopLevelView = "projects" | "archivedProjects";
+
+const archivedProjectsPath = "archived-projects";
+
+const projectSections: Record<Exclude<NavigationView, TopLevelView>, string> = {
   ideas: "tasks",
   board: "board",
   archive: "archive",
   documents: "notes",
 };
 
-const sectionViews: Record<string, Exclude<NavigationView, "projects">> = {
+const sectionViews: Record<string, Exclude<NavigationView, TopLevelView>> = {
   tasks: "ideas",
   board: "board",
   archive: "archive",
@@ -32,6 +38,14 @@ export const parseNavigationPath = (pathname: string): NavigationState => {
     .split("/")
     .filter(Boolean)
     .map((part) => safeDecode(part));
+
+  // The archived projects list, or one archived project opened read-only.
+  if (parts[0] === archivedProjectsPath) {
+    return {
+      activeView: "archivedProjects",
+      selectedProjectId: parts[1] ?? "",
+    };
+  }
 
   if (parts[0] !== "projects" || !parts[1]) {
     return { activeView: "projects", selectedProjectId: "" };
@@ -48,6 +62,11 @@ export const formatNavigationPath = ({
   activeView,
   selectedProjectId,
 }: NavigationState): string => {
+  if (activeView === "archivedProjects") {
+    return selectedProjectId
+      ? `/${archivedProjectsPath}/${encodeURIComponent(selectedProjectId)}`
+      : `/${archivedProjectsPath}`;
+  }
   if (activeView === "projects" || !selectedProjectId) {
     return "/projects";
   }

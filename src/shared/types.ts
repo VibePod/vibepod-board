@@ -22,8 +22,19 @@ export type Project = {
   requiredApprovals?: number;
   /** Rework verdicts in a row after which a task is blocked for a human. */
   maxReviewRounds?: number;
+  /** Set while the project is archived: out of the active views and read-only. */
+  archivedAt?: string | null;
+  /** How much the project holds, as the project list reports it. */
+  taskCount?: number;
+  cardCount?: number;
   createdAt: string;
   updatedAt: string;
+};
+
+export type DeletedProject = {
+  id: string;
+  key: string;
+  title: string;
 };
 
 export type Idea = {
