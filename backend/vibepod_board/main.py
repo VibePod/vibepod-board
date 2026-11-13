@@ -22,6 +22,7 @@ from vibepod_board.api import (
     documents,
     github,
     ideas,
+    mcp_docs,
     projects,
     system,
     tokens,
@@ -158,9 +159,8 @@ def create_app(
     github_transport: httpx.BaseTransport | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
-    mcp_app = create_mcp_server(settings, github_transport).http_app(
-        path="/mcp", stateless_http=True, json_response=True
-    )
+    mcp_server = create_mcp_server(settings, github_transport)
+    mcp_app = mcp_server.http_app(path="/mcp", stateless_http=True, json_response=True)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -192,6 +192,8 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.settings = settings
+    # /api/mcp-tools reads its catalog from the server itself.
+    app.state.mcp_server = mcp_server
     # Tests swap in an httpx.MockTransport; None talks to api.github.com.
     app.state.github_transport = github_transport
     app.state.sessions = sessions or AdminSessionManager(
@@ -203,7 +205,7 @@ def create_app(
     )
     _install_error_handlers(app)
 
-    for module in (system, projects, ideas, github, board, documents, tokens, workers):
+    for module in (system, projects, ideas, github, board, documents, tokens, workers, mcp_docs):
         app.include_router(module.router)
     # FastMCP ships a Starlette app whose middleware verifies the bearer token. Routing
     # /mcp to the whole app keeps that middleware, and unlike a mount it does not turn the
