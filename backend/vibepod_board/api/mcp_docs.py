@@ -1,11 +1,16 @@
-"""A browsable reference for the MCP endpoint: the live tool catalog as JSON."""
+"""A browsable reference for the MCP endpoint: the live tool catalog as JSON, and the page
+that renders it."""
 
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 router = APIRouter(tags=["system"])
+
+PAGE = Path(__file__).resolve().parents[1] / "static" / "mcp-docs.html"
 
 
 def _wire(model: BaseModel) -> dict[str, Any]:
@@ -29,3 +34,8 @@ async def mcp_tools(request: Request) -> dict[str, Any]:
             _wire(resource.to_mcp_resource()) for resource in await server.list_resources()
         ],
     }
+
+
+@router.get("/mcp-docs", include_in_schema=False)
+def mcp_docs() -> FileResponse:
+    return FileResponse(PAGE, media_type="text/html")

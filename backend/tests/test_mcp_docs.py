@@ -1,12 +1,17 @@
 """The MCP reference: the public tool catalog, the page that shows it, and bearer auth in
 the OpenAPI spec."""
 
+from dataclasses import replace
+from pathlib import Path
+
 import httpx
 from fastapi.testclient import TestClient
 from fastmcp import Client
 from sqlmodel import Session
 
 from vibepod_board.api.system import MCP_INFO_TOOLS
+from vibepod_board.config import Settings
+from vibepod_board.main import create_app
 from vibepod_board.services import projects, tokens
 
 
@@ -57,3 +62,20 @@ async def test_catalog_matches_what_an_mcp_client_lists(server_url: str, session
     assert catalog["tools"] == [
         {key: value for key, value in tool.items() if key != "_meta"} for tool in listed
     ]
+
+
+def test_page_is_served_with_and_without_a_built_client(
+    client: TestClient, settings: Settings, tmp_path: Path
+) -> None:
+    page = client.get("/mcp-docs")
+    assert page.status_code == 200
+    assert page.headers["content-type"].startswith("text/html")
+    assert "/api/mcp-tools" in page.text
+    assert "/mcp-docs" not in client.get("/openapi.json").json()["paths"]
+
+    # With a built client the SPA fallback answers every other path; the page still wins.
+    (tmp_path / "index.html").write_text("<title>board client</title>")
+    built = replace(settings, public_dir=tmp_path)
+    with TestClient(create_app(built, run_migrations=False)) as with_client:
+        assert with_client.get("/projects").text == "<title>board client</title>"
+        assert with_client.get("/mcp-docs").text == page.text

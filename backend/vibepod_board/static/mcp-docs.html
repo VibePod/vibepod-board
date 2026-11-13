@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>vibepod-board MCP reference</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #edf2f8;
+        --surface: #ffffff;
+        --surface-muted: #f6f9fc;
+        --text: #1a2736;
+        --dimmed: #4a6070;
+        --border: #cdd9e6;
+        --accent: #156f65;
+        --active: #e3f2ef;
+        --danger: #b3261e;
+        --info: #2b5c9e;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #14202b;
+          --surface: #1c2b39;
+          --surface-muted: #233546;
+          --text: #e3ebf3;
+          --dimmed: #9db0c2;
+          --border: #32485d;
+          --accent: #5ccfbe;
+          --active: #23443f;
+          --danger: #ff8a80;
+          --info: #8fb8f0;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          15px/1.5 Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+      }
+      a {
+        color: var(--accent);
+      }
+      code,
+      pre {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.92em;
+      }
+      button {
+        font: inherit;
+      }
+      ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .muted {
+        color: var(--dimmed);
+      }
+      .top {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 24px;
+        align-items: baseline;
+        justify-content: space-between;
+        padding: 16px 24px;
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+      }
+      .top h1 {
+        margin: 0;
+        font-size: 20px;
+      }
+      .top p {
+        margin: 4px 0 0;
+      }
+      .top nav {
+        display: flex;
+        gap: 16px;
+      }
+      #status,
+      noscript p {
+        margin: 24px;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: 320px minmax(0, 1fr);
+        gap: 24px;
+        align-items: start;
+        padding: 24px;
+      }
+      .layout[hidden] {
+        display: none;
+      }
+      .panel {
+        padding: 16px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+      }
+      aside.panel {
+        position: sticky;
+        top: 16px;
+        max-height: calc(100vh - 32px);
+        overflow: auto;
+      }
+      aside h2 {
+        margin: 16px 0 6px;
+        color: var(--dimmed);
+        font-size: 13px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      #filter {
+        width: 100%;
+        padding: 8px 10px;
+        background: var(--surface-muted);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: inherit;
+        font: inherit;
+      }
+      #count {
+        margin: 8px 0;
+        font-size: 13px;
+      }
+      #tool-list a {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 6px;
+        align-items: center;
+        padding: 5px 8px;
+        border-radius: 6px;
+        color: inherit;
+        text-decoration: none;
+      }
+      #tool-list a:hover {
+        background: var(--surface-muted);
+      }
+      #tool-list a[aria-current="true"] {
+        background: var(--active);
+        font-weight: 600;
+      }
+      #resource-list li {
+        padding: 4px 8px;
+        overflow-wrap: anywhere;
+      }
+      .badge {
+        padding: 0 7px;
+        border: 1px solid currentColor;
+        border-radius: 999px;
+        color: var(--dimmed);
+        font-size: 11px;
+        font-weight: 600;
+        line-height: 18px;
+        white-space: nowrap;
+      }
+      .badge.read-only {
+        color: var(--accent);
+      }
+      .badge.destructive {
+        color: var(--danger);
+      }
+      .badge.idempotent {
+        color: var(--info);
+      }
+      #detail h2 {
+        margin: 0 0 4px;
+        font-size: 22px;
+      }
+      #detail h3 {
+        margin: 24px 0 8px;
+        font-size: 15px;
+      }
+      .tool-name {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+        margin: 0 0 12px;
+      }
+      .description {
+        overflow-wrap: anywhere;
+        white-space: pre-line;
+      }
+      .table-scroll {
+        overflow-x: auto;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th,
+      td {
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--border);
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        color: var(--dimmed);
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .constraints {
+        display: block;
+        color: var(--dimmed);
+        font-size: 13px;
+      }
+      details {
+        margin-top: 12px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+      }
+      summary {
+        padding: 8px 12px;
+        cursor: pointer;
+        font-weight: 600;
+      }
+      pre {
+        margin: 0;
+        padding: 12px;
+        overflow: auto;
+        background: var(--surface-muted);
+        border-top: 1px solid var(--border);
+      }
+      @media (max-width: 800px) {
+        .top {
+          padding: 12px;
+        }
+        .layout {
+          grid-template-columns: minmax(0, 1fr);
+          gap: 12px;
+          padding: 12px;
+        }
+        aside.panel {
+          position: static;
+          max-height: 320px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="top">
+      <div>
+        <h1>
+          <span id="server-name">vibepod-board</span> MCP reference
+          <span id="server-version" class="muted"></span>
+        </h1>
+        <p class="muted">
+          Endpoint <code>POST <span id="endpoint">/mcp</span></code> · Streamable HTTP ·
+          <code>Authorization: Bearer &lt;project-token&gt;</code>
+        </p>
+      </div>
+      <nav>
+        <a href="/docs">REST API reference</a>
+        <a href="/api/mcp-tools">Catalog JSON</a>
+      </nav>
+    </header>
+    <noscript>
+      <p>
+        This page needs JavaScript. The raw catalog is at
+        <a href="/api/mcp-tools">/api/mcp-tools</a>.
+      </p>
+    </noscript>
+    <p id="status" role="status">Loading tools…</p>
+    <div id="layout" class="layout" hidden>
+      <aside class="panel">
+        <input id="filter" type="search" placeholder="Filter tools" aria-label="Filter tools" />
+        <p id="count" class="muted"></p>
+        <ul id="tool-list"></ul>
+        <h2>Resources</h2>
+        <ul id="resource-list"></ul>
+      </aside>
+      <main id="detail" class="panel"></main>
+    </div>
+    <script>
+      (() => {
+        "use strict";
+
+        // Tool hints the MCP server may set, and the badge shown for each.
+        const HINTS = [
+          ["readOnlyHint", "read-only"],
+          ["destructiveHint", "destructive"],
+          ["idempotentHint", "idempotent"],
+        ];
+        // JSON Schema keywords worth a note under a parameter's description.
+        const CONSTRAINTS = [
+          ["minLength", "min length"],
+          ["maxLength", "max length"],
+          ["minimum", "min"],
+          ["exclusiveMinimum", "greater than"],
+          ["maximum", "max"],
+          ["minItems", "min items"],
+          ["maxItems", "max items"],
+          ["pattern", "pattern"],
+          ["format", "format"],
+        ];
+
+        const byId = (id) => document.getElementById(id);
+        const status = byId("status");
+        const filter = byId("filter");
+        let catalog = { tools: [], resources: [] };
+
+        // Children are nodes or strings; strings become text nodes, so catalog text is
+        // never parsed as markup.
+        const el = (tag, attributes = {}, ...children) => {
+          const node = document.createElement(tag);
+          for (const [name, value] of Object.entries(attributes)) {
+            node.setAttribute(name, value);
+          }
+          node.append(...children);
+          return node;
+        };
+
+        const withoutNull = (schema) =>
+          (schema.anyOf || []).filter((variant) => variant.type !== "null");
+
+        const typeText = (schema) => {
+          if (!schema || typeof schema !== "object") {
+            return "any";
+          }
+          if (Array.isArray(schema.enum)) {
+            return schema.enum.map((value) => JSON.stringify(value)).join(" | ");
+          }
+          if (Array.isArray(schema.anyOf)) {
+            return [...new Set(withoutNull(schema).map(typeText))].join(" | ") || "null";
+          }
+          if (schema.type === "array") {
+            const item = typeText(schema.items);
+            return item.includes(" | ") ? `(${item})[]` : `${item}[]`;
+          }
+          return schema.type || "any";
+        };
+
+        const constraintText = (schema) => {
+          const variants = withoutNull(schema);
+          const source = variants.length === 1 ? variants[0] : schema;
+          return CONSTRAINTS.filter(([keyword]) => keyword in source)
+            .map(([keyword, label]) => `${label} ${source[keyword]}`)
+            .join(", ");
+        };
+
+        const badges = (tool) =>
+          HINTS.filter(([hint]) => tool.annotations?.[hint]).map(([, label]) =>
+            el("span", { class: `badge ${label}` }, label),
+          );
+
+        const selectedTool = () => {
+          const name = location.hash.slice(1);
+          return catalog.tools.find((tool) => tool.name === name) || catalog.tools[0];
+        };
+
+        const renderList = () => {
+          const text = filter.value.trim().toLowerCase();
+          const visible = catalog.tools.filter((tool) =>
+            [tool.name, tool.title, tool.description].some((value) =>
+              (value || "").toLowerCase().includes(text),
+            ),
+          );
+          const selected = selectedTool();
+          const total = catalog.tools.length;
+          byId("count").textContent =
+            visible.length === total ? `${total} tools` : `${visible.length} of ${total} tools`;
+          byId("tool-list").replaceChildren(
+            ...visible.map((tool) => {
+              const link = el(
+                "a",
+                { href: `#${tool.name}` },
+                el("code", {}, tool.name),
+                ...badges(tool),
+              );
+              if (tool === selected) {
+                link.setAttribute("aria-current", "true");
+              }
+              return el("li", {}, link);
+            }),
+          );
+        };
+
+        const parameterTable = (schema) => {
+          const properties = Object.entries(schema.properties || {});
+          if (properties.length === 0) {
+            return el("p", { class: "muted" }, "No parameters.");
+          }
+          const required = new Set(schema.required || []);
+          const head = ["Name", "Type", "Required", "Default", "Description"].map((label) =>
+            el("th", {}, label),
+          );
+          const rows = properties.map(([name, property]) => {
+            const description = el("td", {}, property.description || "");
+            const constraints = constraintText(property);
+            if (constraints) {
+              description.append(el("span", { class: "constraints" }, constraints));
+            }
+            return el(
+              "tr",
+              {},
+              el("td", {}, el("code", {}, name)),
+              el("td", {}, el("code", {}, typeText(property))),
+              el("td", {}, required.has(name) ? "yes" : "no"),
+              el(
+                "td",
+                {},
+                "default" in property ? el("code", {}, JSON.stringify(property.default)) : "",
+              ),
+              description,
+            );
+          });
+          return el(
+            "div",
+            { class: "table-scroll" },
+            el("table", {}, el("thead", {}, el("tr", {}, ...head)), el("tbody", {}, ...rows)),
+          );
+        };
+
+        const schemaBlock = (label, schema) =>
+          el(
+            "details",
+            {},
+            el("summary", {}, label),
+            el("pre", {}, JSON.stringify(schema, null, 2)),
+          );
+
+        const renderDetail = () => {
+          const tool = selectedTool();
+          if (!tool) {
+            byId("detail").replaceChildren(
+              el("p", { class: "muted" }, "This server lists no tools."),
+            );
+            return;
+          }
+          const inputSchema = tool.inputSchema || {};
+          byId("detail").replaceChildren(
+            el("h2", {}, tool.title || tool.name),
+            el("p", { class: "tool-name" }, el("code", {}, tool.name), ...badges(tool)),
+            el("p", { class: "description" }, tool.description || ""),
+            el("h3", {}, "Parameters"),
+            parameterTable(inputSchema),
+            schemaBlock("Input schema", inputSchema),
+            ...(tool.outputSchema ? [schemaBlock("Output schema", tool.outputSchema)] : []),
+          );
+        };
+
+        const renderCatalog = () => {
+          byId("server-name").textContent = catalog.server.name;
+          byId("server-version").textContent = catalog.server.version;
+          byId("endpoint").textContent = catalog.endpoint;
+          byId("resource-list").replaceChildren(
+            ...catalog.resources.map((resource) =>
+              el(
+                "li",
+                {},
+                el("code", {}, resource.uri),
+                el(
+                  "div",
+                  { class: "muted" },
+                  [resource.name, resource.description].filter(Boolean).join(" — "),
+                ),
+              ),
+            ),
+          );
+          renderList();
+          renderDetail();
+        };
+
+        const load = async () => {
+          status.hidden = false;
+          status.textContent = "Loading tools…";
+          try {
+            const response = await fetch("/api/mcp-tools", {
+              headers: { Accept: "application/json" },
+            });
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}`);
+            }
+            catalog = await response.json();
+          } catch (error) {
+            const retry = el("button", { type: "button" }, "Retry");
+            retry.addEventListener("click", load);
+            status.replaceChildren(`Could not load the tool catalog (${error.message}). `, retry);
+            return;
+          }
+          status.hidden = true;
+          byId("layout").hidden = false;
+          renderCatalog();
+        };
+
+        filter.addEventListener("input", renderList);
+        window.addEventListener("hashchange", () => {
+          renderList();
+          renderDetail();
+          // Stacked layout: the detail panel sits below the list, so bring it into view.
+          if (window.matchMedia?.("(max-width: 800px)").matches) {
+            byId("detail").scrollIntoView?.();
+          }
+        });
+        load();
+      })();
+    </script>
+  </body>
+</html>
