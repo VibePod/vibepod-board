@@ -79,3 +79,20 @@ def test_page_is_served_with_and_without_a_built_client(
     with TestClient(create_app(built, run_migrations=False)) as with_client:
         assert with_client.get("/projects").text == "<title>board client</title>"
         assert with_client.get("/mcp-docs").text == page.text
+
+
+def test_openapi_declares_bearer_auth_on_protected_routes_only(client: TestClient) -> None:
+    spec = client.get("/openapi.json").json()
+    scheme = spec["components"]["securitySchemes"]["HTTPBearer"]
+    assert (scheme["type"], scheme["scheme"]) == ("http", "bearer")
+
+    paths = spec["paths"]
+    for path in ("/api/board", "/api/ideas", "/api/tokens"):
+        assert paths[path]["get"]["security"] == [{"HTTPBearer": []}], path
+    for path, method in (
+        ("/api/health", "get"),
+        ("/api/auth/login", "post"),
+        ("/api/mcp-info", "get"),
+        ("/api/mcp-tools", "get"),
+    ):
+        assert "security" not in paths[path][method], path
