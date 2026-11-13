@@ -59,21 +59,46 @@ const emptyColumns = {
   done: [],
 };
 
+type ApiOptions = {
+  /** Answers the list of archived projects instead of the stored one. */
+  archivedList?: () => Response | Promise<Response>;
+  /** Answers the export of a project. */
+  exportProject?: () => Response | Promise<Response>;
+  /** The project list cannot be read any more once a project was archived or deleted. */
+  failReloadAfterWrite?: boolean;
+};
+
+const legacyProject = project({
+  id: "project-2",
+  key: "OLD",
+  title: "Legacy",
+  archivedAt,
+});
+
 /** An in-memory API with one active and one archived project. */
-const projectApi = () => {
+const projectApi = (options: ApiOptions = {}) => {
   let active = [project({})];
-  let archived = [
-    project({ id: "project-2", key: "OLD", title: "Legacy", archivedAt }),
-  ];
+  let archived = [legacyProject];
+  let wrote = false;
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input);
     const method = init?.method ?? "GET";
     if (path === "/api/auth/me") {
       return jsonResponse({ authenticated: true, username: "admin" });
     }
-    if (path === "/api/projects") return jsonResponse({ items: active });
+    if (path === "/api/projects") {
+      return wrote && options.failReloadAfterWrite
+        ? jsonResponse({ error: "Board restarting" }, 500)
+        : jsonResponse({ items: active });
+    }
     if (path === "/api/projects?archived=true") {
-      return jsonResponse({ items: archived });
+      return options.archivedList?.() ?? jsonResponse({ items: archived });
+    }
+    if (path === "/api/projects/project-2/export" && options.exportProject) {
+      return options.exportProject();
+    }
+    if (path.startsWith("/api/workers?projectId=")) {
+      return jsonResponse({ items: [] });
     }
     if (path === "/api/ideas?projectId=project-2") {
       return jsonResponse({ items: [legacyTask] });
@@ -88,6 +113,7 @@ const projectApi = () => {
     const archive = path.match(/^\/api\/projects\/([^/]+)\/(archive|restore)$/);
     if (archive && method === "POST") {
       const [, id, action] = archive;
+      wrote = true;
       if (action === "archive") {
         const target = active.find((item) => item.id === id) as Project;
         active = active.filter((item) => item.id !== id);
@@ -101,6 +127,7 @@ const projectApi = () => {
     }
     const removed = path.match(/^\/api\/projects\/([^/?]+)\?confirmKey=(.+)$/);
     if (removed && method === "DELETE") {
+      wrote = true;
       const target = archived.find((item) => item.id === removed[1]);
       archived = archived.filter((item) => item.id !== removed[1]);
       return jsonResponse(target);
@@ -109,9 +136,9 @@ const projectApi = () => {
   });
 };
 
-const renderApp = async (path: string) => {
+const renderApp = async (path: string, options: ApiOptions = {}) => {
   window.history.replaceState(null, "", path);
-  const fetchMock = projectApi();
+  const fetchMock = projectApi(options);
   vi.stubGlobal("fetch", fetchMock);
   const { AppShell } = await import("../src/client/main.js");
   render(<AppShell />);
@@ -243,5 +270,169 @@ describe("archived projects", () => {
       ),
     ).toBeTruthy();
     expect(window.location.pathname).toBe("/projects/project-2/tasks");
+  });
+
+  it("does not delete while the export first is still running", async () => {
+    let finishExport: (response: Response) => void = () => undefined;
+    const fetchMock = await renderApp("/archived-projects", {
+      exportProject: () =>
+        new Promise<Response>((resolve) => {
+          finishExport = resolve;
+        }),
+    });
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Delete permanently" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Delete Project Permanently",
+    });
+    const confirm = within(dialog).getByRole("button", {
+      name: "Delete permanently",
+    });
+    const key = within(dialog).getByLabelText("Type OLD to confirm");
+    await userEvent.type(key, "OLD");
+    expect(confirm.hasAttribute("disabled")).toBe(false);
+
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Export first" }),
+    );
+
+    // The backup has to be read before the project goes.
+    await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(true));
+    await userEvent.type(key, "{Enter}");
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE"),
+    ).toEqual([]);
+
+    finishExport(jsonResponse({ error: "Export failed" }, 500));
+    await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(false));
+  });
+
+  it("does not call an archived project missing while the list still loads", async () => {
+    let finishList: (response: Response) => void = () => undefined;
+    await renderApp("/archived-projects/project-2", {
+      archivedList: () =>
+        new Promise<Response>((resolve) => {
+          finishList = resolve;
+        }),
+    });
+
+    expect(await screen.findByText("Loading board...")).toBeTruthy();
+    expect(screen.queryByText("Archived project not found")).toBeNull();
+
+    finishList(jsonResponse({ items: [legacyProject] }));
+    expect(await screen.findByText("Retire the old login")).toBeTruthy();
+  });
+
+  it("says so when the archived projects cannot be read", async () => {
+    await renderApp("/archived-projects", {
+      archivedList: () => jsonResponse({ error: "Board restarting" }, 500),
+    });
+
+    expect(
+      await screen.findByText("Failed to load archived projects"),
+    ).toBeTruthy();
+    // Unknown is not the same as none.
+    expect(screen.queryByText("No archived projects")).toBeNull();
+  });
+
+  it("keeps watching the workers of a project across its views", async () => {
+    const fetchMock = await renderApp("/projects/project-1/tasks");
+    const polls = () =>
+      fetchMock.mock.calls.filter(([path]) =>
+        String(path).startsWith("/api/workers?"),
+      ).length;
+    await waitFor(() => expect(polls()).toBe(1));
+
+    await userEvent.click(await screen.findByRole("link", { name: "Board" }));
+
+    await waitFor(() =>
+      expect(window.location.pathname).toBe("/projects/project-1/board"),
+    );
+    await screen.findByText("Ready");
+    // The same project: the poll goes on as it was, without starting over.
+    expect(polls()).toBe(1);
+  });
+
+  it("does not offer to replace an archived project with an import", async () => {
+    const fetchMock = await renderApp("/projects");
+    await screen.findByText("Current Application");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Import Project" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    const bundle = {
+      bundleVersion: 1,
+      exportedAt: timestamp,
+      project: {
+        id: "source-project",
+        key: "OLD",
+        title: "Legacy",
+        summary: "",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      ideas: [],
+      boardCards: [],
+      readinessEvents: [],
+      documents: [],
+    };
+
+    await userEvent.upload(
+      dialog.querySelector("input[type='file']") as HTMLInputElement,
+      new File([JSON.stringify(bundle)], "OLD-project.json", {
+        type: "application/json",
+      }),
+    );
+
+    expect(await within(dialog).findByText("Legacy (OLD)")).toBeTruthy();
+    expect(within(dialog).getByText(/Project OLD is archived/)).toBeTruthy();
+    expect(within(dialog).queryByText(/will replace all current/i)).toBeNull();
+    const submit = within(dialog).getByRole("button", {
+      name: "Import Project",
+    });
+    expect(submit.hasAttribute("disabled")).toBe(true);
+    expect(
+      fetchMock.mock.calls.filter(([path]) => path === "/api/projects/import"),
+    ).toEqual([]);
+  });
+
+  it("reports a failed reload after a delete on the page, not in the dialog", async () => {
+    await renderApp("/archived-projects", { failReloadAfterWrite: true });
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Delete permanently" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Delete Project Permanently",
+    });
+    await userEvent.type(
+      within(dialog).getByLabelText("Type OLD to confirm"),
+      "OLD",
+    );
+
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Delete permanently" }),
+    );
+
+    // The project is gone: the dialog must not stay open on it.
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(await screen.findByText("Board restarting")).toBeTruthy();
+  });
+
+  it("reports a failed reload after archiving on the page, not in the dialog", async () => {
+    await renderApp("/projects", { failReloadAfterWrite: true });
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Archive" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Archive Project",
+    });
+
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Archive Project" }),
+    );
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(await screen.findByText("Board restarting")).toBeTruthy();
   });
 });

@@ -74,12 +74,18 @@ type ProjectActions = {
  */
 export const ArchivedProjectsView = ({
   projects,
+  loaded,
+  loadFailed,
   projectId,
   reloadKey,
   navigateTo,
   ...actions
 }: {
   projects: Project[];
+  /** Whether the list was read at least once: until then nothing is known. */
+  loaded: boolean;
+  /** Whether the last read of the list failed; an earlier list is still shown. */
+  loadFailed: boolean;
   projectId: string;
   reloadKey: number;
   navigateTo: (navigation: NavigationState) => void;
@@ -137,7 +143,12 @@ export const ArchivedProjectsView = ({
 
   return (
     <>
-      {projectId && !opened && (
+      {loadFailed && (
+        <Alert color="red" variant="light">
+          Failed to load archived projects
+        </Alert>
+      )}
+      {loaded && projectId && !opened && (
         <Paper className="empty-state" withBorder radius="md" p="lg">
           <Stack gap="sm" align="flex-start">
             <Title order={3}>Archived project not found</Title>
@@ -162,7 +173,7 @@ export const ArchivedProjectsView = ({
           buttons={projectButtons(opened)}
         />
       )}
-      {!projectId && archived.length === 0 && (
+      {loaded && !projectId && archived.length === 0 && (
         <Paper className="empty-state" withBorder radius="md" p="lg">
           <Stack gap="sm" align="flex-start">
             <Title order={3}>No archived projects</Title>
@@ -617,7 +628,8 @@ export const DeleteProjectDialog = ({
   };
 
   const confirm = async () => {
-    if (!project || !confirmed) return;
+    // An export still running reads the project: it has to finish first.
+    if (!project || !confirmed || isExporting) return;
     setIsDeleting(true);
     setError("");
     try {
@@ -662,6 +674,7 @@ export const DeleteProjectDialog = ({
                 color="gray"
                 leftSection={<Download size={16} />}
                 loading={isExporting}
+                disabled={isDeleting}
                 onClick={() => void exportFirst()}
               >
                 Export first
@@ -698,7 +711,7 @@ export const DeleteProjectDialog = ({
                 color="red"
                 leftSection={<Trash2 size={16} />}
                 loading={isDeleting}
-                disabled={!confirmed}
+                disabled={!confirmed || isExporting}
               >
                 Delete permanently
               </Button>

@@ -422,6 +422,10 @@ const App = () => {
   );
   // Archived projects stay out of `state.projects`; they are listed on their own.
   const [archivedProjects, setArchivedProjects] = useState<Project[]>([]);
+  // Whether the list was read at least once, and whether its last read failed:
+  // an unread list is neither empty nor missing a project.
+  const [archivedProjectsLoaded, setArchivedProjectsLoaded] = useState(false);
+  const [archivedProjectsFailed, setArchivedProjectsFailed] = useState(false);
   const [archiveProjectTarget, setArchiveProjectTarget] =
     useState<Project | null>(null);
   const [projectImport, setProjectImport] = useState<ProjectImportState | null>(
@@ -526,7 +530,11 @@ const App = () => {
       ]);
     if (!loadOrder.apply(ticket)) return ideas.items;
     setGitHubStatus(github);
-    if (retired) setArchivedProjects(retired.items);
+    if (retired) {
+      setArchivedProjects(retired.items);
+      setArchivedProjectsLoaded(true);
+    }
+    setArchivedProjectsFailed(!retired);
     setState((prev) => ({
       projects: projects.items,
       ideas: ideas.items,
@@ -749,6 +757,9 @@ const App = () => {
   // Workers of the open project: their status, and the live indicator on the
   // cards they work on. When what they do changes, automation moved cards, so
   // the board reloads too, and it reloads regularly while any worker is online.
+  // Only whether the view has workers to watch: the poll must not start over
+  // with every switch between the views of a project.
+  const isArchivedView = activeView === "archivedProjects";
   // biome-ignore lint/correctness/useExhaustiveDependencies: workersVersion asks for an immediate refresh
   useEffect(() => {
     // Another project's workers must not show while this one's load; a refresh
@@ -762,7 +773,7 @@ const App = () => {
     if (
       auth.status !== "authenticated" ||
       !selectedProjectId ||
-      activeView === "archivedProjects"
+      isArchivedView
     ) {
       setWorkers([]);
       setAutomation(null);
@@ -808,7 +819,7 @@ const App = () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [auth.status, selectedProjectId, workersVersion, activeView]);
+  }, [auth.status, selectedProjectId, workersVersion, isArchivedView]);
 
   useEffect(() => {
     if (
@@ -863,6 +874,9 @@ const App = () => {
         ...archivedProjects,
       ])
     : null;
+  const replacesProject =
+    Boolean(importPreview?.existingProjectId) &&
+    !importPreview?.existingProjectArchived;
   const projectIdeas = useMemo(
     () =>
       selectedProject
@@ -1361,7 +1375,10 @@ const App = () => {
     }
   };
 
-  /** Errors are left to the confirmation dialog, which shows them. */
+  /**
+   * Errors of the archiving are left to the confirmation dialog, which shows
+   * them; a reload that fails afterwards is reported on the page.
+   */
   const archiveProject = async (project: Project) => {
     await api<{ item: Project }>(`/api/projects/${project.id}/archive`, {
       method: "POST",
@@ -1374,7 +1391,7 @@ const App = () => {
     if (selectedProjectId === project.id && activeView !== "projects") {
       returnToProjects();
     }
-    await loadState();
+    await reloadAfterWrite();
   };
 
   const restoreProject = async (project: Project) => {
@@ -1396,14 +1413,17 @@ const App = () => {
     }
   };
 
-  /** Errors are left to the confirmation dialog, which shows them. */
+  /**
+   * Errors of the deletion are left to the confirmation dialog, which shows
+   * them; a reload that fails afterwards is reported on the page.
+   */
   const deleteProject = async (project: Project) => {
     await api(
       `/api/projects/${project.id}?confirmKey=${encodeURIComponent(project.key)}`,
       { method: "DELETE" },
     );
     setNotice(`Project ${project.key} deleted permanently.`);
-    await loadState();
+    await reloadAfterWrite();
   };
 
   const submitProjectImport = async (event: FormEvent) => {
@@ -1416,6 +1436,9 @@ const App = () => {
       ...state.projects,
       ...archivedProjects,
     ]);
+    if (preview.existingProjectArchived) {
+      return;
+    }
     setProjectImport((current) =>
       current ? { ...current, error: "", isSubmitting: true } : current,
     );
@@ -2485,6 +2508,8 @@ const App = () => {
         {activeView === "archivedProjects" && (
           <ArchivedProjectsView
             projects={archivedProjects}
+            loaded={archivedProjectsLoaded}
+            loadFailed={archivedProjectsFailed}
             projectId={selectedProjectId}
             reloadKey={loadCount}
             navigateTo={navigateTo}
@@ -3542,13 +3567,18 @@ const App = () => {
                       {importPreview.documents === 1 ? "document" : "documents"}
                     </Badge>
                   </Group>
-                  {importPreview.existingProjectId && (
+                  {importPreview.existingProjectArchived ? (
+                    <Alert color="red" variant="light">
+                      Project {importPreview.key} is archived. Restore it, or
+                      delete it permanently, before importing this project.
+                    </Alert>
+                  ) : importPreview.existingProjectId ? (
                     <Alert color="red" variant="light">
                       This will replace all current project data for{" "}
                       {importPreview.key}. API token access to the destination
                       project will be retained.
                     </Alert>
-                  )}
+                  ) : null}
                 </Stack>
               )}
               <Group justify="flex-end">
@@ -3562,14 +3592,15 @@ const App = () => {
                 </Button>
                 <Button
                   type="submit"
-                  color={importPreview?.existingProjectId ? "red" : "teal"}
+                  color={replacesProject ? "red" : "teal"}
                   loading={projectImport.isSubmitting}
-                  disabled={!projectImport.bundle}
+                  disabled={
+                    !projectImport.bundle ||
+                    Boolean(importPreview?.existingProjectArchived)
+                  }
                   leftSection={<Upload size={16} />}
                 >
-                  {importPreview?.existingProjectId
-                    ? "Replace Project"
-                    : "Import Project"}
+                  {replacesProject ? "Replace Project" : "Import Project"}
                 </Button>
               </Group>
             </Stack>
