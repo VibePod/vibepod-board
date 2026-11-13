@@ -7,7 +7,7 @@ import pytest
 from conftest import call, login
 from fastapi.testclient import TestClient
 from fastmcp.exceptions import ToolError
-from sqlalchemy import Engine, func, text
+from sqlalchemy import Engine, event, func, text
 from sqlmodel import Session, select
 
 from vibepod_board.access import admin_access, token_access
@@ -208,6 +208,24 @@ def test_automation_of_an_archived_project_cannot_be_changed(session: Session, a
     state = automation.get_automation(session, ADMIN, "APP")
     assert (state.paused, state.reason) == (True, "Project archived")
     assert not automation.resume_automation(session, ADMIN, "APP").paused
+
+
+def test_the_work_order_does_not_count_tasks_and_cards(db: Engine, session: Session, app) -> None:
+    planned(session, app)
+    statements: list[str] = []
+
+    def record(_conn: Any, _cursor: Any, statement: str, *_: Any) -> None:
+        statements.append(statement.lower())
+
+    event.listen(db, "before_cursor_execute", record)
+    try:
+        order = ideas.work_order(session, ADMIN, app.id)
+    finally:
+        event.remove(db, "before_cursor_execute", record)
+
+    assert [item.task_id for item in order.items] == ["APP-1"]
+    # Every claim attempt builds the work order: it needs the project keys, not the totals.
+    assert not [statement for statement in statements if "count(" in statement]
 
 
 def test_reads_of_an_archived_project_still_work(session: Session, app) -> None:

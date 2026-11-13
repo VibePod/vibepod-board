@@ -52,7 +52,7 @@ from vibepod_board.services.listing import (
 from vibepod_board.services.open_reviews import end_open_reviews
 from vibepod_board.services.projects import (
     archived_project_ids,
-    list_projects,
+    project_keys,
     resolve_project_id_for_create,
 )
 from vibepod_board.services.readiness import apply_idea_readiness
@@ -415,8 +415,8 @@ def work_order(
 ) -> TaskWorkOrder:
     tasks = list_ideas(session, access, project_id)
     cards = list_cards(session, access, filters=CardFilter(project=project_id))
-    keys = {project.id: project.key for project in list_projects(session, access, None)}
-    return build_work_order(tasks, cards, keys)
+    # Built on every claim attempt: the keys alone, without the totals a project list has.
+    return build_work_order(tasks, cards, project_keys(session, access))
 
 
 @transactional

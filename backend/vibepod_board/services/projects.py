@@ -59,6 +59,14 @@ def _counts(session: Session, table: type[IdeaRow] | type[BoardCardRow], ids: li
     return {project_id: count for project_id, count in rows}
 
 
+def project_keys(session: Session, access: AccessContext | None = None) -> dict[str, str]:
+    """The keys of the projects the caller may see, archived ones too, by project id."""
+    query = select(ProjectRow.id, ProjectRow.key)
+    if access is not None and not isinstance(access, AdminAccess):
+        query = query.where(col(ProjectRow.id).in_(access.project_ids))
+    return {project_id: key for project_id, key in session.exec(query).all()}
+
+
 def archived_project_ids(session: Session) -> set[str]:
     return set(session.exec(select(ProjectRow.id).where(col(ProjectRow.archived_at).is_not(None))))
 
