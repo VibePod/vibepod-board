@@ -8,7 +8,9 @@ Planning board for organizing projects, refining tasks, marking ready work onto 
 - **Client** (`src/client/`): React 18, Mantine 8, built with Vite and served by the backend.
 - **Storage**: PostgreSQL 16.
 
-The OpenAPI schema is served at `/openapi.json`, with interactive docs at `/docs`.
+The OpenAPI schema is served at `/openapi.json`, with interactive docs at `/docs` (Swagger UI) and `/redoc`. The **Authorize** button in Swagger UI takes a project token and sends it as `Authorization: Bearer <token>` on "Try it out".
+
+The MCP tools are documented at `/mcp-docs`: a searchable page with every tool's description, parameters and schemas, generated from the running server. The same catalog is served as JSON at `GET /api/mcp-tools`. Both need no login, like `/docs`.
 
 ## Run with Docker
 
@@ -138,6 +140,7 @@ Opening and reading pull requests uses the same `GITHUB_TOKEN` as issue sync (se
 - `PATCH /api/tokens/:id`
 - `POST /api/tokens/:id/revoke`
 - `GET /api/mcp-info`
+- `GET /api/mcp-tools`
 
 `GET /api/ideas`, `GET /api/board`, `GET /api/board/archived`, `GET /api/documents`, and `GET /api/work-order` accept `projectId` query params for project-scoped reads.
 
@@ -167,6 +170,8 @@ MCP requires:
 ```text
 Authorization: Bearer <project-token>
 ```
+
+Browse the tools with their parameters and schemas at `/mcp-docs` (as JSON: `GET /api/mcp-tools`).
 
 Tools:
 
