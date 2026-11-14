@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Connect to vibepod-board</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #edf2f8;
+        --surface: #ffffff;
+        --surface-muted: #f6f9fc;
+        --text: #1a2736;
+        --dimmed: #4a6070;
+        --border: #cdd9e6;
+        --accent: #156f65;
+        --on-accent: #ffffff;
+        --danger: #b3261e;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #14202b;
+          --surface: #1c2b39;
+          --surface-muted: #233546;
+          --text: #e3ebf3;
+          --dimmed: #9db0c2;
+          --border: #32485d;
+          --accent: #5ccfbe;
+          --on-accent: #0f1d2c;
+          --danger: #ff8a80;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        display: grid;
+        min-height: 100vh;
+        margin: 0;
+        padding: 16px;
+        place-items: center;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          16px/1.5 Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+      }
+      a {
+        color: var(--accent);
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.92em;
+        overflow-wrap: anywhere;
+      }
+      .card {
+        width: 100%;
+        max-width: 460px;
+        padding: 24px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+      }
+      .card[hidden],
+      form[hidden] {
+        display: none;
+      }
+      h1 {
+        margin: 0 0 12px;
+        font-size: 20px;
+      }
+      p {
+        margin: 0 0 12px;
+      }
+      .muted {
+        color: var(--dimmed);
+        font-size: 14px;
+      }
+      .error {
+        color: var(--danger);
+      }
+      form {
+        display: grid;
+        gap: 12px;
+      }
+      form p {
+        margin: 0;
+      }
+      label.field {
+        display: grid;
+        gap: 4px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+      input[type="text"],
+      input[type="password"] {
+        width: 100%;
+        padding: 8px 10px;
+        background: var(--surface-muted);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: inherit;
+        font: inherit;
+      }
+      fieldset {
+        margin: 0;
+        padding: 8px 12px 12px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+      }
+      legend {
+        padding: 0 4px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+      ul {
+        display: grid;
+        gap: 6px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      #projects label {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+      button {
+        padding: 8px 16px;
+        background: var(--surface-muted);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: inherit;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 600;
+      }
+      button[type="submit"] {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--on-accent);
+      }
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1>Connect to vibepod-board</h1>
+      <p id="status" role="status">Loading…</p>
+
+      <form id="login" hidden>
+        <p>Sign in as the board admin to continue.</p>
+        <label class="field">
+          Username
+          <input id="username" type="text" autocomplete="username" required />
+        </label>
+        <label class="field">
+          Password
+          <input id="password" type="password" autocomplete="current-password" required />
+        </label>
+        <p id="login-error" class="error" role="alert"></p>
+        <div class="actions">
+          <button type="submit">Sign in</button>
+        </div>
+      </form>
+
+      <form id="consent" hidden>
+        <p><strong id="client-name"></strong> wants to work on this board.</p>
+        <p class="muted">
+          It gets a token for the projects you tick, and only those. You can revoke the token
+          at any time under API Tokens.
+        </p>
+        <fieldset>
+          <legend>Projects</legend>
+          <ul id="projects"></ul>
+        </fieldset>
+        <p class="muted">
+          After your decision the browser returns to <code id="redirect"></code>.
+        </p>
+        <p id="consent-error" class="error" role="alert"></p>
+        <div class="actions">
+          <button type="button" id="deny">Deny</button>
+          <button type="submit" id="approve" disabled>Approve</button>
+        </div>
+      </form>
+    </main>
+    <noscript>
+      <p>This page needs JavaScript to complete the sign-in.</p>
+    </noscript>
+    <script>
+      (() => {
+        "use strict";
+
+        const byId = (id) => document.getElementById(id);
+        const status = byId("status");
+        const login = byId("login");
+        const consent = byId("consent");
+        const approve = byId("approve");
+        const requestId = new URLSearchParams(location.search).get("request");
+        const requestPath = `/api/oauth/requests/${encodeURIComponent(requestId || "")}`;
+        const EXPIRED =
+          "This sign-in request has expired or was already decided. Start the sign-in again from your agent.";
+
+        // Answers with the JSON body, or throws an error carrying the HTTP status.
+        const api = async (path, body) => {
+          const options = { headers: { Accept: "application/json" } };
+          if (body !== undefined) {
+            options.method = "POST";
+            options.headers["Content-Type"] = "application/json";
+            options.body = JSON.stringify(body);
+          }
+          const response = await fetch(path, options);
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            const error = new Error(data.error || `HTTP ${response.status}`);
+            error.status = response.status;
+            throw error;
+          }
+          return data;
+        };
+
+        // Shows one form at most; `message` replaces the status line above it.
+        const show = (form, message = "") => {
+          login.hidden = form !== login;
+          consent.hidden = form !== consent;
+          status.textContent = message;
+          status.hidden = message === "";
+        };
+
+        const selectedProjects = () =>
+          [...document.querySelectorAll("#projects input:checked")].map((box) => box.value);
+
+        const renderProjects = (projects) => {
+          const items = projects.map((project) => {
+            const box = document.createElement("input");
+            box.type = "checkbox";
+            box.value = project.id;
+            box.checked = projects.length === 1;
+            const label = document.createElement("label");
+            label.append(box, `${project.key} · ${project.title}`);
+            const item = document.createElement("li");
+            item.append(label);
+            return item;
+          });
+          byId("projects").replaceChildren(...items);
+          if (projects.length === 0) {
+            byId("consent-error").textContent =
+              "The board has no projects yet. Create one first, then sign in again.";
+          }
+          approve.disabled = selectedProjects().length === 0;
+        };
+
+        const showConsent = async () => {
+          let request;
+          let projects;
+          try {
+            [request, projects] = await Promise.all([api(requestPath), api("/api/projects")]);
+          } catch (error) {
+            if (error.status === 401) {
+              show(login);
+            } else if (error.status === 404) {
+              show(null, EXPIRED);
+            } else {
+              show(null, `Could not load the sign-in request (${error.message}).`);
+            }
+            return;
+          }
+          byId("client-name").textContent = request.item.clientName;
+          byId("redirect").textContent = request.item.redirectUri;
+          renderProjects(projects.items);
+          show(consent);
+        };
+
+        // Sends the browser back to the client. The link stays for browsers that do not
+        // follow the redirect on their own.
+        const leave = (message, url) => {
+          const link = document.createElement("a");
+          link.href = url;
+          link.textContent = "Continue";
+          show(null, `${message} `);
+          status.append(link);
+          window.location.assign(url);
+        };
+
+        const decide = async (decision, body, message) => {
+          byId("consent-error").textContent = "";
+          try {
+            const result = await api(`${requestPath}/${decision}`, body);
+            leave(message, result.redirectTo);
+          } catch (error) {
+            if (error.status === 404) {
+              show(null, EXPIRED);
+            } else {
+              byId("consent-error").textContent = error.message;
+            }
+          }
+        };
+
+        login.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          byId("login-error").textContent = "";
+          try {
+            await api("/api/auth/login", {
+              username: byId("username").value,
+              password: byId("password").value,
+            });
+          } catch (error) {
+            byId("login-error").textContent = error.message;
+            return;
+          }
+          await showConsent();
+        });
+
+        byId("projects").addEventListener("change", () => {
+          approve.disabled = selectedProjects().length === 0;
+        });
+
+        consent.addEventListener("submit", (event) => {
+          event.preventDefault();
+          decide("approve", { projectIds: selectedProjects() }, "Approved. Returning to the agent…");
+        });
+
+        byId("deny").addEventListener("click", () => {
+          decide("deny", {}, "Denied. Returning to the agent…");
+        });
+
+        const start = async () => {
+          if (!requestId) {
+            show(null, "This page opens during a sign-in. Start the sign-in from your agent.");
+            return;
+          }
+          try {
+            const me = await api("/api/auth/me");
+            if (!me.authenticated) {
+              show(login);
+              return;
+            }
+          } catch (error) {
+            show(null, `Could not reach the board (${error.message}).`);
+            return;
+          }
+          await showConsent();
+        };
+
+        start();
+      })();
+    </script>
+  </body>
+</html>

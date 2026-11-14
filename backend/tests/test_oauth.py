@@ -313,3 +313,15 @@ def test_public_url_defaults_to_localhost_and_must_be_https_or_loopback(
         monkeypatch.setenv("PUBLIC_URL", refused)
         with pytest.raises(RuntimeError, match="PUBLIC_URL"):
             config.public_url_from_env()
+
+
+def test_consent_page_is_served_and_cannot_be_framed(client: TestClient) -> None:
+    page = client.get("/oauth/consent", params={"request": "anything"})
+
+    assert page.status_code == 200
+    assert page.headers["content-type"].startswith("text/html")
+    assert page.headers["x-frame-options"] == "DENY"
+    assert page.headers["content-security-policy"] == "frame-ancestors 'none'"
+    assert page.headers["cache-control"] == "no-store"
+    assert "/api/oauth/requests/" in page.text
+    assert "/oauth/consent" not in client.get("/openapi.json").json()["paths"]
