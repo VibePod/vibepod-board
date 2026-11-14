@@ -2,6 +2,7 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlparse
 
 DEFAULT_PUBLIC_DIR = Path(__file__).resolve().parents[2] / "dist" / "client"
 
@@ -24,6 +25,8 @@ class Settings:
     github_token: str | None
     github_repository: str | None
     pool_size: int
+    # Where browsers and OAuth clients reach the board; see `public_url_from_env`.
+    public_url: str = "http://localhost:3000"
     # Automated claims: the default lease, the failed attempts before a task is blocked, and
     # how often lapsed claims are swept (0 turns the sweep off).
     claim_lease_seconds: int = 15 * 60
@@ -74,12 +77,31 @@ def get_settings() -> Settings:
         github_token=os.environ.get("GITHUB_TOKEN") or None,
         github_repository=os.environ.get("GITHUB_REPOSITORY") or None,
         pool_size=int(os.environ.get("DATABASE_POOL_MAX", "10")),
+        public_url=public_url_from_env(),
         claim_lease_seconds=lease_seconds,
         claim_max_attempts=_positive_int("CLAIM_MAX_ATTEMPTS", 3),
         claim_sweep_seconds=_positive_int("CLAIM_SWEEP_SECONDS", 15, allow_zero=True),
         worker_heartbeat_seconds=heartbeat_seconds,
         worker_offline_seconds=offline_seconds,
     )
+
+
+def public_url_from_env() -> str:
+    """`PUBLIC_URL`, or the board on localhost at `PORT`. It is the issuer of the OAuth
+    sign-in: MCP clients refuse to send credentials to anything but HTTPS or a loopback
+    address, so any other URL fails at startup rather than at the first sign-in."""
+    url = os.environ.get("PUBLIC_URL", "").strip().rstrip("/")
+    if not url:
+        return f"http://localhost:{os.environ.get('PORT', '').strip() or '3000'}"
+    parsed = urlparse(url)
+    loopback = parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1", "::1")
+    secure = parsed.scheme == "https" and bool(parsed.hostname)
+    if not (loopback or secure) or parsed.path or parsed.query or parsed.fragment:
+        raise RuntimeError(
+            "PUBLIC_URL must be an https URL, or an http URL on localhost, 127.0.0.1 or "
+            f"[::1], without a path: {url}"
+        )
+    return url
 
 
 def _lease_seconds(name: str, default: int) -> int:

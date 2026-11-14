@@ -1,20 +1,18 @@
 """FastMCP server at /mcp.
 
-Clients authenticate with the same project-scoped `vbp_…` tokens as the REST API.
-`BoardTokenVerifier` resolves a token to its projects; every tool then runs with that
-token's access. Tool names and arguments match the TypeScript server, so existing agent
-configurations keep working.
+Clients authenticate with the same project-scoped `vbp_…` tokens as the REST API, pasted
+into their configuration or obtained by OAuth sign-in. `BoardOAuthProvider` resolves a
+token to its projects; every tool then runs with that token's access. Tool names and
+arguments match the TypeScript server, so existing agent configurations keep working.
 """
 
 import json
 from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
-import anyio
 import httpx
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
-from fastmcp.server.auth import AccessToken, TokenVerifier
 from fastmcp.server.dependencies import get_access_token
 from pydantic import AwareDatetime, BaseModel, Field
 from sqlmodel import Session
@@ -38,6 +36,7 @@ from vibepod_board.enums import (
 )
 from vibepod_board.errors import BoardError
 from vibepod_board.github import GitHubClient
+from vibepod_board.oauth import BoardOAuthProvider
 from vibepod_board.services import (
     automation,
     board,
@@ -55,7 +54,6 @@ from vibepod_board.services import (
     reviews,
     runs,
     state,
-    tokens,
     workers,
 )
 from vibepod_board.services.claims import MAX_LEASE_SECONDS, MIN_LEASE_SECONDS
@@ -157,25 +155,6 @@ class ReadinessInput(BaseModel):
     reason: Annotated[str, Field(min_length=1)]
 
 
-class BoardTokenVerifier(TokenVerifier):
-    """Accepts unrevoked board API tokens and carries their project scope as a claim."""
-
-    async def verify_token(self, token: str) -> AccessToken | None:
-        def authenticate() -> tokens.AuthenticatedToken | None:
-            with Session(get_engine()) as session:
-                return tokens.authenticate_token(session, token)
-
-        authenticated = await anyio.to_thread.run_sync(authenticate)
-        if authenticated is None:
-            return None
-        return AccessToken(
-            token=token,
-            client_id=authenticated.token_id,
-            scopes=[],
-            claims={"project_ids": authenticated.project_ids},
-        )
-
-
 def current_access() -> AccessContext:
     access_token = get_access_token()
     if access_token is None:
@@ -210,7 +189,7 @@ def run(operation: Callable[[Session, AccessContext], Any]) -> dict[str, Any]:
 def create_mcp_server(
     settings: Settings, github_transport: httpx.BaseTransport | None = None
 ) -> FastMCP:
-    mcp = FastMCP("vibepod-board", version="0.1.0", auth=BoardTokenVerifier())
+    mcp = FastMCP("vibepod-board", version="0.1.0", auth=BoardOAuthProvider(settings.public_url))
 
     def github() -> GitHubClient:
         try:
