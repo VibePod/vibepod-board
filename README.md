@@ -139,6 +139,9 @@ Opening and reading pull requests uses the same `GITHUB_TOKEN` as issue sync (se
 - `POST /api/tokens`
 - `PATCH /api/tokens/:id`
 - `POST /api/tokens/:id/revoke`
+- `GET /api/oauth/requests/:id`
+- `POST /api/oauth/requests/:id/approve`
+- `POST /api/oauth/requests/:id/deny`
 - `GET /api/mcp-info`
 - `GET /api/mcp-tools`
 
@@ -172,6 +175,20 @@ Authorization: Bearer <project-token>
 ```
 
 Browse the tools with their parameters and schemas at `/mcp-docs` (as JSON: `GET /api/mcp-tools`).
+
+### OAuth sign-in
+
+An MCP client that supports OAuth needs only the URL, no token in its configuration. Tested with Pi 1.5:
+
+```json
+{ "mcpServers": { "board": { "url": "http://localhost:3000/mcp" } } }
+```
+
+On the first connection the client opens the board in your browser. Sign in as the admin, tick the projects the client may use, and approve. The client receives a token for exactly those projects. It is listed under **API Tokens** as `<client name> (OAuth)` and stays valid until you revoke it there; no refresh tokens are issued. Tokens pasted into a client's configuration keep working as before.
+
+OAuth clients only send credentials to an authorization server over HTTPS or on a loopback address. `PUBLIC_URL` is the URL browsers and clients use for the board. It defaults to `http://localhost:<PORT>` and must be an `https://` URL, or `http://` on `localhost`, `127.0.0.1` or `[::1]`; the board refuses to start otherwise. A client that reaches the board under another name, such as `http://vibepod-board:3000` inside the VibePod network, cannot sign in this way and uses a pasted token.
+
+Clients register themselves, and only redirect addresses on the local machine are accepted. The admin's decision goes through `GET /api/oauth/requests/:id` and `POST /api/oauth/requests/:id/approve` or `/deny`, which need the admin session.
 
 Tools:
 
