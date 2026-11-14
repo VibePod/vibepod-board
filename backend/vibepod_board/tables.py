@@ -395,3 +395,33 @@ class IdeaReadinessEventRow(SQLModel, table=True):
     score: int = Field(sa_column=Column(Integer, nullable=False))
     reason: str = Field(sa_column=Column(Text, nullable=False))
     created_at: datetime = _timestamp()
+
+
+class OAuthClientRow(SQLModel, table=True):
+    """An MCP client that registered itself for OAuth sign-in. `info` is its registration."""
+
+    __tablename__ = "oauth_clients"
+
+    client_id: str = Field(sa_column=Column(Text, primary_key=True))
+    info: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
+    created_at: datetime = _timestamp()
+
+
+class OAuthRequestRow(SQLModel, table=True):
+    """A sign-in in progress. `/authorize` creates it, approval gives it a one-time code and
+    the chosen projects, and exchanging the code, denying it or its expiry removes it."""
+
+    __tablename__ = "oauth_requests"
+
+    id: str = Field(sa_column=Column(Text, primary_key=True))
+    client_id: str = _foreign_key("oauth_clients.client_id", "CASCADE")
+    redirect_uri: str = Field(sa_column=Column(Text, nullable=False))
+    redirect_uri_provided_explicitly: bool = Field(sa_column=Column(Boolean, nullable=False))
+    code_challenge: str = Field(sa_column=Column(Text, nullable=False))
+    state: str | None = _text()
+    scopes: list[str] = _json_list()
+    resource: str | None = _text()
+    code_hash: str | None = Field(default=None, sa_column=Column(Text, nullable=True, unique=True))
+    project_ids: list[str] = _json_list()
+    created_at: datetime = _timestamp()
+    expires_at: datetime = _timestamp()

@@ -398,6 +398,15 @@ class CreatedApiToken(ApiModel):
     token: str
 
 
+class OAuthRequestInfo(ApiModel):
+    """What the consent page shows about a sign-in that waits for approval."""
+
+    id: str
+    client_name: str
+    redirect_uri: str
+    expires_at: Timestamp
+
+
 class ImportProjectResult(ApiModel):
     item: Project
     replaced: bool
