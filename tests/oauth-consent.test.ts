@@ -235,6 +235,103 @@ describe("OAuth consent page", () => {
     });
   });
 
+  it("offers a set for each project once two projects are ticked", async () => {
+    const redirectTo = `${REDIRECT}?code=one-time&state=st4te`;
+    const { window, document, byId, status, calls } = await openPage({
+      "GET /api/auth/me": signedIn,
+      "GET /api/oauth/requests/req-1": waiting,
+      "GET /api/projects": twoProjects,
+      "POST /api/oauth/requests/req-1/approve": {
+        status: 200,
+        body: { redirectTo },
+      },
+    });
+    const boxes = [
+      ...document.querySelectorAll<HTMLInputElement>("#projects input"),
+    ];
+    const option = byId("individual-option");
+    const individual = byId<HTMLInputElement>("individual");
+
+    tick(window, boxes[0]);
+    expect(option.hidden).toBe(true);
+    tick(window, boxes[1]);
+    expect(option.hidden).toBe(false);
+
+    // The shared choice becomes the starting point of every project.
+    (level(document, "tasks", "read") as HTMLInputElement).click();
+    tick(window, individual);
+    expect(
+      [...document.querySelectorAll("#permission-tables caption")].map(
+        (caption) => caption.textContent,
+      ),
+    ).toEqual(["APP · App", "OPS · Operations"]);
+    const ofProject = (project: string, area: string, name: string) =>
+      document.querySelector<HTMLInputElement>(
+        `#permission-tables input[data-project="${project}"][data-area="${area}"][value="${name}"]`,
+      ) as HTMLInputElement;
+    expect(ofProject("p-app", "tasks", "read").checked).toBe(true);
+    expect(ofProject("p-ops", "tasks", "read").checked).toBe(true);
+    expect(ofProject("p-ops", "tasks", "read").getAttribute("aria-label")).toBe(
+      "Tasks in OPS · Operations: Read",
+    );
+
+    ofProject("p-ops", "tasks", "write").click();
+    ofProject("p-ops", "board", "none").click();
+    submit(window, byId("consent"));
+
+    await vi.waitFor(() => {
+      expect(status.textContent).toContain("Approved");
+    });
+    expect(calls.at(-1)?.body).toEqual({
+      projectIds: ["p-app", "p-ops"],
+      projectPermissions: {
+        "p-app": { tasks: "read", board: "write", project: "write" },
+        "p-ops": { tasks: "write", board: "none", project: "write" },
+      },
+    });
+  });
+
+  it("goes back to one set when fewer than two projects stay ticked", async () => {
+    const { window, document, byId, calls } = await openPage({
+      "GET /api/auth/me": signedIn,
+      "GET /api/oauth/requests/req-1": waiting,
+      "GET /api/projects": twoProjects,
+      "POST /api/oauth/requests/req-1/approve": {
+        status: 200,
+        body: { redirectTo: `${REDIRECT}?code=one-time` },
+      },
+    });
+    const boxes = [
+      ...document.querySelectorAll<HTMLInputElement>("#projects input"),
+    ];
+
+    tick(window, boxes[0]);
+    tick(window, boxes[1]);
+    tick(window, byId<HTMLInputElement>("individual"));
+    (
+      document.querySelector(
+        '#permission-tables input[data-project="p-ops"][data-area="tasks"][value="read"]',
+      ) as HTMLInputElement
+    ).click();
+    tick(window, boxes[0]);
+
+    // One project is left: its set carries on in the single table.
+    expect(byId("individual-option").hidden).toBe(true);
+    expect(document.querySelectorAll("#permission-tables table")).toHaveLength(
+      1,
+    );
+    expect(level(document, "tasks", "read")?.checked).toBe(true);
+
+    submit(window, byId("consent"));
+    await vi.waitFor(() => {
+      expect(calls.at(-1)?.key).toBe("POST /api/oauth/requests/req-1/approve");
+    });
+    expect(calls.at(-1)?.body).toEqual({
+      projectIds: ["p-ops"],
+      permissions: { tasks: "read", board: "write", project: "write" },
+    });
+  });
+
   it("ticks the only project for you", async () => {
     const { document, byId } = await openPage({
       "GET /api/auth/me": signedIn,

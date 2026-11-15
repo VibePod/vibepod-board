@@ -129,32 +129,50 @@
         gap: 8px;
         align-items: center;
       }
-      #permissions {
+      .permissions {
         width: 100%;
         border-collapse: collapse;
         font-size: 14px;
       }
-      #permissions th,
-      #permissions td {
-        padding: 6px 4px;
-        border-top: 1px solid var(--border);
+      .permissions + .permissions {
+        margin-top: 12px;
       }
-      #permissions thead th {
-        border-top: 0;
-        font-weight: 600;
-      }
-      #permissions th[scope="row"] {
+      .permissions caption {
+        padding: 6px 4px 2px;
         font-weight: 600;
         text-align: left;
       }
-      #permissions th[scope="row"] span {
+      .permissions th,
+      .permissions td {
+        padding: 6px 4px;
+        border-top: 1px solid var(--border);
+      }
+      .permissions thead th {
+        border-top: 0;
+        font-weight: 600;
+      }
+      .permissions th[scope="row"] {
+        font-weight: 600;
+        text-align: left;
+      }
+      .permissions th[scope="row"] span {
         display: block;
         font-weight: 400;
       }
-      #permissions td,
-      #permissions th[scope="col"]:not(:first-child) {
+      .permissions td,
+      .permissions th[scope="col"]:not(:first-child) {
         width: 52px;
         text-align: center;
+      }
+      #individual-option {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 8px;
+        font-size: 14px;
+      }
+      #individual-option[hidden] {
+        display: none;
       }
       .actions {
         display: flex;
@@ -216,18 +234,12 @@
         </fieldset>
         <fieldset>
           <legend>Permissions</legend>
-          <p class="muted">What it may read or change, the same in each ticked project.</p>
-          <table id="permissions">
-            <thead>
-              <tr>
-                <th scope="col"></th>
-                <th scope="col">None</th>
-                <th scope="col">Read</th>
-                <th scope="col">Write</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+          <p class="muted">What it may read or change in the ticked projects.</p>
+          <label id="individual-option" hidden>
+            <input type="checkbox" id="individual" />
+            Set permissions for each project
+          </label>
+          <div id="permission-tables"></div>
         </fieldset>
         <p class="muted">
           After your decision the browser returns to <code id="redirect"></code>.
@@ -306,51 +318,119 @@
         };
 
         const LEVELS = { none: "None", read: "Read", write: "Write" };
+        const individual = byId("individual");
+        // What the forms hold: the areas and projects as loaded, one set shared by the
+        // ticked projects, and a set per project while they are set individually.
+        let areas = [];
+        let projects = [];
+        let shared = {};
+        let byProject = {};
 
-        const selectedPermissions = () =>
-          Object.fromEntries(
-            [...document.querySelectorAll("#permissions input:checked")].map((radio) => [
-              radio.name.slice("permission-".length),
-              radio.value,
-            ]),
-          );
+        // The highest level of every area: the full access a token gets when nothing is
+        // narrowed.
+        const fullAccess = () =>
+          Object.fromEntries(areas.map((area) => [area.key, area.levels[area.levels.length - 1]]));
 
-        // One row per area with a radio for each level it offers. The highest level is
-        // preselected, which is the full access a token gets when nothing is narrowed.
-        const renderPermissions = (areas) => {
-          const rows = areas.map((area) => {
-            const description = document.createElement("span");
-            description.className = "muted";
-            description.textContent = area.description;
-            const name = document.createElement("th");
-            name.scope = "row";
-            name.append(area.label, description);
-            const cells = Object.keys(LEVELS).map((level) => {
-              const cell = document.createElement("td");
-              if (area.levels.includes(level)) {
-                const radio = document.createElement("input");
-                radio.type = "radio";
-                radio.name = `permission-${area.key}`;
-                radio.value = level;
-                radio.checked = level === area.levels[area.levels.length - 1];
-                radio.setAttribute("aria-label", `${area.label}: ${LEVELS[level]}`);
-                cell.append(radio);
-              }
+        const projectLabel = (projectId) => {
+          const project = projects.find((candidate) => candidate.id === projectId);
+          return project ? `${project.key} · ${project.title}` : projectId;
+        };
+
+        // One row per area with a radio for each level it offers. Without `projectId` it
+        // is the table every ticked project shares.
+        const permissionTable = (set, projectId) => {
+          const heading = document.createElement("tr");
+          heading.append(
+            ...["", ...Object.values(LEVELS)].map((label) => {
+              const cell = document.createElement("th");
+              cell.scope = "col";
+              cell.textContent = label;
               return cell;
-            });
-            const row = document.createElement("tr");
-            row.append(name, ...cells);
-            return row;
-          });
-          document.querySelector("#permissions tbody").replaceChildren(...rows);
+            }),
+          );
+          const head = document.createElement("thead");
+          head.append(heading);
+          const body = document.createElement("tbody");
+          body.append(
+            ...areas.map((area) => {
+              const description = document.createElement("span");
+              description.className = "muted";
+              description.textContent = area.description;
+              const name = document.createElement("th");
+              name.scope = "row";
+              name.append(area.label, description);
+              const cells = Object.keys(LEVELS).map((level) => {
+                const cell = document.createElement("td");
+                if (area.levels.includes(level)) {
+                  const radio = document.createElement("input");
+                  radio.type = "radio";
+                  radio.name = `permission-${projectId ? `${projectId}-` : ""}${area.key}`;
+                  radio.value = level;
+                  radio.checked = set[area.key] === level;
+                  radio.dataset.area = area.key;
+                  radio.dataset.project = projectId || "";
+                  const where = projectId ? ` in ${projectLabel(projectId)}` : "";
+                  radio.setAttribute("aria-label", `${area.label}${where}: ${LEVELS[level]}`);
+                  cell.append(radio);
+                }
+                return cell;
+              });
+              const row = document.createElement("tr");
+              row.append(name, ...cells);
+              return row;
+            }),
+          );
+          const table = document.createElement("table");
+          table.className = "permissions";
+          if (projectId) {
+            const caption = document.createElement("caption");
+            caption.textContent = projectLabel(projectId);
+            table.append(caption);
+          } else {
+            table.id = "permissions";
+          }
+          table.append(head, body);
+          return table;
+        };
+
+        // Draws the tables for the ticked projects: one shared table, or one per project
+        // when the admin sets them individually, which is offered from two projects on.
+        const renderPermissions = () => {
+          const ticked = selectedProjects();
+          if (ticked.length < 2 && individual.checked) {
+            // One table again: it continues with the set of the project that is left.
+            individual.checked = false;
+            shared = { ...(byProject[ticked[0]] || shared) };
+          }
+          byId("individual-option").hidden = ticked.length < 2;
+          const tables = individual.checked
+            ? ticked.map((projectId) => {
+                // A project ticked later starts from full access.
+                byProject[projectId] = byProject[projectId] || fullAccess();
+                return permissionTable(byProject[projectId], projectId);
+              })
+            : [permissionTable(shared)];
+          byId("permission-tables").replaceChildren(...tables);
+        };
+
+        // What approving sends: one set for all projects, or a set for each.
+        const chosenPermissions = () => {
+          if (!individual.checked) {
+            return { permissions: shared };
+          }
+          return {
+            projectPermissions: Object.fromEntries(
+              selectedProjects().map((projectId) => [projectId, byProject[projectId]]),
+            ),
+          };
         };
 
         const showConsent = async () => {
           let request;
-          let projects;
-          let areas;
+          let loadedProjects;
+          let loadedAreas;
           try {
-            [request, projects, areas] = await Promise.all([
+            [request, loadedProjects, loadedAreas] = await Promise.all([
               api(requestPath),
               api("/api/projects"),
               api("/api/permission-areas"),
@@ -367,8 +447,13 @@
           }
           byId("client-name").textContent = request.item.clientName;
           byId("redirect").textContent = request.item.redirectUri;
-          renderProjects(projects.items);
-          renderPermissions(areas.items);
+          areas = loadedAreas.items;
+          projects = loadedProjects.items;
+          shared = fullAccess();
+          byProject = {};
+          individual.checked = false;
+          renderProjects(projects);
+          renderPermissions();
           show(consent);
         };
 
@@ -414,13 +499,32 @@
 
         byId("projects").addEventListener("change", () => {
           approve.disabled = selectedProjects().length === 0;
+          renderPermissions();
+        });
+
+        individual.addEventListener("change", () => {
+          const ticked = selectedProjects();
+          if (individual.checked) {
+            // Every project starts from the shared choice.
+            byProject = Object.fromEntries(ticked.map((projectId) => [projectId, { ...shared }]));
+          } else {
+            shared = { ...(byProject[ticked[0]] || shared) };
+          }
+          renderPermissions();
+        });
+
+        byId("permission-tables").addEventListener("change", (event) => {
+          const { area, project } = event.target.dataset;
+          if (area) {
+            (project ? byProject[project] : shared)[area] = event.target.value;
+          }
         });
 
         consent.addEventListener("submit", (event) => {
           event.preventDefault();
           decide(
             "approve",
-            { projectIds: selectedProjects(), permissions: selectedPermissions() },
+            { projectIds: selectedProjects(), ...chosenPermissions() },
             "Approved. Returning to the agent…",
           );
         });
