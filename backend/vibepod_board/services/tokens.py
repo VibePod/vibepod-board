@@ -1,13 +1,15 @@
-"""Project-scoped API/MCP tokens. Only a SHA-256 hash is stored; the raw token is shown once."""
+"""Project-scoped API/MCP tokens, each with a permission level per area. Only a SHA-256 hash
+is stored; the raw token is shown once."""
 
 import hashlib
 import secrets
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 
 from sqlalchemy import delete, update
 from sqlmodel import Session, col, select
 
+from vibepod_board import permissions as policy
 from vibepod_board.errors import BadRequest, NotFound
 from vibepod_board.schemas import ApiTokenSummary, CreatedApiToken, ProjectRef, now
 from vibepod_board.services.common import new_id, normalize_list, require_projects, transactional
@@ -26,6 +28,7 @@ def hash_token(token: str) -> str:
 class AuthenticatedToken:
     token_id: str
     project_ids: list[str]
+    permissions: dict[str, str] = field(default_factory=lambda: dict(policy.FULL_ACCESS))
 
 
 def _summary(session: Session, row: ApiTokenRow) -> ApiTokenSummary:
@@ -39,6 +42,7 @@ def _summary(session: Session, row: ApiTokenRow) -> ApiTokenSummary:
         id=row.id,
         name=row.name,
         projects=[ProjectRef(id=id, key=key, title=title) for id, key, title in projects],
+        permissions=policy.stored(row.permissions),
         created_at=row.created_at,
         last_used_at=row.last_used_at,
         revoked_at=row.revoked_at,
@@ -67,7 +71,13 @@ def list_tokens(session: Session) -> list[ApiTokenSummary]:
 
 
 @transactional
-def create_token(session: Session, name: str, project_ids: Sequence[str]) -> CreatedApiToken:
+def create_token(
+    session: Session,
+    name: str,
+    project_ids: Sequence[str],
+    permissions: Mapping[str, str] | None = None,
+) -> CreatedApiToken:
+    """`permissions` names a level per area; without it the token gets full access."""
     if not name.strip():
         raise BadRequest("Token name is required")
     if not project_ids:
@@ -75,7 +85,11 @@ def create_token(session: Session, name: str, project_ids: Sequence[str]) -> Cre
     require_projects(session, project_ids)
     token = create_raw_token()
     row = ApiTokenRow(
-        id=new_id(), name=name.strip(), token_hash=hash_token(token), created_at=now()
+        id=new_id(),
+        name=name.strip(),
+        token_hash=hash_token(token),
+        permissions=policy.normalize(permissions),
+        created_at=now(),
     )
     session.add(row)
     session.flush()
@@ -89,7 +103,9 @@ def update_token(
     token_id: str,
     name: str | None = None,
     project_ids: Sequence[str] | None = None,
+    permissions: Mapping[str, str] | None = None,
 ) -> ApiTokenSummary:
+    """Changes what is given. A permission set replaces the token's whole set."""
     row = _require_token(session, token_id)
     next_name = name.strip() if name is not None else row.name
     if not next_name:
@@ -100,6 +116,8 @@ def update_token(
             raise BadRequest("At least one project is required")
         require_projects(session, project_ids)
         _replace_projects(session, row.id, project_ids)
+    if permissions is not None:
+        row.permissions = policy.normalize(permissions)
     session.flush()
     return _summary(session, row)
 
@@ -116,19 +134,22 @@ def revoke_token(session: Session, token_id: str) -> ApiTokenSummary:
 @transactional
 def authenticate_token(session: Session, token: str) -> AuthenticatedToken | None:
     """Valid, unrevoked tokens are stamped with `last_used_at`."""
-    token_id = session.execute(
+    found = session.execute(
         update(ApiTokenRow)
         .where(
             col(ApiTokenRow.token_hash) == hash_token(token), col(ApiTokenRow.revoked_at).is_(None)
         )
         .values(last_used_at=now())
-        .returning(ApiTokenRow.id)
-    ).scalar_one_or_none()
-    if token_id is None:
+        .returning(ApiTokenRow.id, ApiTokenRow.permissions)
+    ).first()
+    if found is None:
         return None
+    token_id, granted = found
     project_ids = session.exec(
         select(ApiTokenProjectRow.project_id)
         .where(ApiTokenProjectRow.token_id == token_id)
         .order_by(col(ApiTokenProjectRow.project_id))
     ).all()
-    return AuthenticatedToken(token_id=token_id, project_ids=list(project_ids))
+    return AuthenticatedToken(
+        token_id=token_id, project_ids=list(project_ids), permissions=policy.stored(granted)
+    )

@@ -253,18 +253,29 @@ class DocumentUpdate(ApiModel):
     linked_card_ids: list[StrictStr] | None = None
 
 
+# Area to level, such as {"tasks": "read"}; GET /api/permission-areas lists both. An area
+# that is not named gets no access.
+Permissions = dict[StrictStr, StrictStr]
+
+
 class TokenCreate(ApiModel):
     name: RequiredText
     project_ids: Annotated[Ids, Field(min_length=1)]
+    # Full access when omitted.
+    permissions: Permissions | None = None
 
 
 class TokenUpdate(ApiModel):
     name: RequiredText | None = None
     project_ids: Annotated[Ids, Field(min_length=1)] | None = None
+    # Replaces the token's whole permission set.
+    permissions: Permissions | None = None
 
 
 class OAuthApproval(ApiModel):
     project_ids: Annotated[Ids, Field(min_length=1)]
+    # Full access when omitted.
+    permissions: Permissions | None = None
 
 
 class WorkerRegistration(ApiModel):

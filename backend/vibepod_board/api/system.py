@@ -2,14 +2,16 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response
 
+from vibepod_board import permissions
 from vibepod_board.api.models import LoginRequest
-from vibepod_board.api.responses import AuthState
+from vibepod_board.api.responses import AuthState, Items
 from vibepod_board.auth import (
     AdminSession,
     SessionsDep,
     Unauthorized,
     current_admin_session,
 )
+from vibepod_board.schemas import PermissionArea
 
 router = APIRouter(prefix="/api", tags=["system"])
 
@@ -107,6 +109,13 @@ def me(admin: AdminSessionDep) -> AuthState:
     if admin is None:
         return AuthState(authenticated=False)
     return AuthState(authenticated=True, username=admin.username)
+
+
+@router.get("/permission-areas")
+def permission_areas() -> Items[PermissionArea]:
+    """The areas a token's permissions cover, with the levels each offers and the MCP tools
+    a level unlocks. Needs no login: the forms that choose permissions read it."""
+    return Items(items=permissions.area_catalog())
 
 
 @router.get("/mcp-info")

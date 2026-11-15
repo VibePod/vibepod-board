@@ -344,6 +344,8 @@ class ApiTokenSummary(ApiModel):
     id: str
     name: str
     projects: list[ProjectRef]
+    # The level the token has in each area: none, read or write.
+    permissions: dict[str, str]
     created_at: Timestamp
     last_used_at: Timestamp | None = None
     revoked_at: Timestamp | None = None
@@ -396,6 +398,19 @@ class BoardState(ApiModel):
 class CreatedApiToken(ApiModel):
     item: ApiTokenSummary
     token: str
+
+
+class PermissionArea(ApiModel):
+    """One area a token's permissions cover, as the forms that edit them show it."""
+
+    key: str
+    label: str
+    description: str
+    # The levels the area offers, lowest first.
+    levels: list[str]
+    # The MCP tools each level unlocks; write includes the read tools.
+    read_tools: list[str]
+    write_tools: list[str]
 
 
 class OAuthRequestInfo(ApiModel):

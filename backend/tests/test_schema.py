@@ -9,7 +9,7 @@ from sqlmodel import SQLModel
 
 from vibepod_board.db import migrate
 
-HEAD = "0017"
+HEAD = "0018"
 LEGACY_SCHEMA = (Path(__file__).parent / "legacy_schema.sql").read_text()
 # The first TS schema, before repository, readiness and dependency support.
 ORIGINAL_SCHEMA = LEGACY_SCHEMA.split("alter table board_cards add column", 1)[0]
@@ -363,4 +363,45 @@ def test_0016_keeps_existing_projects_active(empty_db: Engine) -> None:
     with empty_db.connect() as connection:
         rows = connection.execute(text("select key, archived_at from projects")).all()
     assert [tuple(row) for row in rows] == [("APP", None)]
+    assert revision(empty_db) == HEAD
+
+
+def test_0018_gives_existing_tokens_and_sign_ins_full_access(empty_db: Engine) -> None:
+    from alembic import command
+
+    from vibepod_board.db import alembic_config
+    from vibepod_board.permissions import FULL_ACCESS
+
+    config = alembic_config()
+    with empty_db.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "0017")
+        connection.execute(
+            text(
+                "insert into api_tokens (id, name, token_hash, created_at) "
+                "values ('t1', 'Agent', 'hash', now())"
+            )
+        )
+        connection.execute(
+            text(
+                "insert into oauth_clients (client_id, info, created_at) "
+                "values ('c1', '{}'::jsonb, now())"
+            )
+        )
+        connection.execute(
+            text(
+                "insert into oauth_requests (id, client_id, redirect_uri, "
+                "redirect_uri_provided_explicitly, code_challenge, created_at, expires_at) "
+                "values ('r1', 'c1', 'http://127.0.0.1:1/callback', true, 'challenge', "
+                "now(), now())"
+            )
+        )
+
+    migrate(empty_db)
+
+    with empty_db.connect() as connection:
+        token = connection.execute(text("select permissions from api_tokens")).scalar_one()
+        request = connection.execute(text("select permissions from oauth_requests")).scalar_one()
+    assert token == FULL_ACCESS
+    assert request == FULL_ACCESS
     assert revision(empty_db) == HEAD
