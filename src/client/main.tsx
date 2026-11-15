@@ -80,6 +80,7 @@ import {
   endpointOptions,
   integrationExamples,
   integrationExamplesForToken,
+  oauthExamples,
 } from "../shared/integrationExamples.js";
 import {
   type ApiTokenProject,
@@ -4721,7 +4722,7 @@ const App = () => {
           </SimpleGrid>
 
           <Stack gap="md">
-            {integrationExamples.map((example) => (
+            {[...integrationExamples, ...oauthExamples].map((example) => (
               <Paper
                 className="integration-example"
                 withBorder

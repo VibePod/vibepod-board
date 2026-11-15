@@ -161,6 +161,21 @@ describe("admin auth UI", () => {
     expect(mcp.getAttribute("target")).toBe("_blank");
   });
 
+  it("documents OAuth sign-in for Pi in the integration guide", async () => {
+    stubAdminFetch();
+
+    const AppShell = await loadAppShell();
+    render(<AppShell />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "MCP Integration" }),
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "Pi with OAuth sign-in" }),
+    ).toBeTruthy();
+    expect(screen.getByText(/pi mcp login vibepod-board/)).toBeTruthy();
+  });
+
   it("shows the assigned projects for each token", async () => {
     stubAdminFetch([
       {
