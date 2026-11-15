@@ -2,12 +2,12 @@
 
 A request lives from `/authorize` until its code is exchanged for a token, it is denied, or
 it expires. Only a SHA-256 hash of the code is stored. The token a sign-in issues is an
-ordinary API token, scoped to the projects the admin chose.
+ordinary API token, scoped to the projects and permissions the admin chose.
 """
 
 import hashlib
 import secrets
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import timedelta
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -15,6 +15,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from sqlalchemy import delete
 from sqlmodel import Session, col, select
 
+from vibepod_board import permissions as policy
 from vibepod_board.errors import BadRequest, NotFound
 from vibepod_board.schemas import CreatedApiToken, OAuthRequestInfo, now
 from vibepod_board.services import tokens
@@ -109,17 +110,25 @@ def pending_request(session: Session, request_id: str) -> OAuthRequestInfo:
 
 
 @transactional
-def approve_request(session: Session, request_id: str, project_ids: Sequence[str]) -> str:
-    """Gives the request a one-time code for the chosen projects and returns the URL that
-    takes the browser back to the client."""
+def approve_request(
+    session: Session,
+    request_id: str,
+    project_ids: Sequence[str],
+    permissions: Mapping[str, str] | None = None,
+) -> str:
+    """Gives the request a one-time code for the chosen projects and permissions, full
+    access unless some are chosen, and returns the URL that takes the browser back to the
+    client."""
     row = _waiting(session, request_id)
     chosen = normalize_list(project_ids)
     if not chosen:
         raise BadRequest("Select at least one project")
     require_projects(session, chosen)
+    granted = policy.normalize(permissions)
     code = secrets.token_urlsafe(32)
     row.code_hash = _hash(code)
     row.project_ids = chosen
+    row.permissions = granted
     row.expires_at = now() + CODE_TTL
     session.flush()
     return _redirect(row.redirect_uri, code=code, state=row.state)
@@ -152,11 +161,13 @@ def redeem_code(session: Session, code: str) -> CreatedApiToken | None:
         .where(
             col(OAuthRequestRow.code_hash) == _hash(code), col(OAuthRequestRow.expires_at) > now()
         )
-        .returning(OAuthRequestRow.client_id, OAuthRequestRow.project_ids)
+        .returning(
+            OAuthRequestRow.client_id, OAuthRequestRow.project_ids, OAuthRequestRow.permissions
+        )
     ).first()
     if spent is None:
         return None
-    client_id, project_ids = spent
+    client_id, project_ids, granted = spent
     name = f"{_client_name(session, client_id)} (OAuth)"
     # `create_token` commits the session, and with it the delete above.
-    return tokens.create_token(session, name, project_ids)
+    return tokens.create_token(session, name, project_ids, policy.stored(granted))

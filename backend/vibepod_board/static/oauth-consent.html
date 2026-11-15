@@ -129,6 +129,33 @@
         gap: 8px;
         align-items: center;
       }
+      #permissions {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+      #permissions th,
+      #permissions td {
+        padding: 6px 4px;
+        border-top: 1px solid var(--border);
+      }
+      #permissions thead th {
+        border-top: 0;
+        font-weight: 600;
+      }
+      #permissions th[scope="row"] {
+        font-weight: 600;
+        text-align: left;
+      }
+      #permissions th[scope="row"] span {
+        display: block;
+        font-weight: 400;
+      }
+      #permissions td,
+      #permissions th[scope="col"]:not(:first-child) {
+        width: 52px;
+        text-align: center;
+      }
       .actions {
         display: flex;
         gap: 8px;
@@ -179,12 +206,28 @@
       <form id="consent" hidden>
         <p><strong id="client-name"></strong> wants to work on this board.</p>
         <p class="muted">
-          It gets a token for the projects you tick, and only those. You can revoke the token
-          at any time under API Tokens.
+          It gets a token for the projects you tick, and only those, with the permissions you
+          choose. You can change the permissions or revoke the token at any time under API
+          Tokens.
         </p>
         <fieldset>
           <legend>Projects</legend>
           <ul id="projects"></ul>
+        </fieldset>
+        <fieldset>
+          <legend>Permissions</legend>
+          <p class="muted">What it may read or change, the same in each ticked project.</p>
+          <table id="permissions">
+            <thead>
+              <tr>
+                <th scope="col"></th>
+                <th scope="col">None</th>
+                <th scope="col">Read</th>
+                <th scope="col">Write</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
         </fieldset>
         <p class="muted">
           After your decision the browser returns to <code id="redirect"></code>.
@@ -262,11 +305,56 @@
           approve.disabled = selectedProjects().length === 0;
         };
 
+        const LEVELS = { none: "None", read: "Read", write: "Write" };
+
+        const selectedPermissions = () =>
+          Object.fromEntries(
+            [...document.querySelectorAll("#permissions input:checked")].map((radio) => [
+              radio.name.slice("permission-".length),
+              radio.value,
+            ]),
+          );
+
+        // One row per area with a radio for each level it offers. The highest level is
+        // preselected, which is the full access a token gets when nothing is narrowed.
+        const renderPermissions = (areas) => {
+          const rows = areas.map((area) => {
+            const description = document.createElement("span");
+            description.className = "muted";
+            description.textContent = area.description;
+            const name = document.createElement("th");
+            name.scope = "row";
+            name.append(area.label, description);
+            const cells = Object.keys(LEVELS).map((level) => {
+              const cell = document.createElement("td");
+              if (area.levels.includes(level)) {
+                const radio = document.createElement("input");
+                radio.type = "radio";
+                radio.name = `permission-${area.key}`;
+                radio.value = level;
+                radio.checked = level === area.levels[area.levels.length - 1];
+                radio.setAttribute("aria-label", `${area.label}: ${LEVELS[level]}`);
+                cell.append(radio);
+              }
+              return cell;
+            });
+            const row = document.createElement("tr");
+            row.append(name, ...cells);
+            return row;
+          });
+          document.querySelector("#permissions tbody").replaceChildren(...rows);
+        };
+
         const showConsent = async () => {
           let request;
           let projects;
+          let areas;
           try {
-            [request, projects] = await Promise.all([api(requestPath), api("/api/projects")]);
+            [request, projects, areas] = await Promise.all([
+              api(requestPath),
+              api("/api/projects"),
+              api("/api/permission-areas"),
+            ]);
           } catch (error) {
             if (error.status === 401) {
               show(login);
@@ -280,6 +368,7 @@
           byId("client-name").textContent = request.item.clientName;
           byId("redirect").textContent = request.item.redirectUri;
           renderProjects(projects.items);
+          renderPermissions(areas.items);
           show(consent);
         };
 
@@ -329,7 +418,11 @@
 
         consent.addEventListener("submit", (event) => {
           event.preventDefault();
-          decide("approve", { projectIds: selectedProjects() }, "Approved. Returning to the agent…");
+          decide(
+            "approve",
+            { projectIds: selectedProjects(), permissions: selectedPermissions() },
+            "Approved. Returning to the agent…",
+          );
         });
 
         byId("deny").addEventListener("click", () => {

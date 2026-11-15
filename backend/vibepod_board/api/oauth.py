@@ -42,9 +42,12 @@ def get_request(request_id: str, session: SessionDep, _admin: AdminDep) -> Item[
 def approve_request(
     request_id: str, body: OAuthApproval, session: SessionDep, _admin: AdminDep
 ) -> Redirect:
-    """Approves the sign-in for the given projects. `redirectTo` takes the browser back to
-    the client with a one-time code."""
-    return Redirect(redirect_to=oauth.approve_request(session, request_id, body.project_ids))
+    """Approves the sign-in for the given projects and permissions; without `permissions`
+    the token gets full access. `redirectTo` takes the browser back to the client with a
+    one-time code."""
+    return Redirect(
+        redirect_to=oauth.approve_request(session, request_id, body.project_ids, body.permissions)
+    )
 
 
 @router.post("/api/oauth/requests/{request_id}/deny")

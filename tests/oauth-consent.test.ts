@@ -35,6 +35,32 @@ const twoProjects: Reply = {
   },
 };
 
+const areas: Reply = {
+  status: 200,
+  body: {
+    items: [
+      {
+        key: "tasks",
+        label: "Tasks",
+        description: "Tasks with their dependencies.",
+        levels: ["none", "read", "write"],
+      },
+      {
+        key: "board",
+        label: "Board",
+        description: "Board cards.",
+        levels: ["none", "read", "write"],
+      },
+      {
+        key: "project",
+        label: "Project",
+        description: "Project settings.",
+        levels: ["none", "write"],
+      },
+    ],
+  },
+};
+
 const signedIn: Reply = {
   status: 200,
   body: { authenticated: true, username: "admin" },
@@ -42,8 +68,12 @@ const signedIn: Reply = {
 
 const signedOut: Reply = { status: 200, body: { authenticated: false } };
 
-/** Opens the consent page in jsdom; `routes` answers `fetch` by "METHOD path". */
-const openPage = async (routes: Routes, search = "?request=req-1") => {
+/**
+ * Opens the consent page in jsdom; `routes` answers `fetch` by "METHOD path". The
+ * permission areas are served unless a test replaces them.
+ */
+const openPage = async (given: Routes, search = "?request=req-1") => {
+  const routes: Routes = { "GET /api/permission-areas": areas, ...given };
   const calls: { key: string; body: unknown }[] = [];
   const { window } = new JSDOM(page, {
     runScripts: "dangerously",
@@ -91,6 +121,12 @@ const tick = (window: JSDOM["window"], box: HTMLInputElement) => {
   box.dispatchEvent(new window.Event("change", { bubbles: true }));
 };
 
+/** The radio for `level` of the permission area `area`, if the area offers it. */
+const level = (document: Document, area: string, name: string) =>
+  document.querySelector<HTMLInputElement>(
+    `#permissions input[name="permission-${area}"][value="${name}"]`,
+  );
+
 describe("OAuth consent page", () => {
   it("asks a signed-in admin which projects the client may use", async () => {
     const { document, byId } = await openPage({
@@ -137,7 +173,65 @@ describe("OAuth consent page", () => {
     expect(byId("consent").hidden).toBe(true);
     expect(calls.at(-1)).toEqual({
       key: "POST /api/oauth/requests/req-1/approve",
-      body: { projectIds: ["p-ops"] },
+      body: {
+        projectIds: ["p-ops"],
+        permissions: { tasks: "write", board: "write", project: "write" },
+      },
+    });
+  });
+
+  it("offers every area with its levels, starting from full access", async () => {
+    const { document } = await openPage({
+      "GET /api/auth/me": signedIn,
+      "GET /api/oauth/requests/req-1": waiting,
+      "GET /api/projects": twoProjects,
+    });
+
+    expect(
+      [...document.querySelectorAll("#permissions tbody th")].map(
+        (cell) => cell.firstChild?.textContent,
+      ),
+    ).toEqual(["Tasks", "Board", "Project"]);
+    expect(document.querySelector("#permissions tbody")?.textContent).toContain(
+      "Tasks with their dependencies.",
+    );
+    expect(level(document, "tasks", "write")?.checked).toBe(true);
+    expect(level(document, "tasks", "read")?.checked).toBe(false);
+    expect(level(document, "tasks", "read")?.getAttribute("aria-label")).toBe(
+      "Tasks: Read",
+    );
+    expect(level(document, "project", "write")?.checked).toBe(true);
+    expect(level(document, "project", "read")).toBeNull();
+  });
+
+  it("approves with the permissions the admin chose", async () => {
+    const redirectTo = `${REDIRECT}?code=one-time&state=st4te`;
+    const { window, document, byId, status, calls } = await openPage({
+      "GET /api/auth/me": signedIn,
+      "GET /api/oauth/requests/req-1": waiting,
+      "GET /api/projects": twoProjects,
+      "POST /api/oauth/requests/req-1/approve": {
+        status: 200,
+        body: { redirectTo },
+      },
+    });
+
+    tick(
+      window,
+      document.querySelector<HTMLInputElement>(
+        "#projects input",
+      ) as HTMLInputElement,
+    );
+    (level(document, "tasks", "read") as HTMLInputElement).click();
+    (level(document, "project", "none") as HTMLInputElement).click();
+    submit(window, byId("consent"));
+
+    await vi.waitFor(() => {
+      expect(status.textContent).toContain("Approved");
+    });
+    expect(calls.at(-1)?.body).toEqual({
+      projectIds: ["p-app"],
+      permissions: { tasks: "read", board: "write", project: "none" },
     });
   });
 

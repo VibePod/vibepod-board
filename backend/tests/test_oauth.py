@@ -325,3 +325,72 @@ def test_consent_page_is_served_and_cannot_be_framed(client: TestClient) -> None
     assert page.headers["cache-control"] == "no-store"
     assert "/api/oauth/requests/" in page.text
     assert "/oauth/consent" not in client.get("/openapi.json").json()["paths"]
+
+
+def test_sign_in_issues_a_token_with_the_approved_permissions(
+    client: TestClient, projects: dict[str, str]
+) -> None:
+    client_id, verifier, request_id = begin(client)
+    login(client)
+
+    approved = redirect_query(
+        client.post(
+            f"/api/oauth/requests/{request_id}/approve",
+            json={
+                "projectIds": [projects["app"]],
+                "permissions": {"tasks": "read", "documents": "write"},
+            },
+        )
+    )
+    issued = exchange(client, client_id, approved["code"], verifier)
+    assert issued.status_code == 200, issued.text
+
+    permissions = client.get("/api/tokens").json()["items"][0]["permissions"]
+    assert permissions == {
+        "tasks": "read",
+        "board": "none",
+        "documents": "write",
+        "github": "none",
+        "automation": "none",
+        "project": "none",
+    }
+
+    token = TestClient(client.app)
+    headers = bearer(issued.json()["access_token"])
+    assert token.get("/api/ideas", headers=headers).status_code == 200
+    refused = token.post("/api/ideas", headers=headers, json={"title": "New"})
+    assert refused.status_code == 403
+    assert refused.json() == {"error": "This token has no write access to Tasks"}
+
+
+def test_sign_in_without_chosen_permissions_issues_a_token_with_full_access(
+    client: TestClient, projects: dict[str, str]
+) -> None:
+    client_id, verifier, request_id = begin(client)
+    login(client)
+
+    approved = redirect_query(
+        client.post(
+            f"/api/oauth/requests/{request_id}/approve", json={"projectIds": [projects["app"]]}
+        )
+    )
+    assert exchange(client, client_id, approved["code"], verifier).status_code == 200
+
+    permissions = client.get("/api/tokens").json()["items"][0]["permissions"]
+    assert set(permissions.values()) == {"write"}
+
+
+def test_approval_refuses_unknown_permissions_and_keeps_the_request_pending(
+    client: TestClient, projects: dict[str, str]
+) -> None:
+    _client_id, _verifier, request_id = begin(client)
+    login(client)
+
+    refused = client.post(
+        f"/api/oauth/requests/{request_id}/approve",
+        json={"projectIds": [projects["app"]], "permissions": {"billing": "read"}},
+    )
+
+    assert refused.status_code == 400
+    assert refused.json() == {"error": "Unknown permission area: billing"}
+    assert client.get(f"/api/oauth/requests/{request_id}").status_code == 200
