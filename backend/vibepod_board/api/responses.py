@@ -26,6 +26,12 @@ class AuthState(ApiModel):
     username: str | None = None
 
 
+class Redirect(ApiModel):
+    """Where the browser has to go next."""
+
+    redirect_to: str
+
+
 class SyncResult(ApiModel):
     mode: str
     card: BaseModel

@@ -22,6 +22,8 @@ from vibepod_board.api import (
     documents,
     github,
     ideas,
+    mcp_docs,
+    oauth,
     projects,
     system,
     tokens,
@@ -143,7 +145,9 @@ def _mount_client(app: FastAPI, public_dir: Path) -> None:
 
     @app.get("/{path:path}", include_in_schema=False)
     async def spa(path: str) -> FileResponse:
-        if path.startswith(("api/", "mcp")):
+        # OAuth clients probe /.well-known for documents this server may not have; the
+        # client's index.html there would read as a broken answer, not as "not here".
+        if path.startswith(("api/", "mcp", ".well-known/")):
             raise NotFound(f"Not found: /{path}")
         candidate = (public_dir / path).resolve()
         if path and candidate.is_file() and candidate.is_relative_to(public_dir.resolve()):
@@ -158,9 +162,8 @@ def create_app(
     github_transport: httpx.BaseTransport | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
-    mcp_app = create_mcp_server(settings, github_transport).http_app(
-        path="/mcp", stateless_http=True, json_response=True
-    )
+    mcp_server = create_mcp_server(settings, github_transport)
+    mcp_app = mcp_server.http_app(path="/mcp", stateless_http=True, json_response=True)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -192,6 +195,8 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.settings = settings
+    # /api/mcp-tools reads its catalog from the server itself.
+    app.state.mcp_server = mcp_server
     # Tests swap in an httpx.MockTransport; None talks to api.github.com.
     app.state.github_transport = github_transport
     app.state.sessions = sessions or AdminSessionManager(
@@ -203,12 +208,28 @@ def create_app(
     )
     _install_error_handlers(app)
 
-    for module in (system, projects, ideas, github, board, documents, tokens, workers):
+    for module in (
+        system,
+        projects,
+        ideas,
+        github,
+        board,
+        documents,
+        tokens,
+        workers,
+        mcp_docs,
+        oauth,
+    ):
         app.include_router(module.router)
     # FastMCP ships a Starlette app whose middleware verifies the bearer token. Routing
     # /mcp to the whole app keeps that middleware, and unlike a mount it does not turn the
     # endpoint into /mcp/.
     app.router.routes.append(Route("/mcp", endpoint=mcp_app, methods=["GET", "POST", "DELETE"]))
+    # The same goes for the OAuth endpoints FastMCP serves beside it: the discovery
+    # documents under /.well-known, /register, /authorize and /token.
+    for route in mcp_app.routes:
+        if isinstance(route, Route) and route.path != "/mcp":
+            app.router.routes.append(Route(route.path, endpoint=mcp_app))
 
     if settings.public_dir:
         _mount_client(app, settings.public_dir)

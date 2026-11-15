@@ -263,6 +263,10 @@ class TokenUpdate(ApiModel):
     project_ids: Annotated[Ids, Field(min_length=1)] | None = None
 
 
+class OAuthApproval(ApiModel):
+    project_ids: Annotated[Ids, Field(min_length=1)]
+
+
 class WorkerRegistration(ApiModel):
     project_id: RequiredText
     # Shown on the board and used as the holder of the claims the worker takes.

@@ -17,7 +17,7 @@ export const endpointOptions = [
     label: "From VibePod containers",
     url: dockerMcpUrl,
     description:
-      "Use this when Claude Code, Codex, Auggie, or OpenCode runs inside the VibePod Docker network.",
+      "Use this when Claude Code, Codex, Auggie, OpenCode, or Pi runs inside the VibePod Docker network.",
   },
   {
     label: "From the Docker host",
@@ -110,6 +110,52 @@ http_headers = { Authorization = "${authorizationHeader(token)}" }`,
 }`,
     verify: "Run opencode mcp list, then prompt OpenCode to use vibepod-board.",
   },
+  {
+    id: "pi",
+    name: "Pi",
+    description:
+      "Add vibepod-board to the project's MCP servers with a bearer token.",
+    docsUrl: "https://pi.dev/docs/latest/mcp",
+    command: `pi mcp add vibepod-board --local --url http://vibepod-board:3000/mcp --header "Authorization=${authorizationHeader(token)}"`,
+    configLabel: "Project .pi/mcp.json alternative",
+    config: `{
+  "mcpServers": {
+    "vibepod-board": {
+      "url": "http://vibepod-board:3000/mcp",
+      "headers": {
+        "Authorization": "${authorizationHeader(token)}"
+      }
+    }
+  }
+}`,
+    verify: "Start pi in the project and trust it, then run pi mcp list.",
+  },
 ];
 
 export const integrationExamples = integrationExamplesForToken();
+
+/** Clients that sign in through the browser and need no token in their configuration. */
+export const oauthExamples: IntegrationExample[] = [
+  {
+    id: "pi-oauth",
+    name: "Pi with OAuth sign-in",
+    description:
+      "No token to copy: Pi opens the board in your browser, you pick the projects, and the board issues a token for exactly those.",
+    docsUrl: "https://pi.dev/docs/latest/mcp",
+    command: `pi mcp add vibepod-board --local --url ${hostMcpUrl} --oauth-callback-port 8765
+pi mcp login vibepod-board`,
+    configLabel: "Project .pi/mcp.json alternative",
+    config: `{
+  "mcpServers": {
+    "vibepod-board": {
+      "url": "${hostMcpUrl}",
+      "oauth": {
+        "callbackPort": 8765
+      }
+    }
+  }
+}`,
+    verify:
+      "Start pi in the project and trust it before signing in. Inside a VibePod container, forward localhost:3000 to the board first; the README has the two files.",
+  },
+];

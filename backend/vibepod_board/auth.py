@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Annotated
 
 from fastapi import Depends, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlmodel import Session
 
 from vibepod_board.access import AccessContext, AdminAccess, admin_access, token_access
@@ -65,6 +66,15 @@ class AdminSessionManager:
         self._sessions.pop(session_id, None)
 
 
+# Declares bearer auth in the OpenAPI spec, so Swagger UI offers "Authorize". It never
+# rejects a request itself: `resolve_access` still reads the header, after the admin cookie.
+bearer_scheme = HTTPBearer(
+    auto_error=False,
+    description="Project-scoped API token, created by an admin under API Tokens. "
+    "Admin-only routes answer a token with 403; they need the admin session cookie.",
+)
+
+
 def parse_bearer_token(authorization: str | None) -> str | None:
     if not authorization or not authorization.startswith("Bearer "):
         return None
@@ -100,6 +110,7 @@ def require_access(
     request: Request,
     session: SessionDep,
     admin: Annotated[AdminSession | None, Depends(current_admin_session)],
+    _bearer: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
 ) -> AccessContext:
     access = resolve_access(session, admin, request.headers.get("authorization"))
     if access is None:

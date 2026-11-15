@@ -80,6 +80,7 @@ import {
   endpointOptions,
   integrationExamples,
   integrationExamplesForToken,
+  oauthExamples,
 } from "../shared/integrationExamples.js";
 import {
   type ApiTokenProject,
@@ -4684,6 +4685,20 @@ const App = () => {
             Connect running agent containers to vibepod-board over Streamable
             HTTP.
           </Text>
+          <Group gap="lg">
+            <Anchor href="/docs" target="_blank" rel="noreferrer">
+              <Group gap={6}>
+                <ExternalLink size={16} />
+                REST API reference
+              </Group>
+            </Anchor>
+            <Anchor href="/mcp-docs" target="_blank" rel="noreferrer">
+              <Group gap={6}>
+                <ExternalLink size={16} />
+                MCP tool reference
+              </Group>
+            </Anchor>
+          </Group>
           <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
             {endpointOptions.map((endpoint) => (
               <Paper
@@ -4707,7 +4722,7 @@ const App = () => {
           </SimpleGrid>
 
           <Stack gap="md">
-            {integrationExamples.map((example) => (
+            {[...integrationExamples, ...oauthExamples].map((example) => (
               <Paper
                 className="integration-example"
                 withBorder

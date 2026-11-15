@@ -143,6 +143,39 @@ describe("admin auth UI", () => {
     ).toBeTruthy();
   });
 
+  it("links to the REST and MCP references from the integration guide", async () => {
+    stubAdminFetch();
+
+    const AppShell = await loadAppShell();
+    render(<AppShell />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "MCP Integration" }),
+    );
+
+    const rest = await screen.findByRole("link", {
+      name: "REST API reference",
+    });
+    const mcp = await screen.findByRole("link", { name: "MCP tool reference" });
+    expect(rest.getAttribute("href")).toBe("/docs");
+    expect(mcp.getAttribute("href")).toBe("/mcp-docs");
+    expect(mcp.getAttribute("target")).toBe("_blank");
+  });
+
+  it("documents OAuth sign-in for Pi in the integration guide", async () => {
+    stubAdminFetch();
+
+    const AppShell = await loadAppShell();
+    render(<AppShell />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "MCP Integration" }),
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "Pi with OAuth sign-in" }),
+    ).toBeTruthy();
+    expect(screen.getByText(/pi mcp login vibepod-board/)).toBeTruthy();
+  });
+
   it("shows the assigned projects for each token", async () => {
     stubAdminFetch([
       {

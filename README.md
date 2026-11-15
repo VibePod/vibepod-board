@@ -8,7 +8,9 @@ Planning board for organizing projects, refining tasks, marking ready work onto 
 - **Client** (`src/client/`): React 18, Mantine 8, built with Vite and served by the backend.
 - **Storage**: PostgreSQL 16.
 
-The OpenAPI schema is served at `/openapi.json`, with interactive docs at `/docs`.
+The OpenAPI schema is served at `/openapi.json`, with interactive docs at `/docs` (Swagger UI) and `/redoc`. The **Authorize** button in Swagger UI takes a project token and sends it as `Authorization: Bearer <token>` on "Try it out".
+
+The MCP tools are documented at `/mcp-docs`: a searchable page with every tool's description, parameters and schemas, generated from the running server. The same catalog is served as JSON at `GET /api/mcp-tools`. Both need no login, like `/docs`.
 
 ## Run with Docker
 
@@ -137,7 +139,11 @@ Opening and reading pull requests uses the same `GITHUB_TOKEN` as issue sync (se
 - `POST /api/tokens`
 - `PATCH /api/tokens/:id`
 - `POST /api/tokens/:id/revoke`
+- `GET /api/oauth/requests/:id`
+- `POST /api/oauth/requests/:id/approve`
+- `POST /api/oauth/requests/:id/deny`
 - `GET /api/mcp-info`
+- `GET /api/mcp-tools`
 
 `GET /api/ideas`, `GET /api/board`, `GET /api/board/archived`, `GET /api/documents`, and `GET /api/work-order` accept `projectId` query params for project-scoped reads.
 
@@ -166,6 +172,65 @@ MCP requires:
 
 ```text
 Authorization: Bearer <project-token>
+```
+
+Browse the tools with their parameters and schemas at `/mcp-docs` (as JSON: `GET /api/mcp-tools`).
+
+### OAuth sign-in
+
+An MCP client that supports OAuth needs only the URL, no token in its configuration. Tested with Pi 1.5:
+
+```json
+{ "mcpServers": { "board": { "url": "http://localhost:3000/mcp" } } }
+```
+
+On the first connection the client opens the board in your browser. Sign in as the admin, tick the projects the client may use, and approve. The client receives a token for exactly those projects. It is listed under **API Tokens** as `<client name> (OAuth)` and stays valid until you revoke it there; no refresh tokens are issued. Tokens pasted into a client's configuration keep working as before.
+
+OAuth clients only send credentials to an authorization server over HTTPS or on a loopback address. `PUBLIC_URL` is the URL browsers and clients use for the board. It defaults to `http://localhost:<PORT>` and must be an `https://` URL, or `http://` on `localhost`, `127.0.0.1` or `[::1]`; the board refuses to start otherwise. A client that reaches the board under another name, such as `http://vibepod-board:3000` inside the VibePod network, cannot sign in this way and uses a pasted token.
+
+Clients register themselves, and only redirect addresses on the local machine are accepted. The admin's decision goes through `GET /api/oauth/requests/:id` and `POST /api/oauth/requests/:id/approve` or `/deny`, which need the admin session.
+
+#### Pi
+
+Run these in the project folder. `--local` writes `.pi/mcp.json` there, so the board is configured for this project only; the file holds no token.
+
+```bash
+pi mcp add vibepod-board --local --url http://localhost:3000/mcp --oauth-callback-port 8765
+pi                           # choose "Trust" so Pi reads the project's MCP file, then quit
+pi mcp login vibepod-board   # sign in, tick the projects, approve
+pi mcp list                  # shows vibepod-board as connected
+```
+
+#### Pi in a VibePod container
+
+Inside the container the board is `vibepod-board:3000`, a name OAuth sign-in does not accept. Two forwards make the board reachable as `localhost:3000` in the container and let your browser reach Pi's callback port. Add two files to the project (VibePod 0.21 or newer):
+
+`.vibepod/overlay/pi/Dockerfile`
+
+```dockerfile
+RUN apt-get update && apt-get install -y --no-install-recommends socat \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+`.vibepod/config.yaml`
+
+```yaml
+version: 1
+agents:
+  pi:
+    ports:
+      - "127.0.0.1:8765:8766"
+    init:
+      - "socat TCP-LISTEN:3000,bind=127.0.0.1,fork,reuseaddr TCP:vibepod-board:3000 &"
+      - "socat TCP-LISTEN:8766,fork,reuseaddr TCP:127.0.0.1:8765 &"
+```
+
+Then run the same commands through `vp` and open the sign-in address Pi prints in the browser on the host:
+
+```bash
+vp run pi -- mcp add vibepod-board --local --url http://localhost:3000/mcp --oauth-callback-port 8765
+vp run pi                             # choose "Trust", then quit
+vp run pi -- mcp login vibepod-board
 ```
 
 Tools:

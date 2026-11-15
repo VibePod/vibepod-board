@@ -10,6 +10,7 @@ services:
     environment:
       PORT: "3000"
       HOST: "0.0.0.0"
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
       DATABASE_URL: postgres://${POSTGRES_USER:-vibepod}:${POSTGRES_PASSWORD:-vibepod}@postgres:5432/${POSTGRES_DB:-vibepod_board}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin-password}
