@@ -96,3 +96,16 @@ def test_openapi_declares_bearer_auth_on_protected_routes_only(client: TestClien
         ("/api/mcp-tools", "get"),
     ):
         assert "security" not in paths[path][method], path
+
+
+def test_catalog_names_the_permission_each_tool_needs(client: TestClient) -> None:
+    needs = client.get("/api/mcp-tools").json()["permissions"]
+
+    assert needs["list_ideas"] == {"area": "tasks", "label": "Tasks", "level": "read"}
+    assert needs["claim_next_task"] == {
+        "area": "automation",
+        "label": "Automation",
+        "level": "write",
+    }
+    # Listing the token's projects needs no permission.
+    assert "list_projects" not in needs

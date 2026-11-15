@@ -8,6 +8,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from vibepod_board import permissions
+
 router = APIRouter(tags=["system"])
 
 PAGE = Path(__file__).resolve().parents[1] / "static" / "mcp-docs.html"
@@ -20,16 +22,31 @@ def _wire(model: BaseModel) -> dict[str, Any]:
     return data
 
 
+def _needs(tool_name: str) -> dict[str, str] | None:
+    """The token permission a tool needs, or nothing for a tool every token may call."""
+    needs = permissions.TOOL_PERMISSIONS.get(tool_name)
+    if not isinstance(needs, permissions.Requirement):
+        return None
+    return {
+        "area": needs.area.value,
+        "label": permissions.POLICY[needs.area].label,
+        "level": needs.level.value,
+    }
+
+
 @router.get("/api/mcp-tools")
 async def mcp_tools(request: Request) -> dict[str, Any]:
-    """Every tool and resource the MCP server lists, read from the server on each request."""
+    """Every tool and resource the MCP server lists, read from the server on each request,
+    and the token permission each tool needs."""
     server = request.app.state.mcp_server
+    tools = await server.list_tools()
     return {
         "server": {"name": server.name, "version": server.version},
         "endpoint": "/mcp",
         "transport": "streamable-http",
         "auth": "bearer",
-        "tools": [_wire(tool.to_mcp_tool()) for tool in await server.list_tools()],
+        "tools": [_wire(tool.to_mcp_tool()) for tool in tools],
+        "permissions": {tool.name: needs for tool in tools if (needs := _needs(tool.name))},
         "resources": [
             _wire(resource.to_mcp_resource()) for resource in await server.list_resources()
         ],

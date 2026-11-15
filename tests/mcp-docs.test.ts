@@ -75,6 +75,9 @@ const catalog = {
       description: "Full state as JSON.",
     },
   ],
+  permissions: {
+    claim_thing: { area: "automation", label: "Automation", level: "write" },
+  },
 };
 
 type CatalogResponse = {
@@ -174,6 +177,16 @@ describe("MCP reference page", () => {
       ["mixed", "(string | integer)[]", "no", "", ""],
     ]);
     expect(texts(document, "#detail summary")).toEqual(["Input schema"]);
+  });
+
+  it("names the token permission a tool needs", async () => {
+    const claim = await openPage("#claim_thing");
+    expect(texts(claim.document, "#detail .badge.permission")).toEqual([
+      "needs Automation · write",
+    ]);
+
+    const list = await openPage("#list_things");
+    expect(texts(list.document, "#detail .badge.permission")).toEqual([]);
   });
 
   it("shows catalog text as text, never as markup", async () => {
