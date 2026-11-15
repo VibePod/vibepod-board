@@ -1,9 +1,11 @@
-"""Who is calling: the admin (full access) or an API token scoped to a set of projects."""
+"""Who is calling: the admin (full access) or an API token scoped to a set of projects,
+with a permission level per area."""
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 
 from vibepod_board.errors import Forbidden
+from vibepod_board.permissions import FULL_ACCESS
 
 
 @dataclass(frozen=True)
@@ -16,6 +18,9 @@ class AdminAccess:
 class TokenAccess:
     token_id: str
     project_ids: tuple[str, ...]
+    # Area to level; see `vibepod_board.permissions`. The REST dependency and the MCP
+    # middleware check it before a route or tool runs.
+    permissions: Mapping[str, str] = field(default_factory=lambda: dict(FULL_ACCESS), hash=False)
     kind: str = field(default="token", init=False)
 
 
@@ -26,8 +31,15 @@ def admin_access(username: str) -> AdminAccess:
     return AdminAccess(username)
 
 
-def token_access(token_id: str, project_ids: list[str] | tuple[str, ...]) -> TokenAccess:
-    return TokenAccess(token_id, tuple(project_ids))
+def token_access(
+    token_id: str,
+    project_ids: list[str] | tuple[str, ...],
+    permissions: Mapping[str, str] | None = None,
+) -> TokenAccess:
+    """Without `permissions` the token has full access."""
+    return TokenAccess(
+        token_id, tuple(project_ids), dict(FULL_ACCESS if permissions is None else permissions)
+    )
 
 
 def is_admin(access: AccessContext) -> bool:

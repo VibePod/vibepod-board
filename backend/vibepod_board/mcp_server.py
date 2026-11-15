@@ -2,22 +2,28 @@
 
 Clients authenticate with the same project-scoped `vbp_…` tokens as the REST API, pasted
 into their configuration or obtained by OAuth sign-in. `BoardOAuthProvider` resolves a
-token to its projects; every tool then runs with that token's access. Tool names and
-arguments match the TypeScript server, so existing agent configurations keep working.
+token to its projects and permissions; `PermissionMiddleware` hides and refuses the tools
+outside those permissions, and every tool then runs with that token's access. Tool names
+and arguments match the TypeScript server, so existing agent configurations keep working.
 """
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Annotated, Any, Literal
 
 import httpx
+import mcp_types as mt
 from fastmcp import FastMCP
-from fastmcp.exceptions import ToolError
+from fastmcp.exceptions import ResourceError, ToolError
+from fastmcp.resources.base import Resource, ResourceResult
 from fastmcp.server.dependencies import get_access_token
+from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
+from fastmcp.tools.base import Tool, ToolResult
 from pydantic import AwareDatetime, BaseModel, Field
 from sqlmodel import Session
 
-from vibepod_board.access import AccessContext, require_admin, token_access
+from vibepod_board import permissions
+from vibepod_board.access import AccessContext, TokenAccess, require_admin, token_access
 from vibepod_board.api.deps import worker_timing
 from vibepod_board.api.github import github_client
 from vibepod_board.api.models import BoardCardBatchItem, IdeaBatchItem, RunCommitInput
@@ -155,11 +161,83 @@ class ReadinessInput(BaseModel):
     reason: Annotated[str, Field(min_length=1)]
 
 
-def current_access() -> AccessContext:
+def current_access() -> TokenAccess:
     access_token = get_access_token()
     if access_token is None:
         raise ToolError("Authentication required")
-    return token_access(access_token.client_id, access_token.claims.get("project_ids", []))
+    claims = access_token.claims
+    # A token whose claims carry no permissions has none: only what needs no permission.
+    return token_access(
+        access_token.client_id, claims.get("project_ids", []), claims.get("permissions", {})
+    )
+
+
+def _listing_permissions() -> dict[str, str] | None:
+    """The permissions a listing is narrowed to. `None` outside an MCP request: the
+    reference at /api/mcp-tools reads the whole catalog from the server without a token.
+    Over /mcp a request never gets here without one."""
+    return None if get_access_token() is None else dict(current_access().permissions)
+
+
+class PermissionMiddleware(Middleware):
+    """Applies the token's permissions before a tool or resource is reached. Listings
+    leave out what the token may not use, so an agent only sees the tools it can call."""
+
+    async def on_list_tools(
+        self,
+        context: MiddlewareContext[mt.ListToolsRequest],
+        call_next: CallNext[mt.ListToolsRequest, Sequence[Tool]],
+    ) -> Sequence[Tool]:
+        tools = await call_next(context)
+        granted = _listing_permissions()
+        if granted is None:
+            return tools
+        return [
+            tool
+            for tool in tools
+            if permissions.permits(granted, permissions.TOOL_PERMISSIONS.get(tool.name))
+        ]
+
+    async def on_call_tool(
+        self,
+        context: MiddlewareContext[mt.CallToolRequestParams],
+        call_next: CallNext[mt.CallToolRequestParams, ToolResult],
+    ) -> ToolResult:
+        needs = permissions.TOOL_PERMISSIONS.get(context.message.name)
+        try:
+            permissions.require(current_access().permissions, needs)
+        except BoardError as error:
+            raise ToolError(error.message) from error
+        return await call_next(context)
+
+    async def on_list_resources(
+        self,
+        context: MiddlewareContext[mt.ListResourcesRequest],
+        call_next: CallNext[mt.ListResourcesRequest, Sequence[Resource]],
+    ) -> Sequence[Resource]:
+        resources = await call_next(context)
+        granted = _listing_permissions()
+        if granted is None:
+            return resources
+        return [
+            resource
+            for resource in resources
+            if all(
+                permissions.permits(granted, needs)
+                for needs in permissions.RESOURCE_PERMISSIONS.get(str(resource.uri), (None,))
+            )
+        ]
+
+    async def on_read_resource(
+        self,
+        context: MiddlewareContext[mt.ReadResourceRequestParams],
+        call_next: CallNext[mt.ReadResourceRequestParams, ResourceResult],
+    ) -> ResourceResult:
+        try:
+            permissions.require_resource(current_access().permissions, str(context.message.uri))
+        except BoardError as error:
+            raise ResourceError(error.message) from error
+        return await call_next(context)
 
 
 def _json(value: Any) -> Any:
@@ -189,7 +267,12 @@ def run(operation: Callable[[Session, AccessContext], Any]) -> dict[str, Any]:
 def create_mcp_server(
     settings: Settings, github_transport: httpx.BaseTransport | None = None
 ) -> FastMCP:
-    mcp = FastMCP("vibepod-board", version="0.1.0", auth=BoardOAuthProvider(settings.public_url))
+    mcp = FastMCP(
+        "vibepod-board",
+        version="0.1.0",
+        auth=BoardOAuthProvider(settings.public_url),
+        middleware=[PermissionMiddleware()],
+    )
 
     def github() -> GitHubClient:
         try:

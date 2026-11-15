@@ -144,7 +144,8 @@ class BoardOAuthProvider(OAuthProvider):
         raise TokenError(error="invalid_grant", error_description="Refresh tokens are not issued")
 
     async def load_access_token(self, token: str) -> AccessToken | None:
-        """Accepts unrevoked board API tokens and carries their project scope as a claim."""
+        """Accepts unrevoked board API tokens and carries their projects and permissions
+        as claims."""
         authenticated = await _db(lambda session: tokens.authenticate_token(session, token))
         if authenticated is None:
             return None
@@ -152,7 +153,10 @@ class BoardOAuthProvider(OAuthProvider):
             token=token,
             client_id=authenticated.token_id,
             scopes=[],
-            claims={"project_ids": authenticated.project_ids},
+            claims={
+                "project_ids": authenticated.project_ids,
+                "permissions": authenticated.permissions,
+            },
         )
 
     async def revoke_token(self, token: AccessToken | RefreshToken) -> None:
