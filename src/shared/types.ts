@@ -475,10 +475,28 @@ export type UpdateDocumentInput = Partial<
 
 export type ApiTokenProject = Pick<Project, "id" | "key" | "title">;
 
+export type PermissionLevel = "none" | "read" | "write";
+
+/** The level a token has in each area, keyed by the area's key. */
+export type TokenPermissions = Record<string, PermissionLevel>;
+
+/** One area of the board that a token's permissions cover. */
+export type PermissionArea = {
+  key: string;
+  label: string;
+  description: string;
+  /** The levels the area offers, lowest first. */
+  levels: PermissionLevel[];
+  /** The MCP tools each level unlocks; write includes the read tools. */
+  readTools: string[];
+  writeTools: string[];
+};
+
 export type ApiTokenSummary = {
   id: string;
   name: string;
   projects: ApiTokenProject[];
+  permissions: TokenPermissions;
   createdAt: string;
   lastUsedAt?: string;
   revokedAt?: string;
@@ -487,11 +505,15 @@ export type ApiTokenSummary = {
 export type CreateApiTokenInput = {
   name: string;
   projectIds: string[];
+  /** Full access when omitted. */
+  permissions?: TokenPermissions;
 };
 
 export type UpdateApiTokenInput = {
   name?: string;
   projectIds?: string[];
+  /** Replaces the token's whole permission set. */
+  permissions?: TokenPermissions;
 };
 
 export type CreatedApiTokenResponse = {
