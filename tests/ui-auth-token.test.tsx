@@ -4,7 +4,11 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ApiTokenSummary, PermissionArea } from "../src/shared/types.js";
+import type {
+  ApiTokenSummary,
+  PermissionArea,
+  TokenPermissions,
+} from "../src/shared/types.js";
 
 beforeEach(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -81,13 +85,37 @@ const fullAccess = {
   project: "write",
 } as const;
 
+const reader = { tasks: "read", board: "none", project: "none" } as const;
+
+const app = (permissions: TokenPermissions = fullAccess) => ({
+  id: "project-1",
+  key: "APP",
+  title: "App",
+  permissions,
+});
+
+const api = (permissions: TokenPermissions = fullAccess) => ({
+  id: "project-2",
+  key: "API",
+  title: "Api",
+  permissions,
+});
+
 const token = (overrides: Partial<ApiTokenSummary> = {}): ApiTokenSummary => ({
   id: "token-1",
   name: "Codex",
-  projects: [{ id: "project-1", key: "APP", title: "App" }],
-  permissions: fullAccess,
+  projects: [app()],
   createdAt: "2026-09-01T10:00:00Z",
   ...overrides,
+});
+
+const boardProject = (id: string, key: string, title: string) => ({
+  id,
+  key,
+  title,
+  summary: "",
+  createdAt: "",
+  updatedAt: "",
 });
 
 /** The body of the one request that was sent with `method` to `path`. */
@@ -103,7 +131,10 @@ const sentBody = (
   return JSON.parse((calls[0][1] as RequestInit).body as string);
 };
 
-const stubAdminFetch = (tokens: ApiTokenSummary[] = []) => {
+const stubAdminFetch = (
+  tokens: ApiTokenSummary[] = [],
+  projects = [boardProject("project-1", "APP", "App")],
+) => {
   const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
     if (path === "/api/permission-areas") {
       return json({ items: permissionAreas });
@@ -112,14 +143,14 @@ const stubAdminFetch = (tokens: ApiTokenSummary[] = []) => {
       const body = JSON.parse(init.body as string);
       return json(
         {
-          item: token({ name: body.name, permissions: body.permissions }),
+          item: token({ name: body.name, projects: [app(body.permissions)] }),
           token: "vbp_new",
         },
         201,
       );
     }
     if (path.startsWith("/api/tokens/") && init?.method === "PATCH") {
-      return json({ item: token(JSON.parse(init.body as string)) });
+      return json({ item: token() });
     }
     if (path === "/api/auth/me") {
       return new Response(
@@ -131,21 +162,7 @@ const stubAdminFetch = (tokens: ApiTokenSummary[] = []) => {
       );
     }
     if (path === "/api/projects") {
-      return new Response(
-        JSON.stringify({
-          items: [
-            {
-              id: "project-1",
-              key: "APP",
-              title: "App",
-              summary: "",
-              createdAt: "",
-              updatedAt: "",
-            },
-          ],
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
+      return json({ items: projects });
     }
     if (path === "/api/ideas") {
       return new Response(JSON.stringify({ items: [] }), {
@@ -274,7 +291,14 @@ describe("admin auth UI", () => {
       token({
         id: "token-2",
         name: "Old client",
-        projects: [{ id: "project-2", key: "OPS", title: "Operations" }],
+        projects: [
+          {
+            id: "project-2",
+            key: "OPS",
+            title: "Operations",
+            permissions: fullAccess,
+          },
+        ],
         createdAt: "2026-08-01T10:00:00Z",
         revokedAt: "2026-08-15T10:00:00Z",
       }),
@@ -304,12 +328,12 @@ describe("admin auth UI", () => {
       token({
         id: "token-2",
         name: "Reader",
-        permissions: { tasks: "read", board: "write", project: "none" },
+        projects: [app({ tasks: "read", board: "write", project: "none" })],
       }),
       token({
         id: "token-3",
         name: "Locked out",
-        permissions: { tasks: "none", board: "none", project: "none" },
+        projects: [app({ tasks: "none", board: "none", project: "none" })],
       }),
     ]);
 
@@ -326,6 +350,19 @@ describe("admin auth UI", () => {
     expect(list.getByText("No access")).toBeTruthy();
   });
 
+  it("shows the permissions of each project when they differ", async () => {
+    stubAdminFetch([token({ projects: [app(reader), api()] })]);
+
+    await openTokenManager();
+
+    const perProject = within(
+      await screen.findByRole("list", { name: "Permissions by project" }),
+    );
+    expect(
+      perProject.getAllByRole("listitem").map((item) => item.textContent),
+    ).toEqual(["APP · AppTasks · Read", "API · ApiFull access"]);
+  });
+
   it("offers each area the levels it has, starting from full access", async () => {
     stubAdminFetch();
 
@@ -339,6 +376,12 @@ describe("admin auth UI", () => {
     const project = await levels("Project");
     expect(project.queryByRole("radio", { name: "Read" })).toBeNull();
     expect(screen.getByText("Tasks with their dependencies.")).toBeTruthy();
+    // One project: nothing to set individually.
+    expect(
+      screen.queryByRole("switch", {
+        name: "Set permissions for each project",
+      }),
+    ).toBeNull();
   });
 
   it("creates a token with the chosen permissions", async () => {
@@ -383,36 +426,119 @@ describe("admin auth UI", () => {
     expect(await checked("Project", "Write")).toBe(true);
   });
 
+  const editAccess = async (name: string) => {
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Edit access" }),
+    );
+    return within(
+      await screen.findByRole("group", { name: `Access of ${name}` }),
+    );
+  };
+
   it("changes the permissions of an existing token", async () => {
-    const fetchMock = stubAdminFetch([
-      token({ permissions: { tasks: "read", board: "none", project: "none" } }),
-    ]);
+    const fetchMock = stubAdminFetch([token({ projects: [app(reader)] })]);
 
     await openTokenManager();
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Edit permissions" }),
-    );
-    const editor = within(
-      await screen.findByRole("group", { name: "Permissions of Codex" }),
-    );
+    const editor = await editAccess("Codex");
     await userEvent.click(
       within(editor.getByRole("radiogroup", { name: "Board" })).getByRole(
         "radio",
-        {
-          name: "Write",
-        },
+        { name: "Write" },
       ),
     );
-    await userEvent.click(
-      editor.getByRole("button", { name: "Save permissions" }),
-    );
+    await userEvent.click(editor.getByRole("button", { name: "Save access" }));
 
     expect(sentBody(fetchMock, "PATCH", "/api/tokens/token-1")).toEqual({
+      projectIds: ["project-1"],
       permissions: { tasks: "read", board: "write", project: "none" },
     });
+    expect(screen.queryByRole("group", { name: "Access of Codex" })).toBeNull();
+  });
+
+  it("adds a project to an existing token", async () => {
+    const fetchMock = stubAdminFetch(
+      [token({ projects: [app(reader)] })],
+      [
+        boardProject("project-1", "APP", "App"),
+        boardProject("project-2", "API", "Api"),
+      ],
+    );
+
+    await openTokenManager();
+    const editor = await editAccess("Codex");
+    await userEvent.type(
+      editor.getByRole("textbox", { name: /Projects/ }),
+      "API",
+    );
+    await userEvent.keyboard("{ArrowDown}{Enter}");
+    await userEvent.click(editor.getByRole("button", { name: "Save access" }));
+
+    expect(sentBody(fetchMock, "PATCH", "/api/tokens/token-1")).toEqual({
+      projectIds: ["project-1", "project-2"],
+      permissions: reader,
+    });
+  });
+
+  it("sets the permissions of each project individually", async () => {
+    const fetchMock = stubAdminFetch(
+      [token({ projects: [app(reader), api(reader)] })],
+      [
+        boardProject("project-1", "APP", "App"),
+        boardProject("project-2", "API", "Api"),
+      ],
+    );
+
+    await openTokenManager();
+    const editor = await editAccess("Codex");
+    // The projects agree, so they start with one shared table.
+    expect(editor.getAllByRole("radiogroup", { name: "Tasks" })).toHaveLength(
+      1,
+    );
+    await userEvent.click(
+      editor.getByRole("switch", { name: "Set permissions for each project" }),
+    );
+    await userEvent.click(
+      within(
+        editor.getByRole("radiogroup", { name: "Tasks in API - Api" }),
+      ).getByRole("radio", { name: "Write" }),
+    );
+    await userEvent.click(editor.getByRole("button", { name: "Save access" }));
+
+    expect(sentBody(fetchMock, "PATCH", "/api/tokens/token-1")).toEqual({
+      projectIds: ["project-1", "project-2"],
+      projectPermissions: {
+        "project-1": reader,
+        "project-2": { tasks: "write", board: "none", project: "none" },
+      },
+    });
+  });
+
+  it("opens a token whose projects differ project by project", async () => {
+    stubAdminFetch(
+      [token({ projects: [app(reader), api()] })],
+      [
+        boardProject("project-1", "APP", "App"),
+        boardProject("project-2", "API", "Api"),
+      ],
+    );
+
+    await openTokenManager();
+    const editor = await editAccess("Codex");
+
+    const individually = editor.getByRole<HTMLInputElement>("switch", {
+      name: "Set permissions for each project",
+    });
+    expect(individually.checked).toBe(true);
     expect(
-      screen.queryByRole("group", { name: "Permissions of Codex" }),
-    ).toBeNull();
+      within(
+        editor.getByRole("radiogroup", { name: "Tasks in APP - App" }),
+      ).getByRole<HTMLInputElement>("radio", { name: "Read" }).checked,
+    ).toBe(true);
+    expect(
+      within(
+        editor.getByRole("radiogroup", { name: "Tasks in API - Api" }),
+      ).getByRole<HTMLInputElement>("radio", { name: "Write" }).checked,
+    ).toBe(true);
   });
 
   it("does not offer to edit a revoked token", async () => {
@@ -421,8 +547,6 @@ describe("admin auth UI", () => {
     await openTokenManager();
 
     expect(await screen.findByText("Revoked")).toBeTruthy();
-    expect(
-      screen.queryByRole("button", { name: "Edit permissions" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit access" })).toBeNull();
   });
 });

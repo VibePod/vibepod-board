@@ -90,7 +90,6 @@ import {
   type BoardColumn,
   type BoardColumns,
   boardColumns,
-  type CreateApiTokenInput,
   type CreatedApiTokenResponse,
   type DocumentKind,
   documentKinds,
@@ -104,7 +103,6 @@ import {
   type ProjectBundle,
   type ReadinessEvent,
   type RemovedWorkersResponse,
-  type TokenPermissions,
   type Worker,
   type WorkerListResponse,
 } from "../shared/types.js";
@@ -189,7 +187,7 @@ import { TaskHistory } from "./TaskHistory.js";
 import { TaskReviews } from "./TaskReviews.js";
 import { TaskRuns } from "./TaskRuns.js";
 import {
-  TokenPermissionsEditor,
+  TokenAccessFields,
   TokenPermissionsSummary,
 } from "./TokenPermissions.js";
 import {
@@ -215,7 +213,12 @@ import {
 } from "./taskListUtils.js";
 import { taskNavigationFor } from "./taskNavigation.js";
 import { taskOverviewForIdea } from "./taskOverviewUtils.js";
-import { permissionsFor } from "./tokenPermissions.js";
+import {
+  accessDraftFor,
+  accessPayload,
+  emptyAccessDraft,
+  type TokenAccessDraft,
+} from "./tokenPermissions.js";
 import { formatTokenProjectLabel } from "./tokenProjects.js";
 import { WorkerActivity, WorkersIndicator } from "./Workers.js";
 import {
@@ -302,13 +305,18 @@ type CreatedTokenState = {
   name: string;
   token: string;
   projects: ApiTokenProject[];
-  permissions: TokenPermissions;
 } | null;
 
-/** The permissions being edited for an existing token. */
-type TokenPermissionsEdit = {
+/** A new token while its form is filled in. */
+type TokenDraft = {
+  name: string;
+  access: TokenAccessDraft;
+};
+
+/** The projects and permissions being edited for an existing token. */
+type TokenAccessEdit = {
   tokenId: string;
-  permissions: TokenPermissions;
+  access: TokenAccessDraft;
 } | null;
 
 const emptyColumns: BoardColumns = {
@@ -364,9 +372,9 @@ const emptyLoginDraft = (): LoginDraft => ({
   password: "",
 });
 
-const emptyTokenDraft = (): CreateApiTokenInput => ({
+const emptyTokenDraft = (): TokenDraft => ({
   name: "",
-  projectIds: [],
+  access: emptyAccessDraft(),
 });
 
 const initialNavigation = parseNavigationPath(window.location.pathname);
@@ -497,12 +505,9 @@ const App = () => {
   );
   const planningCardIdsRef = useRef(new Set<string>());
   const [createdToken, setCreatedToken] = useState<CreatedTokenState>(null);
-  const [tokenDraft, setTokenDraft] = useState<CreateApiTokenInput>(
-    emptyTokenDraft(),
-  );
+  const [tokenDraft, setTokenDraft] = useState<TokenDraft>(emptyTokenDraft());
   const [permissionAreas, setPermissionAreas] = useState<PermissionArea[]>([]);
-  const [tokenPermissionsEdit, setTokenPermissionsEdit] =
-    useState<TokenPermissionsEdit>(null);
+  const [tokenAccessEdit, setTokenAccessEdit] = useState<TokenAccessEdit>(null);
   const [workers, setWorkers] = useState<Worker[]>([]);
   // The card whose question is being answered, and the reviewed card being sent back.
   const [answerTarget, setAnswerTarget] = useState<BoardCard | null>(null);
@@ -631,7 +636,7 @@ const App = () => {
     setError("");
     setCreatedToken(null);
     setTokenDraft(emptyTokenDraft());
-    setTokenPermissionsEdit(null);
+    setTokenAccessEdit(null);
     setIsTokenManagerOpen(true);
     try {
       await Promise.all([loadTokens(), loadPermissionAreas()]);
@@ -647,19 +652,14 @@ const App = () => {
       const created = await api<CreatedApiTokenResponse>("/api/tokens", {
         method: "POST",
         body: JSON.stringify({
-          ...tokenDraft,
-          // Without the areas nothing was chosen, and the board grants full access.
-          permissions:
-            permissionAreas.length > 0
-              ? permissionsFor(permissionAreas, tokenDraft.permissions)
-              : undefined,
+          name: tokenDraft.name,
+          ...accessPayload(permissionAreas, tokenDraft.access),
         }),
       });
       setCreatedToken({
         name: created.item.name,
         token: created.token,
         projects: created.item.projects,
-        permissions: created.item.permissions,
       });
       setTokenDraft(emptyTokenDraft());
       await loadTokens();
@@ -674,21 +674,23 @@ const App = () => {
     await loadTokens();
   };
 
-  const saveTokenPermissions = async () => {
-    if (!tokenPermissionsEdit) {
+  const saveTokenAccess = async () => {
+    if (!tokenAccessEdit) {
       return;
     }
     setError("");
     try {
-      await api(`/api/tokens/${tokenPermissionsEdit.tokenId}`, {
+      await api(`/api/tokens/${tokenAccessEdit.tokenId}`, {
         method: "PATCH",
-        body: JSON.stringify({ permissions: tokenPermissionsEdit.permissions }),
+        body: JSON.stringify(
+          accessPayload(permissionAreas, tokenAccessEdit.access),
+        ),
       });
-      setTokenPermissionsEdit(null);
+      setTokenAccessEdit(null);
       await loadTokens();
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Failed to change permissions",
+        err instanceof Error ? err.message : "Failed to change the token",
       );
     }
   };
@@ -4602,7 +4604,7 @@ const App = () => {
                 <TokenProjects projects={createdToken.projects} />
                 <TokenPermissionsSummary
                   areas={permissionAreas}
-                  permissions={createdToken.permissions}
+                  projects={createdToken.projects}
                 />
                 <CopyableCode
                   value={createdToken.token}
@@ -4661,28 +4663,14 @@ const App = () => {
                   }
                   required
                 />
-                <MultiSelect
-                  label="Projects"
-                  value={tokenDraft.projectIds}
-                  onChange={(projectIds) =>
-                    setTokenDraft((current) => ({ ...current, projectIds }))
+                <TokenAccessFields
+                  areas={permissionAreas}
+                  projectOptions={projectOptions}
+                  draft={tokenDraft.access}
+                  onChange={(access) =>
+                    setTokenDraft((current) => ({ ...current, access }))
                   }
-                  data={projectOptions}
-                  searchable
-                  required
                 />
-                {permissionAreas.length > 0 && (
-                  <TokenPermissionsEditor
-                    areas={permissionAreas}
-                    value={permissionsFor(
-                      permissionAreas,
-                      tokenDraft.permissions,
-                    )}
-                    onChange={(permissions) =>
-                      setTokenDraft((current) => ({ ...current, permissions }))
-                    }
-                  />
-                )}
                 <Group justify="flex-end">
                   <Button type="submit" leftSection={<KeyRound size={16} />}>
                     Create Token
@@ -4721,7 +4709,7 @@ const App = () => {
                     <Box mt="xs">
                       <TokenPermissionsSummary
                         areas={permissionAreas}
-                        permissions={token.permissions}
+                        projects={token.projects}
                       />
                     </Box>
                     <Text c="dimmed" size="sm" mt="xs">
@@ -4732,21 +4720,21 @@ const App = () => {
                     </Text>
                   </Box>
                   <Group gap="xs" wrap="nowrap">
-                    {!token.revokedAt && permissionAreas.length > 0 && (
+                    {!token.revokedAt && (
                       <Button
                         type="button"
                         variant="default"
                         onClick={() =>
-                          setTokenPermissionsEdit({
+                          setTokenAccessEdit({
                             tokenId: token.id,
-                            permissions: permissionsFor(
+                            access: accessDraftFor(
                               permissionAreas,
-                              token.permissions,
+                              token.projects,
                             ),
                           })
                         }
                       >
-                        Edit permissions
+                        Edit access
                       </Button>
                     )}
                     <Button
@@ -4760,36 +4748,52 @@ const App = () => {
                     </Button>
                   </Group>
                 </Group>
-                {tokenPermissionsEdit?.tokenId === token.id && (
+                {tokenAccessEdit?.tokenId === token.id && (
                   <Stack
                     role="group"
-                    aria-label={`Permissions of ${token.name}`}
+                    aria-label={`Access of ${token.name}`}
                     gap="md"
                     mt="md"
                   >
-                    <TokenPermissionsEditor
+                    <TokenAccessFields
                       areas={permissionAreas}
-                      value={tokenPermissionsEdit.permissions}
-                      onChange={(permissions) =>
-                        setTokenPermissionsEdit({
-                          tokenId: token.id,
-                          permissions,
-                        })
+                      // An archived project is not offered for new tokens, but stays
+                      // listed on a token that has it.
+                      projectOptions={[
+                        ...projectOptions,
+                        ...token.projects
+                          .filter(
+                            (project) =>
+                              !projectOptions.some(
+                                (option) => option.value === project.id,
+                              ),
+                          )
+                          .map((project) => ({
+                            value: project.id,
+                            label: `${project.key} - ${project.title}`,
+                          })),
+                      ]}
+                      draft={tokenAccessEdit.access}
+                      onChange={(access) =>
+                        setTokenAccessEdit({ tokenId: token.id, access })
                       }
                     />
                     <Group justify="flex-end" gap="xs">
                       <Button
                         type="button"
                         variant="default"
-                        onClick={() => setTokenPermissionsEdit(null)}
+                        onClick={() => setTokenAccessEdit(null)}
                       >
                         Cancel
                       </Button>
                       <Button
                         type="button"
-                        onClick={() => void saveTokenPermissions()}
+                        disabled={
+                          tokenAccessEdit.access.projectIds.length === 0
+                        }
+                        onClick={() => void saveTokenAccess()}
                       >
-                        Save permissions
+                        Save access
                       </Button>
                     </Group>
                   </Stack>

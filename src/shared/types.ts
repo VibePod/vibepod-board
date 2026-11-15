@@ -473,7 +473,10 @@ export type UpdateDocumentInput = Partial<
   >
 >;
 
-export type ApiTokenProject = Pick<Project, "id" | "key" | "title">;
+/** A project a token is mapped to, with what the token may do in it. */
+export type ApiTokenProject = Pick<Project, "id" | "key" | "title"> & {
+  permissions: TokenPermissions;
+};
 
 export type PermissionLevel = "none" | "read" | "write";
 
@@ -496,7 +499,6 @@ export type ApiTokenSummary = {
   id: string;
   name: string;
   projects: ApiTokenProject[];
-  permissions: TokenPermissions;
   createdAt: string;
   lastUsedAt?: string;
   revokedAt?: string;
@@ -505,15 +507,20 @@ export type ApiTokenSummary = {
 export type CreateApiTokenInput = {
   name: string;
   projectIds: string[];
-  /** Full access when omitted. */
+  /** One set for every project; full access when omitted. */
   permissions?: TokenPermissions;
+  /** A set of its own for single projects, by project id. */
+  projectPermissions?: Record<string, TokenPermissions>;
 };
 
 export type UpdateApiTokenInput = {
   name?: string;
+  /** Replaces the token's projects; a project that stays keeps its permissions. */
   projectIds?: string[];
-  /** Replaces the token's whole permission set. */
+  /** Replaces the permission set of every project. */
   permissions?: TokenPermissions;
+  /** Replaces the permission set of single projects, by project id. */
+  projectPermissions?: Record<string, TokenPermissions>;
 };
 
 export type CreatedApiTokenResponse = {
