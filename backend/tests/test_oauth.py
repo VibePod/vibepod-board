@@ -345,7 +345,7 @@ def test_sign_in_issues_a_token_with_the_approved_permissions(
     issued = exchange(client, client_id, approved["code"], verifier)
     assert issued.status_code == 200, issued.text
 
-    permissions = client.get("/api/tokens").json()["items"][0]["permissions"]
+    permissions = client.get("/api/tokens").json()["items"][0]["projects"][0]["permissions"]
     assert permissions == {
         "tasks": "read",
         "board": "none",
@@ -376,8 +376,45 @@ def test_sign_in_without_chosen_permissions_issues_a_token_with_full_access(
     )
     assert exchange(client, client_id, approved["code"], verifier).status_code == 200
 
-    permissions = client.get("/api/tokens").json()["items"][0]["permissions"]
+    permissions = client.get("/api/tokens").json()["items"][0]["projects"][0]["permissions"]
     assert set(permissions.values()) == {"write"}
+
+
+def test_sign_in_issues_a_token_with_its_own_permissions_in_each_project(
+    client: TestClient, projects: dict[str, str]
+) -> None:
+    client_id, verifier, request_id = begin(client)
+    login(client)
+
+    approved = redirect_query(
+        client.post(
+            f"/api/oauth/requests/{request_id}/approve",
+            json={
+                "projectIds": [projects["app"], projects["ops"]],
+                "permissions": {"tasks": "read"},
+                "projectPermissions": {projects["ops"]: {"tasks": "write"}},
+            },
+        )
+    )
+    issued = exchange(client, client_id, approved["code"], verifier)
+    assert issued.status_code == 200, issued.text
+
+    mapped = client.get("/api/tokens").json()["items"][0]["projects"]
+    assert {project["key"]: project["permissions"]["tasks"] for project in mapped} == {
+        "APP": "read",
+        "OPS": "write",
+    }
+
+    token = TestClient(client.app)
+    headers = bearer(issued.json()["access_token"])
+    in_ops = token.post(
+        "/api/ideas", headers=headers, json={"projectId": projects["ops"], "title": "New"}
+    )
+    in_app = token.post(
+        "/api/ideas", headers=headers, json={"projectId": projects["app"], "title": "New"}
+    )
+    assert in_ops.status_code == 201
+    assert in_app.status_code == 403
 
 
 def test_approval_refuses_unknown_permissions_and_keeps_the_request_pending(

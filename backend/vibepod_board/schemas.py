@@ -340,12 +340,17 @@ class ClaimResult(ApiModel):
     paused: bool | None = None
 
 
+class TokenProject(ProjectRef):
+    """A project a token is mapped to, with what the token may do in it."""
+
+    # The level the token has in each area of this project: none, read or write.
+    permissions: dict[str, str]
+
+
 class ApiTokenSummary(ApiModel):
     id: str
     name: str
-    projects: list[ProjectRef]
-    # The level the token has in each area: none, read or write.
-    permissions: dict[str, str]
+    projects: list[TokenProject]
     created_at: Timestamp
     last_used_at: Timestamp | None = None
     revoked_at: Timestamp | None = None

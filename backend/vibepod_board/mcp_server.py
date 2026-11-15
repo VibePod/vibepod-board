@@ -2,13 +2,15 @@
 
 Clients authenticate with the same project-scoped `vbp_…` tokens as the REST API, pasted
 into their configuration or obtained by OAuth sign-in. `BoardOAuthProvider` resolves a
-token to its projects and permissions; `PermissionMiddleware` hides and refuses the tools
-outside those permissions, and every tool then runs with that token's access. Tool names
-and arguments match the TypeScript server, so existing agent configurations keep working.
+token to its projects and their permissions; `PermissionMiddleware` hides and refuses the
+tools outside those permissions, and every tool then runs with the projects that allow
+it. Tool names and arguments match the TypeScript server, so existing agent configurations
+keep working.
 """
 
 import json
 from collections.abc import Callable, Sequence
+from contextvars import ContextVar
 from typing import Annotated, Any, Literal
 
 import httpx
@@ -23,7 +25,13 @@ from pydantic import AwareDatetime, BaseModel, Field
 from sqlmodel import Session
 
 from vibepod_board import permissions
-from vibepod_board.access import AccessContext, TokenAccess, require_admin, token_access
+from vibepod_board.access import (
+    AccessContext,
+    TokenAccess,
+    for_operation,
+    require_admin,
+    token_access,
+)
 from vibepod_board.api.deps import worker_timing
 from vibepod_board.api.github import github_client
 from vibepod_board.api.models import BoardCardBatchItem, IdeaBatchItem, RunCommitInput
@@ -161,7 +169,8 @@ class ReadinessInput(BaseModel):
     reason: Annotated[str, Field(min_length=1)]
 
 
-def current_access() -> TokenAccess:
+def token_from_request() -> TokenAccess:
+    """The calling token with every project it is mapped to, before any narrowing."""
     access_token = get_access_token()
     if access_token is None:
         raise ToolError("Authentication required")
@@ -172,16 +181,42 @@ def current_access() -> TokenAccess:
     )
 
 
-def _listing_permissions() -> dict[str, str] | None:
-    """The permissions a listing is narrowed to. `None` outside an MCP request: the
-    reference at /api/mcp-tools reads the whole catalog from the server without a token.
-    Over /mcp a request never gets here without one."""
-    return None if get_access_token() is None else dict(current_access().permissions)
+# The caller's access to the tool or resource being served. `PermissionMiddleware` sets it
+# for the length of the call; the tool, which runs in a worker thread, reads it from there.
+_operation_access: ContextVar[TokenAccess | None] = ContextVar("operation_access", default=None)
+
+
+def current_access() -> TokenAccess:
+    """The caller, narrowed to the projects whose permissions cover the tool or resource
+    being served. Nothing is served that the middleware did not check first."""
+    access = _operation_access.get()
+    if access is None:
+        raise ToolError("This token cannot use this operation")
+    return access
+
+
+def _may_use(access: TokenAccess | None, needs: Any) -> bool:
+    """Whether a listing shows the tool or resource that needs `needs`: when at least one
+    of the token's projects allows it. `access` is `None` outside an MCP request, where the
+    reference at /api/mcp-tools reads the whole catalog from the server without a token;
+    over /mcp a request never gets here without one."""
+    if access is None:
+        return True
+    try:
+        for_operation(access, needs)
+    except BoardError:
+        return False
+    return True
+
+
+def _listing_access() -> TokenAccess | None:
+    return None if get_access_token() is None else token_from_request()
 
 
 class PermissionMiddleware(Middleware):
-    """Applies the token's permissions before a tool or resource is reached. Listings
-    leave out what the token may not use, so an agent only sees the tools it can call."""
+    """Applies the token's permissions before a tool or resource is reached: the call runs
+    with the projects whose permissions cover it, and is refused when none does. Listings
+    leave out what no project allows, so an agent only sees the tools it can call."""
 
     async def on_list_tools(
         self,
@@ -189,13 +224,9 @@ class PermissionMiddleware(Middleware):
         call_next: CallNext[mt.ListToolsRequest, Sequence[Tool]],
     ) -> Sequence[Tool]:
         tools = await call_next(context)
-        granted = _listing_permissions()
-        if granted is None:
-            return tools
+        access = _listing_access()
         return [
-            tool
-            for tool in tools
-            if permissions.permits(granted, permissions.TOOL_PERMISSIONS.get(tool.name))
+            tool for tool in tools if _may_use(access, permissions.TOOL_PERMISSIONS.get(tool.name))
         ]
 
     async def on_call_tool(
@@ -205,10 +236,14 @@ class PermissionMiddleware(Middleware):
     ) -> ToolResult:
         needs = permissions.TOOL_PERMISSIONS.get(context.message.name)
         try:
-            permissions.require(current_access().permissions, needs)
+            access = for_operation(token_from_request(), needs)
         except BoardError as error:
             raise ToolError(error.message) from error
-        return await call_next(context)
+        marker = _operation_access.set(access)
+        try:
+            return await call_next(context)
+        finally:
+            _operation_access.reset(marker)
 
     async def on_list_resources(
         self,
@@ -216,16 +251,11 @@ class PermissionMiddleware(Middleware):
         call_next: CallNext[mt.ListResourcesRequest, Sequence[Resource]],
     ) -> Sequence[Resource]:
         resources = await call_next(context)
-        granted = _listing_permissions()
-        if granted is None:
-            return resources
+        access = _listing_access()
         return [
             resource
             for resource in resources
-            if all(
-                permissions.permits(granted, needs)
-                for needs in permissions.RESOURCE_PERMISSIONS.get(str(resource.uri), (None,))
-            )
+            if _may_use(access, permissions.RESOURCE_PERMISSIONS.get(str(resource.uri)))
         ]
 
     async def on_read_resource(
@@ -233,11 +263,16 @@ class PermissionMiddleware(Middleware):
         context: MiddlewareContext[mt.ReadResourceRequestParams],
         call_next: CallNext[mt.ReadResourceRequestParams, ResourceResult],
     ) -> ResourceResult:
+        needs = permissions.RESOURCE_PERMISSIONS.get(str(context.message.uri))
         try:
-            permissions.require_resource(current_access().permissions, str(context.message.uri))
+            access = for_operation(token_from_request(), needs)
         except BoardError as error:
             raise ResourceError(error.message) from error
-        return await call_next(context)
+        marker = _operation_access.set(access)
+        try:
+            return await call_next(context)
+        finally:
+            _operation_access.reset(marker)
 
 
 def _json(value: Any) -> Any:

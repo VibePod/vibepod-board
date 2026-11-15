@@ -1,4 +1,4 @@
-"""What an API token may do: one level per area, the same in every project it is mapped to.
+"""What an API token may do: one level per area, for each project it is mapped to.
 
 `POLICY` is the whole rule book. Every MCP tool and every REST route a token can reach is
 listed under the area it belongs to, as something that reads or something that writes.
@@ -8,7 +8,7 @@ unprotected; tests keep the lists in step with what the server registers.
 The admin is not subject to any of this, and neither are the admin-only routes.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -285,6 +285,33 @@ def normalize(raw: Mapping[str, str] | None) -> dict[str, str]:
     return chosen
 
 
+def assign(
+    project_ids: Sequence[str],
+    shared: Mapping[str, str] | None,
+    individual: Mapping[str, Mapping[str, str]] | None,
+    existing: Mapping[str, Mapping[str, str]] | None = None,
+) -> dict[str, dict[str, str]]:
+    """The permission set of each project a token is mapped to. A project takes its own
+    entry in `individual`, else the `shared` set when one is given, else the set it has
+    already; a project that is new to the token and has none of these gets full access."""
+    individual = individual or {}
+    for project_id in individual:
+        if project_id not in project_ids:
+            raise BadRequest(f"Permissions name a project the token is not mapped to: {project_id}")
+    common = normalize(shared) if shared is not None else None
+    chosen: dict[str, dict[str, str]] = {}
+    for project_id in project_ids:
+        if project_id in individual:
+            chosen[project_id] = normalize(individual[project_id])
+        elif common is not None:
+            chosen[project_id] = dict(common)
+        elif existing is not None and project_id in existing:
+            chosen[project_id] = stored(existing[project_id])
+        else:
+            chosen[project_id] = dict(FULL_ACCESS)
+    return chosen
+
+
 def stored(raw: Mapping[str, str]) -> dict[str, str]:
     """A permission set as it was saved, with every area present. An area added after the
     set was saved has no access."""
@@ -299,15 +326,31 @@ def allows(granted: Mapping[str, str], needs: Requirement) -> bool:
     return _RANK[level] >= _RANK[needs.level]
 
 
+def denial(needs: Requirement) -> str:
+    """What a caller is told when its permissions do not cover `needs`."""
+    return f"This token has no {needs.level.value} access to {POLICY[needs.area].label}"
+
+
+def requirements(needs: Needs | Sequence[Requirement]) -> tuple[Requirement, ...]:
+    """What an operation needs as a list: nothing when it is open to every token."""
+    if isinstance(needs, Open):
+        return ()
+    return (needs,) if isinstance(needs, Requirement) else tuple(needs)
+
+
+def missing(granted: Mapping[str, str], needs: Sequence[Requirement]) -> Requirement | None:
+    """The first requirement `granted` does not cover."""
+    return next((requirement for requirement in needs if not allows(granted, requirement)), None)
+
+
 def require(granted: Mapping[str, str], needs: Needs | None) -> None:
-    """Refuses unless `granted` covers `needs`. `None` stands for a tool or route the
-    policy does not list."""
+    """Refuses unless the one set `granted` covers `needs`. `None` stands for a tool or
+    route the policy does not list."""
     if needs is None:
         raise Forbidden("This token cannot use this operation")
-    if isinstance(needs, Open) or allows(granted, needs):
-        return
-    label = POLICY[needs.area].label
-    raise Forbidden(f"This token has no {needs.level.value} access to {label}")
+    lacking = missing(granted, requirements(needs))
+    if lacking is not None:
+        raise Forbidden(denial(lacking))
 
 
 def permits(granted: Mapping[str, str], needs: Needs | None) -> bool:
@@ -317,14 +360,6 @@ def permits(granted: Mapping[str, str], needs: Needs | None) -> bool:
     except Forbidden:
         return False
     return True
-
-
-def require_resource(granted: Mapping[str, str], uri: str) -> None:
-    needs = RESOURCE_PERMISSIONS.get(uri)
-    if needs is None:
-        raise Forbidden("This token cannot use this operation")
-    for requirement in needs:
-        require(granted, requirement)
 
 
 def area_catalog() -> list[PermissionArea]:

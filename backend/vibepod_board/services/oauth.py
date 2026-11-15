@@ -115,16 +115,18 @@ def approve_request(
     request_id: str,
     project_ids: Sequence[str],
     permissions: Mapping[str, str] | None = None,
+    project_permissions: Mapping[str, Mapping[str, str]] | None = None,
 ) -> str:
-    """Gives the request a one-time code for the chosen projects and permissions, full
-    access unless some are chosen, and returns the URL that takes the browser back to the
-    client."""
+    """Gives the request a one-time code for the chosen projects and returns the URL that
+    takes the browser back to the client. `permissions` is one set for every project and
+    `project_permissions` a set for single ones; a project neither covers gets full
+    access."""
     row = _waiting(session, request_id)
     chosen = normalize_list(project_ids)
     if not chosen:
         raise BadRequest("Select at least one project")
     require_projects(session, chosen)
-    granted = policy.normalize(permissions)
+    granted = policy.assign(chosen, permissions, project_permissions)
     code = secrets.token_urlsafe(32)
     row.code_hash = _hash(code)
     row.project_ids = chosen
@@ -170,4 +172,4 @@ def redeem_code(session: Session, code: str) -> CreatedApiToken | None:
     client_id, project_ids, granted = spent
     name = f"{_client_name(session, client_id)} (OAuth)"
     # `create_token` commits the session, and with it the delete above.
-    return tokens.create_token(session, name, project_ids, policy.stored(granted))
+    return tokens.create_token(session, name, project_ids, project_permissions=granted)

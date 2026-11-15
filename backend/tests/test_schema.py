@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -9,7 +10,7 @@ from sqlmodel import SQLModel
 
 from vibepod_board.db import migrate
 
-HEAD = "0018"
+HEAD = "0019"
 LEGACY_SCHEMA = (Path(__file__).parent / "legacy_schema.sql").read_text()
 # The first TS schema, before repository, readiness and dependency support.
 ORIGINAL_SCHEMA = LEGACY_SCHEMA.split("alter table board_cards add column", 1)[0]
@@ -382,26 +383,84 @@ def test_0018_gives_existing_tokens_and_sign_ins_full_access(empty_db: Engine) -
                 "values ('t1', 'Agent', 'hash', now())"
             )
         )
-        connection.execute(
-            text(
-                "insert into oauth_clients (client_id, info, created_at) "
-                "values ('c1', '{}'::jsonb, now())"
-            )
-        )
-        connection.execute(
-            text(
-                "insert into oauth_requests (id, client_id, redirect_uri, "
-                "redirect_uri_provided_explicitly, code_challenge, created_at, expires_at) "
-                "values ('r1', 'c1', 'http://127.0.0.1:1/callback', true, 'challenge', "
-                "now(), now())"
-            )
-        )
-
-    migrate(empty_db)
+        connection.execute(text(CLIENT))
+        connection.execute(text(REQUEST.format(extra_columns="", extra_values="")))
+        command.upgrade(config, "0018")
 
     with empty_db.connect() as connection:
         token = connection.execute(text("select permissions from api_tokens")).scalar_one()
         request = connection.execute(text("select permissions from oauth_requests")).scalar_one()
     assert token == FULL_ACCESS
     assert request == FULL_ACCESS
+
+
+CLIENT = "insert into oauth_clients (client_id, info, created_at) values ('c1', '{}'::jsonb, now())"
+REQUEST = (
+    "insert into oauth_requests (id, client_id, redirect_uri, "
+    "redirect_uri_provided_explicitly, code_challenge, created_at, expires_at{extra_columns}) "
+    "values ('r1', 'c1', 'http://127.0.0.1:1/callback', true, 'challenge', now(), now()"
+    "{extra_values})"
+)
+
+
+def test_0019_moves_a_tokens_permissions_onto_each_of_its_projects(empty_db: Engine) -> None:
+    from alembic import command
+
+    from vibepod_board.db import alembic_config
+    from vibepod_board.permissions import FULL_ACCESS
+
+    reader = {**dict.fromkeys(FULL_ACCESS, "none"), "tasks": "read"}
+    config = alembic_config()
+    with empty_db.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "0018")
+        for key in ("APP", "API"):
+            connection.execute(
+                text(
+                    "insert into projects (id, key, title, created_at, updated_at) "
+                    f"values ('{key.lower()}', '{key}', '{key}', now(), now())"
+                )
+            )
+        connection.execute(
+            text(
+                "insert into api_tokens (id, name, token_hash, permissions, created_at) values "
+                "('reader', 'Reader', 'hash-1', cast(:reader as jsonb), now()), "
+                "('full', 'Full', 'hash-2', cast(:full as jsonb), now())"
+            ),
+            {"reader": json.dumps(reader), "full": json.dumps(FULL_ACCESS)},
+        )
+        connection.execute(
+            text(
+                "insert into api_token_projects (token_id, project_id) values "
+                "('reader', 'app'), ('reader', 'api'), ('full', 'app')"
+            )
+        )
+        connection.execute(text(CLIENT))
+        connection.execute(
+            text(
+                REQUEST.format(
+                    extra_columns=", project_ids, permissions",
+                    extra_values=', \'["app", "api"]\'::jsonb, cast(:reader as jsonb)',
+                )
+            ),
+            {"reader": json.dumps(reader)},
+        )
+
+    migrate(empty_db)
+
+    with empty_db.connect() as connection:
+        mapped = connection.execute(
+            text(
+                "select token_id, project_id, permissions from api_token_projects "
+                "order by token_id, project_id"
+            )
+        ).all()
+        request = connection.execute(text("select permissions from oauth_requests")).scalar_one()
+    assert [tuple(row) for row in mapped] == [
+        ("full", "app", FULL_ACCESS),
+        ("reader", "api", reader),
+        ("reader", "app", reader),
+    ]
+    assert request == {"app": reader, "api": reader}
+    assert "permissions" not in column_names(empty_db, "api_tokens")
     assert revision(empty_db) == HEAD

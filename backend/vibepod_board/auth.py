@@ -16,6 +16,7 @@ from vibepod_board.access import (
     AdminAccess,
     TokenAccess,
     admin_access,
+    for_operation,
     token_access,
 )
 from vibepod_board.db import SessionDep
@@ -132,12 +133,13 @@ def require_permitted_access(
     request: Request,
     access: Annotated[AccessContext, Depends(require_access)],
 ) -> AccessContext:
-    """The caller, once a token's permissions cover the route. The policy names what each
-    route needs; a route it does not list is refused for every token."""
+    """The caller, with a token narrowed to the projects whose permissions cover the
+    route. The policy names what each route needs; a route it does not list is refused for
+    every token, and so is one that none of the token's projects allows."""
     if isinstance(access, TokenAccess):
         route = request.scope.get("route")
         needs = permissions.ROUTE_PERMISSIONS.get(f"{request.method} {getattr(route, 'path', '')}")
-        permissions.require(access.permissions, needs)
+        return for_operation(access, needs)
     return access
 
 

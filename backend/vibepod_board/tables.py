@@ -367,7 +367,6 @@ class ApiTokenRow(SQLModel, table=True):
     id: str = Field(sa_column=Column(Text, primary_key=True))
     name: str = Field(sa_column=Column(Text, nullable=False))
     token_hash: str = Field(sa_column=Column(Text, nullable=False, unique=True))
-    permissions: dict[str, str] = _permissions()
     created_at: datetime = _timestamp()
     last_used_at: datetime | None = _timestamp(nullable=True)
     revoked_at: datetime | None = _timestamp(nullable=True)
@@ -382,6 +381,8 @@ class ApiTokenProjectRow(SQLModel, table=True):
     project_id: str = Field(
         sa_column=Column(Text, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True)
     )
+    # What the token may do in this project.
+    permissions: dict[str, str] = _permissions()
 
 
 class TaskDependencyRow(SQLModel, table=True):
@@ -438,6 +439,10 @@ class OAuthRequestRow(SQLModel, table=True):
     resource: str | None = _text()
     code_hash: str | None = Field(default=None, sa_column=Column(Text, nullable=True, unique=True))
     project_ids: list[str] = _json_list()
-    permissions: dict[str, str] = _permissions()
+    # The permission set chosen for each of `project_ids`, by project id.
+    permissions: dict[str, dict[str, str]] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")),
+    )
     created_at: datetime = _timestamp()
     expires_at: datetime = _timestamp()

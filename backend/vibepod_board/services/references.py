@@ -5,7 +5,9 @@ Every identifier argument accepts, in this order: the record's id; a task key su
 when exactly one project is in scope. A project also resolves by its exact title.
 
 Task and card resolution filters on the caller's projects *before* reporting existence, so a
-scoped caller cannot tell a foreign record apart from a missing one.
+scoped caller cannot tell a foreign record apart from a missing one. A record in a project
+the token is mapped to, but whose permissions do not cover the operation, is refused with
+the missing permission instead: the token may well be able to read it.
 """
 
 import re
@@ -14,7 +16,12 @@ from dataclasses import dataclass
 from sqlalchemy import func
 from sqlmodel import Session, col, select
 
-from vibepod_board.access import AccessContext, AdminAccess
+from vibepod_board.access import (
+    AccessContext,
+    AdminAccess,
+    assert_can_access_project,
+    before_narrowing,
+)
 from vibepod_board.errors import BadRequest, NotFound
 from vibepod_board.graph import format_task_key
 from vibepod_board.tables import BoardCardRow, IdeaRow, ProjectRow
@@ -82,7 +89,29 @@ def resolve_project_id(session: Session, reference: str) -> str:
     return rows[0].id
 
 
+def _refuse_when_permissions_hide(session: Session, access: AccessContext, find, model, reference):
+    """Refuses with the permission that is missing when `reference` names a record in one
+    of the token's projects that the operation at hand may not touch."""
+    wider = before_narrowing(access)
+    if wider is None:
+        return
+    try:
+        record_id = find(session, wider, reference)
+    except (NotFound, BadRequest):
+        return
+    project_id = session.exec(select(model.project_id).where(model.id == record_id)).one()
+    assert_can_access_project(access, project_id)
+
+
 def resolve_idea_id(session: Session, access: AccessContext, reference: str) -> str:
+    try:
+        return _find_idea_id(session, access, reference)
+    except NotFound:
+        _refuse_when_permissions_hide(session, access, _find_idea_id, IdeaRow, reference)
+        raise
+
+
+def _find_idea_id(session: Session, access: AccessContext, reference: str) -> str:
     value = reference.strip()
     by_id = session.exec(
         _scoped(select(IdeaRow.id).where(IdeaRow.id == value), access, IdeaRow.project_id)
@@ -134,6 +163,14 @@ def resolve_idea_id(session: Session, access: AccessContext, reference: str) -> 
 
 def resolve_card_id(session: Session, access: AccessContext, reference: str) -> str:
     """A card id, or any reference to the task the card belongs to."""
+    try:
+        return _find_card_id(session, access, reference)
+    except NotFound:
+        _refuse_when_permissions_hide(session, access, _find_card_id, BoardCardRow, reference)
+        raise
+
+
+def _find_card_id(session: Session, access: AccessContext, reference: str) -> str:
     value = reference.strip()
     by_id = session.exec(
         _scoped(
@@ -146,7 +183,7 @@ def resolve_card_id(session: Session, access: AccessContext, reference: str) -> 
         return by_id
 
     try:
-        idea_id = resolve_idea_id(session, access, value)
+        idea_id = _find_idea_id(session, access, value)
     except (NotFound, BadRequest):
         idea_id = None
     if idea_id:

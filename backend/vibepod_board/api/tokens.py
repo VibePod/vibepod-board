@@ -17,7 +17,9 @@ def list_tokens(session: SessionDep, _admin: AdminDep) -> Items[ApiTokenSummary]
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_token(body: TokenCreate, session: SessionDep, _admin: AdminDep) -> CreatedApiToken:
-    return tokens.create_token(session, body.name, body.project_ids, body.permissions)
+    return tokens.create_token(
+        session, body.name, body.project_ids, body.permissions, body.project_permissions
+    )
 
 
 @router.patch("/{token_id}")
