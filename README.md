@@ -190,6 +190,49 @@ OAuth clients only send credentials to an authorization server over HTTPS or on 
 
 Clients register themselves, and only redirect addresses on the local machine are accepted. The admin's decision goes through `GET /api/oauth/requests/:id` and `POST /api/oauth/requests/:id/approve` or `/deny`, which need the admin session.
 
+#### Pi
+
+Run these in the project folder. `--local` writes `.pi/mcp.json` there, so the board is configured for this project only; the file holds no token.
+
+```bash
+pi mcp add vibepod-board --local --url http://localhost:3000/mcp --oauth-callback-port 8765
+pi                           # choose "Trust" so Pi reads the project's MCP file, then quit
+pi mcp login vibepod-board   # sign in, tick the projects, approve
+pi mcp list                  # shows vibepod-board as connected
+```
+
+#### Pi in a VibePod container
+
+Inside the container the board is `vibepod-board:3000`, a name OAuth sign-in does not accept. Two forwards make the board reachable as `localhost:3000` in the container and let your browser reach Pi's callback port. Add two files to the project (VibePod 0.21 or newer):
+
+`.vibepod/overlay/pi/Dockerfile`
+
+```dockerfile
+RUN apt-get update && apt-get install -y --no-install-recommends socat \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+`.vibepod/config.yaml`
+
+```yaml
+version: 1
+agents:
+  pi:
+    ports:
+      - "127.0.0.1:8765:8766"
+    init:
+      - "socat TCP-LISTEN:3000,bind=127.0.0.1,fork,reuseaddr TCP:vibepod-board:3000 &"
+      - "socat TCP-LISTEN:8766,fork,reuseaddr TCP:127.0.0.1:8765 &"
+```
+
+Then run the same commands through `vp` and open the sign-in address Pi prints in the browser on the host:
+
+```bash
+vp run pi -- mcp add vibepod-board --local --url http://localhost:3000/mcp --oauth-callback-port 8765
+vp run pi                             # choose "Trust", then quit
+vp run pi -- mcp login vibepod-board
+```
+
 Tools:
 
 - `list_projects`
