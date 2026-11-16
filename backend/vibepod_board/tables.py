@@ -446,3 +446,38 @@ class OAuthRequestRow(SQLModel, table=True):
     )
     created_at: datetime = _timestamp()
     expires_at: datetime = _timestamp()
+
+
+class UserRow(SQLModel, table=True):
+    """A person the admin lets in. The admin itself is not a row: it comes from the
+    environment."""
+
+    __tablename__ = "users"
+
+    id: str = Field(sa_column=Column(Text, primary_key=True))
+    # Lower case; what the user signs in with.
+    username: str = Field(sa_column=Column(Text, nullable=False, unique=True))
+    password_hash: str = Field(sa_column=Column(Text, nullable=False))
+    # True while the password is the temporary one the board generated.
+    must_change_password: bool = Field(
+        default=True, sa_column=Column(Boolean, nullable=False, server_default=text("true"))
+    )
+    active: bool = Field(
+        default=True, sa_column=Column(Boolean, nullable=False, server_default=text("true"))
+    )
+    created_at: datetime = _timestamp()
+    last_login_at: datetime | None = _timestamp(nullable=True)
+    password_changed_at: datetime | None = _timestamp(nullable=True)
+
+
+class UserProjectRow(SQLModel, table=True):
+    """A project a user may work in, with full access."""
+
+    __tablename__ = "user_projects"
+
+    user_id: str = Field(
+        sa_column=Column(Text, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    )
+    project_id: str = Field(
+        sa_column=Column(Text, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True)
+    )

@@ -10,7 +10,7 @@ from sqlmodel import SQLModel
 
 from vibepod_board.db import migrate
 
-HEAD = "0020"
+HEAD = "0021"
 LEGACY_SCHEMA = (Path(__file__).parent / "legacy_schema.sql").read_text()
 # The first TS schema, before repository, readiness and dependency support.
 ORIGINAL_SCHEMA = LEGACY_SCHEMA.split("alter table board_cards add column", 1)[0]
@@ -51,6 +51,8 @@ def test_creates_board_and_token_tables(db: Engine) -> None:
         "task_events",
         "task_reviews",
         "task_runs",
+        "user_projects",
+        "users",
         "workers",
     ]
 
@@ -548,4 +550,45 @@ def test_0020_adds_the_review_identity_column_that_a_renumbered_migration_left_o
 
     assert "actor_identity" in column_names(empty_db, "task_reviews")
     assert schema_diff(empty_db) == []
+    assert revision(empty_db) == HEAD
+
+
+def test_0021_adds_users_and_removes_their_projects_with_either_side(empty_db: Engine) -> None:
+    migrate(empty_db)
+
+    with empty_db.begin() as connection:
+        for project_id, key in (("p1", "APP"), ("p2", "API")):
+            connection.execute(
+                text(
+                    "insert into projects (id, key, title, created_at, updated_at) "
+                    "values (:id, :key, :key, now(), now())"
+                ),
+                {"id": project_id, "key": key},
+            )
+        # Only the columns without a default: the others fill themselves.
+        connection.execute(
+            text(
+                "insert into users (id, username, password_hash, created_at) "
+                "values ('u1', 'rebecca', 'x', now()), ('u2', 'jonas', 'x', now())"
+            )
+        )
+        connection.execute(
+            text(
+                "insert into user_projects (user_id, project_id) "
+                "values ('u1', 'p1'), ('u1', 'p2'), ('u2', 'p1')"
+            )
+        )
+
+    with empty_db.begin() as connection:
+        defaults = connection.execute(
+            text("select must_change_password, active, last_login_at from users where id = 'u1'")
+        ).one()
+        connection.execute(text("delete from projects where id = 'p2'"))
+        connection.execute(text("delete from users where id = 'u2'"))
+        left = connection.execute(
+            text("select user_id, project_id from user_projects order by user_id")
+        ).all()
+
+    assert tuple(defaults) == (True, True, None)
+    assert [tuple(row) for row in left] == [("u1", "p1")]
     assert revision(empty_db) == HEAD
