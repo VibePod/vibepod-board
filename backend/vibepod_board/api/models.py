@@ -286,6 +286,20 @@ class TokenUpdate(ApiModel):
     project_permissions: ProjectPermissions | None = None
 
 
+class UserCreate(ApiModel):
+    # 3 to 64 characters from a-z, 0-9, dot, underscore and hyphen; lower-cased.
+    username: StrictStr
+    # The projects the user may work in. May be empty and filled in later.
+    project_ids: Ids = Field(default_factory=list)
+
+
+class UserUpdate(ApiModel):
+    # Replaces the user's projects.
+    project_ids: Ids | None = None
+    # False signs the user out and blocks sign-in until it is true again.
+    active: StrictBool | None = None
+
+
 class OAuthApproval(ApiModel):
     project_ids: Annotated[Ids, Field(min_length=1)]
     # One set for every project; full access when omitted.

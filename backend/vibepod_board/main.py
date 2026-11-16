@@ -27,6 +27,7 @@ from vibepod_board.api import (
     projects,
     system,
     tokens,
+    users,
     workers,
 )
 from vibepod_board.auth import SessionManager
@@ -216,6 +217,7 @@ def create_app(
         board,
         documents,
         tokens,
+        users,
         workers,
         mcp_docs,
         oauth,
