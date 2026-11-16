@@ -216,6 +216,15 @@ body {
   margin-left: auto;
 }
 
+/* On a wide screen the project picker gives up room before the actions wrap: the admin
+   has one action more than a user. */
+@media (min-width: 1400px) {
+  .app-topbar-actions {
+    flex-shrink: 0;
+    flex-wrap: nowrap;
+  }
+}
+
 .theme-switch {
   align-self: center;
 }

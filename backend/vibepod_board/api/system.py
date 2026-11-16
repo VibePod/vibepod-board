@@ -1,17 +1,13 @@
-from typing import Annotated
-
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Response
 
 from vibepod_board import permissions
-from vibepod_board.api.models import LoginRequest
+from vibepod_board.api.models import LoginRequest, PasswordChange
 from vibepod_board.api.responses import AuthState, Items
-from vibepod_board.auth import (
-    AdminSession,
-    SessionsDep,
-    Unauthorized,
-    current_admin_session,
-)
+from vibepod_board.auth import LoginDep, SessionsDep, Unauthorized
+from vibepod_board.db import SessionDep
+from vibepod_board.errors import Forbidden
 from vibepod_board.schemas import PermissionArea
+from vibepod_board.services import users
 
 router = APIRouter(prefix="/api", tags=["system"])
 
@@ -79,36 +75,82 @@ MCP_INFO_TOOLS = (
     "worker_heartbeat",
 )
 
-AdminSessionDep = Annotated[AdminSession | None, Depends(current_admin_session)]
-
 
 @router.get("/health")
 def health() -> dict[str, object]:
     return {"ok": True, "service": "vibepod-board", "mcp": "/mcp"}
 
 
+def _admin_state(username: str) -> AuthState:
+    return AuthState(
+        authenticated=True, username=username, role="admin", must_change_password=False
+    )
+
+
+def _user_state(user: users.SignedInUser) -> AuthState:
+    return AuthState(
+        authenticated=True,
+        username=user.username,
+        role="user",
+        must_change_password=user.must_change_password,
+    )
+
+
 @router.post("/auth/login")
-def login(body: LoginRequest, response: Response, sessions: SessionsDep) -> AuthState:
-    session = sessions.login(body.username, body.password)
-    if session is None:
+def login(
+    body: LoginRequest, response: Response, sessions: SessionsDep, session: SessionDep
+) -> AuthState:
+    """Signs in the admin or a user. `role` says which; `mustChangePassword` is true for a
+    user with a temporary password, who can do nothing but `POST /api/auth/password`."""
+    opened = sessions.login(body.username, body.password)
+    if opened is not None:
+        response.headers["Set-Cookie"] = opened.cookie
+        return _admin_state(opened.username)
+    user = users.authenticate(session, body.username, body.password)
+    if user is None:
         raise Unauthorized("Invalid username or password")
-    response.headers["Set-Cookie"] = session.cookie
-    return AuthState(authenticated=True, username=session.username)
+    response.headers["Set-Cookie"] = sessions.open_for_user(user.id, user.username).cookie
+    return _user_state(user)
 
 
 @router.post("/auth/logout")
-def logout(response: Response, sessions: SessionsDep, admin: AdminSessionDep) -> AuthState:
-    if admin:
-        sessions.logout(admin.id)
+def logout(response: Response, sessions: SessionsDep, current: LoginDep) -> AuthState:
+    if current:
+        sessions.logout(current.id)
     response.headers["Set-Cookie"] = sessions.clear_cookie
     return AuthState(authenticated=False)
 
 
 @router.get("/auth/me")
-def me(admin: AdminSessionDep) -> AuthState:
-    if admin is None:
+def me(current: LoginDep, session: SessionDep) -> AuthState:
+    if current is None:
         return AuthState(authenticated=False)
-    return AuthState(authenticated=True, username=admin.username)
+    if current.user_id is None:
+        return _admin_state(current.username)
+    user = users.signed_in(session, current.user_id)
+    if user is None:
+        return AuthState(authenticated=False)
+    return _user_state(user)
+
+
+@router.post("/auth/password")
+def change_password(
+    body: PasswordChange, sessions: SessionsDep, current: LoginDep, session: SessionDep
+) -> AuthState:
+    """A user sets their own password: after a temporary one, or whenever they like. The
+    user's other sessions end. The admin's password lives in the server configuration."""
+    if current is None:
+        raise Unauthorized("Authentication required")
+    if current.user_id is None:
+        raise Forbidden("The admin password is set in the server configuration")
+    user = users.signed_in(session, current.user_id)
+    if user is None:
+        raise Unauthorized("Authentication required")
+    users.change_password(session, user.id, body.current_password, body.new_password)
+    sessions.end_user_sessions(user.id, keep=current.id)
+    return AuthState(
+        authenticated=True, username=user.username, role="user", must_change_password=False
+    )
 
 
 @router.get("/permission-areas")

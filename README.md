@@ -30,7 +30,7 @@ ADMIN_PASSWORD=change-me
 docker compose up --build
 ```
 
-Admins sign in through the browser UI and can create project-scoped API/MCP tokens from **API Tokens**, each with its own [permissions](#token-permissions).
+Admins sign in through the browser UI and can create project-scoped API/MCP tokens from **API Tokens**, each with its own [permissions](#token-permissions). Under **Users** the admin creates accounts for other people and assigns them projects; see [Users](#users).
 
 The backend applies database migrations on startup. Set `ALEMBIC_AUTO_UPGRADE=false` to run them yourself with `uv run alembic upgrade head` from `backend/`. A database created by the earlier TypeScript server is adopted in place: it is brought up to the baseline revision and stamped, without recreating any data.
 
@@ -148,7 +148,7 @@ Opening and reading pull requests uses the same `GITHUB_TOKEN` as issue sync (se
 
 `GET /api/ideas`, `GET /api/board`, `GET /api/board/archived`, `GET /api/documents`, and `GET /api/work-order` accept `projectId` query params for project-scoped reads.
 
-Browser/full REST access uses the admin session cookie. Project-scoped API clients use `Authorization: Bearer <token>`.
+Browser access uses a session cookie: the admin's reaches everything, a [user](#users)'s the assigned projects. Project-scoped API clients use `Authorization: Bearer <token>`.
 
 ## Token Permissions
 
@@ -188,6 +188,28 @@ Every request runs with the projects whose permissions cover it:
 Over MCP, `tools/list` returns the tools at least one project allows, and a call is refused with the same messages. The `vibepod-board://state` resource shows the projects with `read` on tasks, board and documents. Listing the token's projects needs no permission.
 
 `GET /api/permission-areas` returns the areas with their levels and the MCP tools each level unlocks. The policy itself, with every tool and route, is `backend/vibepod_board/permissions.py`. The admin session is not restricted, and admin-only routes stay admin-only.
+
+## Users
+
+The admin is the one account from `ADMIN_USERNAME` and `ADMIN_PASSWORD`. Under **Users** the admin creates further accounts and assigns each the projects it may work in.
+
+- A user signs in on the same page as the admin and has full access in the assigned projects: tasks, the board, notes, GitHub sync, workers and automation.
+- Creating, importing, editing, archiving, exporting and deleting projects, API tokens, OAuth sign-ins and users stay with the admin.
+- The board generates a temporary password when a user is created and shows it once. After signing in with it, the user must set a password of their own (12 to 128 characters) before anything else works. A user can change the password again at any time under **Change Password**.
+- **Reset Password** replaces a user's password with a new temporary one and signs them out. **Deactivate** signs them out and blocks sign-in until the user is activated again. **Delete** removes the account; tasks and comments the user wrote stay.
+- The user list shows each user's last sign-in and whether they still have the temporary password.
+
+Sessions are kept in memory: a restart signs everybody out.
+
+| Route | Who | Does |
+|---|---|---|
+| `POST /api/auth/login` | anybody | Signs in the admin or a user; answers `role` and `mustChangePassword` |
+| `POST /api/auth/password` | user | `currentPassword`, `newPassword` |
+| `GET /api/users` | admin | Users with `projectIds`, `active`, `mustChangePassword`, `lastLoginAt` |
+| `POST /api/users` | admin | `username`, `projectIds`; answers the user and `temporaryPassword` |
+| `PATCH /api/users/{id}` | admin | `projectIds` and/or `active` |
+| `POST /api/users/{id}/reset-password` | admin | Answers a new `temporaryPassword` |
+| `DELETE /api/users/{id}` | admin | Deletes the user |
 
 ## Project Import and Export
 

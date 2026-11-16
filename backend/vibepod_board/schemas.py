@@ -405,6 +405,33 @@ class CreatedApiToken(ApiModel):
     token: str
 
 
+class UserSummary(ApiModel):
+    """A user as the admin sees them. The password is never part of it."""
+
+    id: str
+    username: str
+    # False blocks sign-in and ends the user's sessions.
+    active: bool
+    # True while the password is the temporary one the board generated.
+    must_change_password: bool
+    project_ids: list[str]
+    created_at: Timestamp
+    last_login_at: Timestamp | None = None
+    password_changed_at: Timestamp | None = None
+
+
+class UserCredentials(ApiModel):
+    """A user together with a temporary password, which is shown this once."""
+
+    item: UserSummary
+    temporary_password: str
+
+
+class DeletedUser(ApiModel):
+    id: str
+    username: str
+
+
 class PermissionArea(ApiModel):
     """One area a token's permissions cover, as the forms that edit them show it."""
 

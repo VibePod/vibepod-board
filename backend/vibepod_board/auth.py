@@ -1,4 +1,5 @@
-"""Admin sessions (in memory, lost on restart) and bearer-token authentication."""
+"""Browser sessions of the admin and of users (in memory, lost on restart) and
+bearer-token authentication."""
 
 import hmac
 import secrets
@@ -18,13 +19,16 @@ from vibepod_board.access import (
     admin_access,
     for_operation,
     token_access,
+    user_access,
 )
 from vibepod_board.db import SessionDep
 from vibepod_board.errors import BoardError, Forbidden
-from vibepod_board.services import tokens
+from vibepod_board.services import tokens, users
 
 SESSION_COOKIE = "vibepod_session"
 COOKIE_ATTRIBUTES = "HttpOnly; SameSite=Lax; Path=/"
+# What a user with a temporary password is told by every protected route.
+PASSWORD_CHANGE_REQUIRED = "Set a new password first"
 
 
 class Unauthorized(BoardError):
@@ -32,38 +36,52 @@ class Unauthorized(BoardError):
 
 
 @dataclass(frozen=True)
-class AdminSession:
+class LoginSession:
     id: str
     username: str
     created_at: float
+    # The user the session belongs to; None for the admin.
+    user_id: str | None = None
 
     @property
     def cookie(self) -> str:
         return f"{SESSION_COOKIE}={self.id}; {COOKIE_ATTRIBUTES}"
 
 
-class AdminSessionManager:
+class SessionManager:
+    """The open sessions. The admin's credentials come from the environment and are
+    checked here; a user's password is checked by `services.users` before a session is
+    opened for them."""
+
     clear_cookie = f"{SESSION_COOKIE}=; {COOKIE_ATTRIBUTES}; Max-Age=0"
 
     def __init__(self, username: str, password: str) -> None:
         self._username = username
         self._password = password
-        self._sessions: dict[str, AdminSession] = {}
+        self._sessions: dict[str, LoginSession] = {}
 
-    def login(self, username: str, password: str) -> AdminSession | None:
+    def _open(self, username: str, user_id: str | None) -> LoginSession:
+        session = LoginSession(secrets.token_urlsafe(32), username, time.time(), user_id)
+        self._sessions[session.id] = session
+        return session
+
+    def login(self, username: str, password: str) -> LoginSession | None:
+        """Signs the admin in; None when the credentials are not the admin's."""
         # Both comparisons always run, so timing does not reveal which one failed.
         username_ok = hmac.compare_digest(username.encode(), self._username.encode())
         password_ok = hmac.compare_digest(password.encode(), self._password.encode())
         if not (username_ok and password_ok):
             return None
-        session = AdminSession(secrets.token_urlsafe(32), username, time.time())
-        self._sessions[session.id] = session
-        return session
+        return self._open(username, None)
 
-    def authenticate(self, session_id: str | None) -> AdminSession | None:
+    def open_for_user(self, user_id: str, username: str) -> LoginSession:
+        """A session for a user whose password was already checked."""
+        return self._open(username, user_id)
+
+    def authenticate(self, session_id: str | None) -> LoginSession | None:
         return self._sessions.get(session_id) if session_id else None
 
-    def authenticate_cookie(self, cookie_header: str | None) -> AdminSession | None:
+    def authenticate_cookie(self, cookie_header: str | None) -> LoginSession | None:
         for part in (cookie_header or "").split(";"):
             name, _, value = part.strip().partition("=")
             if name == SESSION_COOKIE:
@@ -72,6 +90,12 @@ class AdminSessionManager:
 
     def logout(self, session_id: str) -> None:
         self._sessions.pop(session_id, None)
+
+    def end_user_sessions(self, user_id: str, keep: str | None = None) -> None:
+        """Ends every session of the user, except the one named by `keep`."""
+        for session in list(self._sessions.values()):
+            if session.user_id == user_id and session.id != keep:
+                self._sessions.pop(session.id, None)
 
 
 # Declares bearer auth in the OpenAPI spec, so Swagger UI offers "Authorize". It never
@@ -90,22 +114,36 @@ def parse_bearer_token(authorization: str | None) -> str | None:
     return authorization[len("Bearer ") :].strip() or None
 
 
-def get_sessions(request: Request) -> AdminSessionManager:
+def get_sessions(request: Request) -> SessionManager:
     return request.app.state.sessions
 
 
-SessionsDep = Annotated[AdminSessionManager, Depends(get_sessions)]
+SessionsDep = Annotated[SessionManager, Depends(get_sessions)]
 
 
-def current_admin_session(request: Request, sessions: SessionsDep) -> AdminSession | None:
+def current_login(request: Request, sessions: SessionsDep) -> LoginSession | None:
     return sessions.authenticate(request.cookies.get(SESSION_COOKIE))
 
 
+LoginDep = Annotated[LoginSession | None, Depends(current_login)]
+
+
 def resolve_access(
-    session: Session, admin: AdminSession | None, authorization: str | None
+    session: Session, login: LoginSession | None, authorization: str | None
 ) -> AccessContext | None:
-    if admin:
-        return admin_access(admin.username)
+    """The caller behind a session cookie or a bearer token. A user is read from the
+    database on every request, so a change of projects, a deactivation and a deletion apply
+    at once. A user who still has a temporary password is refused here: every protected
+    route passes through, so none of them can be reached before the password is set."""
+    if login and login.user_id is None:
+        return admin_access(login.username)
+    if login and login.user_id:
+        user = users.signed_in(session, login.user_id)
+        if user is not None:
+            if user.must_change_password:
+                raise Forbidden(PASSWORD_CHANGE_REQUIRED)
+            return user_access(user.id, user.username, user.project_ids)
+        # Deactivated or deleted since signing in: the cookie counts for nothing.
     token = parse_bearer_token(authorization)
     if not token:
         return None
@@ -120,10 +158,10 @@ def resolve_access(
 def require_access(
     request: Request,
     session: SessionDep,
-    admin: Annotated[AdminSession | None, Depends(current_admin_session)],
+    login: LoginDep,
     _bearer: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
 ) -> AccessContext:
-    access = resolve_access(session, admin, request.headers.get("authorization"))
+    access = resolve_access(session, login, request.headers.get("authorization"))
     if access is None:
         raise Unauthorized("Authentication required")
     return access

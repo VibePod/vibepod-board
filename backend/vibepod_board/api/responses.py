@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel
 
 from vibepod_board.schemas import ApiModel, BoardColumns
@@ -24,6 +26,10 @@ class Columns(ApiModel):
 class AuthState(ApiModel):
     authenticated: bool
     username: str | None = None
+    # Left out when nobody is signed in.
+    role: Literal["admin", "user"] | None = None
+    # True while a user has the temporary password: only the password change works then.
+    must_change_password: bool | None = None
 
 
 class Redirect(ApiModel):

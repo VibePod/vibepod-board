@@ -67,6 +67,12 @@ class LoginRequest(ApiModel):
     password: StrictStr
 
 
+class PasswordChange(ApiModel):
+    current_password: StrictStr
+    # 12 to 128 characters, and not the current password.
+    new_password: StrictStr
+
+
 RequiredApprovals = Annotated[
     StrictInt, Field(ge=MIN_REQUIRED_APPROVALS, le=MAX_REQUIRED_APPROVALS)
 ]
@@ -278,6 +284,20 @@ class TokenUpdate(ApiModel):
     permissions: Permissions | None = None
     # Replaces the permission set of single projects.
     project_permissions: ProjectPermissions | None = None
+
+
+class UserCreate(ApiModel):
+    # 3 to 64 characters from a-z, 0-9, dot, underscore and hyphen; lower-cased.
+    username: StrictStr
+    # The projects the user may work in. May be empty and filled in later.
+    project_ids: Ids = Field(default_factory=list)
+
+
+class UserUpdate(ApiModel):
+    # Replaces the user's projects.
+    project_ids: Ids | None = None
+    # False signs the user out and blocks sign-in until it is true again.
+    active: StrictBool | None = None
 
 
 class OAuthApproval(ApiModel):

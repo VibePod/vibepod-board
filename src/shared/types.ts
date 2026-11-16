@@ -528,9 +528,35 @@ export type CreatedApiTokenResponse = {
   token: string;
 };
 
+export type AuthRole = "admin" | "user";
+
 export type AuthMeResponse = {
   authenticated: boolean;
   username?: string;
+  /** Left out when nobody is signed in. */
+  role?: AuthRole;
+  /** True while a user has the temporary password: only the password change works. */
+  mustChangePassword?: boolean;
+};
+
+/** A user as the admin sees them. */
+export type UserSummary = {
+  id: string;
+  username: string;
+  /** False blocks sign-in. */
+  active: boolean;
+  /** True while the password is the temporary one the board generated. */
+  mustChangePassword: boolean;
+  projectIds: string[];
+  createdAt: string;
+  lastLoginAt?: string;
+  passwordChangedAt?: string;
+};
+
+/** A user with a temporary password, which the server sends only this once. */
+export type UserCredentialsResponse = {
+  item: UserSummary;
+  temporaryPassword: string;
 };
 
 export type ReviewVerdict =

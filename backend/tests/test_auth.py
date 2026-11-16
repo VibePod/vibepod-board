@@ -1,11 +1,11 @@
 import re
 
-from vibepod_board.auth import AdminSessionManager, parse_bearer_token
+from vibepod_board.auth import SessionManager, parse_bearer_token
 from vibepod_board.services.tokens import create_raw_token, hash_token
 
 
 def test_creates_and_validates_admin_sessions() -> None:
-    sessions = AdminSessionManager("admin", "secret")
+    sessions = SessionManager("admin", "secret")
 
     assert sessions.login("admin", "wrong") is None
     session = sessions.login("admin", "secret")

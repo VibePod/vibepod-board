@@ -1,10 +1,11 @@
-"""Who is calling: the admin (full access) or an API token scoped to a set of projects,
-with a permission level per area in each of them.
+"""Who is calling: the admin (full access), a user (full access in the projects the admin
+assigned) or an API token scoped to a set of projects, with a permission level per area in
+each of them.
 
 A token's permissions are applied by narrowing: before a route or tool runs,
 `for_operation` reduces `project_ids` to the projects whose permissions cover it. The
 services scope everything they read and write by `project_ids`, so they need to know
-nothing about permissions.
+nothing about permissions, and nothing about users either.
 """
 
 from collections.abc import Collection, Mapping, Sequence
@@ -34,7 +35,16 @@ class TokenAccess:
     kind: str = field(default="token", init=False)
 
 
-AccessContext = AdminAccess | TokenAccess
+@dataclass(frozen=True)
+class UserAccess:
+    user_id: str
+    username: str
+    # The projects the admin assigned. The user has full access in each of them.
+    project_ids: tuple[str, ...]
+    kind: str = field(default="user", init=False)
+
+
+AccessContext = AdminAccess | TokenAccess | UserAccess
 
 
 def admin_access(username: str) -> AdminAccess:
@@ -51,6 +61,21 @@ def token_access(
     if permissions is None:
         permissions = {project_id: FULL_ACCESS for project_id in project_ids}
     return TokenAccess(token_id, tuple(project_ids), dict(permissions))
+
+
+def user_access(user_id: str, username: str, project_ids: Sequence[str]) -> UserAccess:
+    return UserAccess(user_id, username, tuple(project_ids))
+
+
+def caller_identity(access: AccessContext) -> str:
+    """A name that tells callers apart for good: two reviews count as two approvals only
+    when their identities differ. A user is named by id, so a deleted user's name can be
+    given to someone else."""
+    if isinstance(access, AdminAccess):
+        return f"admin:{access.username}"
+    if isinstance(access, UserAccess):
+        return f"user:{access.user_id}"
+    return f"token:{access.token_id}"
 
 
 def for_operation(access: TokenAccess, needs: Needs | Sequence[Requirement] | None) -> TokenAccess:
@@ -98,6 +123,8 @@ def before_narrowing(access: AccessContext) -> TokenAccess | None:
 def assert_can_access_project(access: AccessContext, project_id: str) -> None:
     if isinstance(access, AdminAccess) or project_id in access.project_ids:
         return
+    if isinstance(access, UserAccess):
+        raise Forbidden(f"You have no access to project: {project_id}")
     if project_id in access.permissions:
         # Mapped to the project, but its permissions do not cover the operation.
         lacking = policy.missing(access.permissions[project_id], access.needs)
@@ -114,16 +141,17 @@ def require_admin(access: AccessContext) -> None:
 def default_project_id_for_create(
     access: AccessContext, requested: str | None, archived: Collection[str] = ()
 ) -> str | None:
-    """Admins may leave the project open; a token falls back to its first mapped project
-    that is not archived."""
+    """Admins may leave the project open; a token or a user falls back to its first
+    project that is not archived."""
     if isinstance(access, AdminAccess):
         return requested
     if requested:
         assert_can_access_project(access, requested)
         return requested
+    subject = "You are not assigned" if isinstance(access, UserAccess) else "Token is not mapped"
     if not access.project_ids:
-        raise Forbidden("Token is not mapped to any projects")
+        raise Forbidden(f"{subject} to any projects")
     active = [project_id for project_id in access.project_ids if project_id not in archived]
     if not active:
-        raise Forbidden("Token is not mapped to any active projects")
+        raise Forbidden(f"{subject} to any active projects")
     return active[0]

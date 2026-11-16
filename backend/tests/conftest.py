@@ -14,6 +14,8 @@ from typing import Any
 import pytest
 import uvicorn
 from fastapi import FastAPI
+from fastapi.dependencies.models import Dependant
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from fastmcp import Client
 from sqlalchemy import Engine, text
@@ -22,6 +24,7 @@ from sqlmodel import Session
 from vibepod_board.config import Settings, to_sqlalchemy_url
 from vibepod_board.db import create_db_engine, migrate, set_engine
 from vibepod_board.main import create_app
+from vibepod_board.services import users
 
 
 def _pg_bin(name: str) -> str:
@@ -174,3 +177,40 @@ async def call(url: str, token: str, tool: str, **arguments: Any) -> Any:
     async with Client(url, auth=token) as client:
         result = await client.call_tool(tool, arguments)
         return json.loads(result.content[0].text)
+
+
+# The password a test user chose for themselves.
+USER_PASSWORD = "a password of her own"
+
+
+def add_user(session: Session, username: str, *project_ids: str) -> str:
+    """A user who already set their own password (`USER_PASSWORD`). Returns the user id."""
+    created = users.create_user(session, username, list(project_ids), "admin")
+    users.change_password(session, created.item.id, created.temporary_password, USER_PASSWORD)
+    return created.item.id
+
+
+def as_user(client: TestClient, username: str, password: str = USER_PASSWORD) -> TestClient:
+    """A second browser on the same app, signed in as `username`. `client` keeps its own
+    cookies, so a test can be the admin and a user at once."""
+    browser = TestClient(client.app)
+    response = browser.post("/api/auth/login", json={"username": username, "password": password})
+    assert response.status_code == 200, response.text
+    return browser
+
+
+def depends_on(dependant: Dependant, call: Any) -> bool:
+    return dependant.call is call or any(
+        depends_on(child, call) for child in dependant.dependencies
+    )
+
+
+def api_routes(routes: Any) -> list[APIRoute]:
+    """Every API route, including those of the routers the app includes."""
+    found: list[APIRoute] = []
+    for route in routes:
+        if isinstance(route, APIRoute):
+            found.append(route)
+        elif hasattr(route, "original_router"):
+            found.extend(api_routes(route.original_router.routes))
+    return found

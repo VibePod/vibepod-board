@@ -87,7 +87,12 @@ def test_reports_auth_state_through_auth_me(client: TestClient) -> None:
 
     response = client.get("/api/auth/me")
     assert response.status_code == 200
-    assert response.json() == {"authenticated": True, "username": "admin"}
+    assert response.json() == {
+        "authenticated": True,
+        "username": "admin",
+        "role": "admin",
+        "mustChangePassword": False,
+    }
 
 
 def test_exports_projects_only_for_admins(client: TestClient, session: Session) -> None:

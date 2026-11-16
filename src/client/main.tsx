@@ -65,6 +65,7 @@ import {
   Trash2,
   Upload,
   UserRound,
+  Users as UsersIcon,
 } from "lucide-react";
 import {
   type FormEvent,
@@ -86,6 +87,7 @@ import {
   type ApiTokenProject,
   type ApiTokenSummary,
   type AuthMeResponse,
+  type AuthRole,
   type BoardCard,
   type BoardColumn,
   type BoardColumns,
@@ -137,6 +139,7 @@ import {
 } from "./ConversationDialogs.js";
 import { CopyableCode } from "./CopyableCode.js";
 import { DeleteTaskDialog, type DeleteTaskTarget } from "./DeleteTaskDialog.js";
+import { formatDateTime } from "./dateTime.js";
 import {
   GitHubIssueBadge,
   GitHubRepositoryBadge,
@@ -164,6 +167,7 @@ import {
   parseBoardSearch,
   parseNavigationPath,
 } from "./navigation.js";
+import { PasswordChangeForm } from "./PasswordChange.js";
 import {
   PlanReadyDialog,
   type PlanReadyTarget,
@@ -220,6 +224,7 @@ import {
   type TokenAccessDraft,
 } from "./tokenPermissions.js";
 import { formatTokenProjectLabel } from "./tokenProjects.js";
+import { UsersDialog } from "./Users.js";
 import { WorkerActivity, WorkersIndicator } from "./Workers.js";
 import {
   workerActivitySignature,
@@ -243,8 +248,24 @@ type TaskViewMode = "list" | "tree";
 
 type AuthState =
   | { status: "checking" }
-  | { status: "authenticated"; username: string }
+  | {
+      status: "authenticated";
+      username: string;
+      role: AuthRole;
+      /** A user with a temporary password sees only the password form. */
+      mustChangePassword: boolean;
+    }
   | { status: "unauthenticated" };
+
+type SignedIn = Extract<AuthState, { status: "authenticated" }>;
+
+const signedIn = (me: AuthMeResponse, fallbackName: string): SignedIn => ({
+  status: "authenticated",
+  username: me.username ?? fallbackName,
+  // A server from before users existed sends no role: it knows only the admin.
+  role: me.role ?? "admin",
+  mustChangePassword: me.mustChangePassword ?? false,
+});
 
 type LoginDraft = {
   username: string;
@@ -488,6 +509,8 @@ const App = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isMcpGuideOpen, setIsMcpGuideOpen] = useState(false);
   const [isTokenManagerOpen, setIsTokenManagerOpen] = useState(false);
+  const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
+  const [isUsersOpen, setIsUsersOpen] = useState(false);
   const [tokens, setTokens] = useState<ApiTokenSummary[]>([]);
   const [githubStatus, setGitHubStatus] = useState<GitHubStatus | null>(null);
   // The dialog replaces the modal it was opened from; `restore` brings that back on cancel.
@@ -554,7 +577,9 @@ const App = () => {
     if (!loadOrder.apply(ticket)) return ideas.items;
     setGitHubStatus(github);
     if (retired) {
-      setArchivedProjects(retired.items);
+      // The users dialog lists these on every render: an answer without a list
+      // must not become the state.
+      setArchivedProjects(retired.items ?? []);
       setArchivedProjectsLoaded(true);
     }
     setArchivedProjectsFailed(!retired);
@@ -583,16 +608,43 @@ const App = () => {
         method: "POST",
         body: JSON.stringify(loginDraft),
       });
-      setAuth({
-        status: "authenticated",
-        username: me.username ?? loginDraft.username,
-      });
+      const next = signedIn(me, loginDraft.username);
+      setAuth(next);
       setLoginDraft(emptyLoginDraft());
+      // The board answers 403 until the temporary password is replaced.
+      if (next.mustChangePassword) return;
       setIsLoading(true);
       await loadState();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to sign in");
     }
+  };
+
+  const markPasswordSet = () => {
+    setAuth((current) =>
+      current.status === "authenticated"
+        ? { ...current, mustChangePassword: false }
+        : current,
+    );
+  };
+
+  // The temporary password is replaced: the board can be loaded now.
+  const finishFirstPassword = async () => {
+    markPasswordSet();
+    setIsLoading(true);
+    try {
+      await loadState();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load board");
+      setIsLoading(false);
+    }
+  };
+
+  const finishPasswordChange = () => {
+    markPasswordSet();
+    setIsPasswordDialogOpen(false);
+    setError("");
+    setNotice("Password changed.");
   };
 
   const logoutAdmin = async () => {
@@ -752,7 +804,12 @@ const App = () => {
           setIsLoading(false);
           return;
         }
-        setAuth({ status: "authenticated", username: me.username ?? "admin" });
+        const next = signedIn(me, "admin");
+        setAuth(next);
+        if (next.mustChangePassword) {
+          setIsLoading(false);
+          return;
+        }
         await loadState();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load board");
@@ -1220,7 +1277,7 @@ const App = () => {
                   <KeyRound size={22} />
                 </ThemeIcon>
                 <Box>
-                  <Title order={2}>Admin Login</Title>
+                  <Title order={2}>Sign in</Title>
                   <Text c="dimmed">vibepod-board</Text>
                 </Box>
               </Group>
@@ -1263,6 +1320,42 @@ const App = () => {
       </main>
     );
   }
+
+  if (auth.mustChangePassword) {
+    return (
+      <main className="login-shell">
+        <Paper className="login-panel" withBorder radius="md" p="xl">
+          <Stack gap="md">
+            <Group gap="sm">
+              <ThemeIcon variant="light" color="teal" size={42} radius="md">
+                <KeyRound size={22} />
+              </ThemeIcon>
+              <Box>
+                <Title order={2}>Set a new password</Title>
+                <Text c="dimmed">Signed in as {auth.username}</Text>
+              </Box>
+            </Group>
+            <Text size="sm">
+              Your password is temporary. Choose your own to continue.
+            </Text>
+            <PasswordChangeForm onChanged={() => void finishFirstPassword()} />
+            <Button
+              type="button"
+              variant="subtle"
+              color="gray"
+              leftSection={<LogOut size={16} />}
+              onClick={() => void logoutAdmin()}
+            >
+              Sign Out
+            </Button>
+          </Stack>
+        </Paper>
+      </main>
+    );
+  }
+
+  // Creating, changing and removing projects, tokens and users is the admin's.
+  const isAdmin = auth.role === "admin";
 
   const navigateTo = (navigation: NavigationState) => {
     // Navigating always lands on an unfiltered view.
@@ -2246,23 +2339,25 @@ const App = () => {
               ["projects", "Projects"],
               ["archivedProjects", "Archived projects"],
             ] as const
-          ).map(([view, label]) => (
-            <a
-              key={view}
-              className={activeView === view ? "active" : ""}
-              aria-current={activeView === view ? "page" : undefined}
-              href={formatNavigationPath({
-                activeView: view,
-                selectedProjectId: "",
-              })}
-              onClick={(event) => {
-                event.preventDefault();
-                navigateTo({ activeView: view, selectedProjectId: "" });
-              }}
-            >
-              {label}
-            </a>
-          ))}
+          )
+            .filter(([view]) => isAdmin || view !== "archivedProjects")
+            .map(([view, label]) => (
+              <a
+                key={view}
+                className={activeView === view ? "active" : ""}
+                aria-current={activeView === view ? "page" : undefined}
+                href={formatNavigationPath({
+                  activeView: view,
+                  selectedProjectId: "",
+                })}
+                onClick={(event) => {
+                  event.preventDefault();
+                  navigateTo({ activeView: view, selectedProjectId: "" });
+                }}
+              >
+                {label}
+              </a>
+            ))}
         </nav>
         <Select
           className="project-jump"
@@ -2297,15 +2392,39 @@ const App = () => {
           >
             MCP Integration
           </Button>
-          <Button
-            type="button"
-            variant="light"
-            color="gray"
-            leftSection={<KeyRound size={16} />}
-            onClick={() => void openTokenManager()}
-          >
-            API Tokens
-          </Button>
+          {isAdmin && (
+            <Button
+              type="button"
+              variant="light"
+              color="gray"
+              leftSection={<KeyRound size={16} />}
+              onClick={() => void openTokenManager()}
+            >
+              API Tokens
+            </Button>
+          )}
+          {isAdmin && (
+            <Button
+              type="button"
+              variant="light"
+              color="gray"
+              leftSection={<UsersIcon size={16} />}
+              onClick={() => setIsUsersOpen(true)}
+            >
+              Users
+            </Button>
+          )}
+          {!isAdmin && (
+            <Button
+              type="button"
+              variant="light"
+              color="gray"
+              leftSection={<KeyRound size={16} />}
+              onClick={() => setIsPasswordDialogOpen(true)}
+            >
+              Change Password
+            </Button>
+          )}
           <Button
             type="button"
             variant="subtle"
@@ -2339,7 +2458,7 @@ const App = () => {
             </Text>
           </div>
           <Group className="topbar-actions" gap="xs">
-            {activeView === "projects" && (
+            {activeView === "projects" && isAdmin && (
               <>
                 <Button
                   type="button"
@@ -2422,17 +2541,26 @@ const App = () => {
               <Paper className="empty-state" withBorder radius="md" p="lg">
                 <Stack gap="sm" align="flex-start">
                   <Title order={3}>No projects yet</Title>
-                  <Text c="dimmed">
-                    Create a project to start adding tasks, board cards, and
-                    notes.
-                  </Text>
-                  <Button
-                    type="button"
-                    leftSection={<Plus size={18} />}
-                    onClick={openCreateProject}
-                  >
-                    Add Project
-                  </Button>
+                  {isAdmin ? (
+                    <>
+                      <Text c="dimmed">
+                        Create a project to start adding tasks, board cards, and
+                        notes.
+                      </Text>
+                      <Button
+                        type="button"
+                        leftSection={<Plus size={18} />}
+                        onClick={openCreateProject}
+                      >
+                        Add Project
+                      </Button>
+                    </>
+                  ) : (
+                    <Text c="dimmed">
+                      No project is assigned to you yet. Ask the admin for
+                      access.
+                    </Text>
+                  )}
                 </Stack>
               </Paper>
             )}
@@ -2496,45 +2624,49 @@ const App = () => {
                         </Badge>
                       </Group>
                       <Group mt="auto" justify="flex-end">
-                        <Button
-                          type="button"
-                          variant="light"
-                          color="gray"
-                          leftSection={<Download size={16} />}
-                          onClick={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            void exportProject(project);
-                          }}
-                        >
-                          Export
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="light"
-                          color="gray"
-                          leftSection={<Pencil size={16} />}
-                          onClick={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            openEditProject(project);
-                          }}
-                        >
-                          Edit
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="light"
-                          color="orange"
-                          leftSection={<Archive size={16} />}
-                          onClick={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            setArchiveProjectTarget(project);
-                          }}
-                        >
-                          Archive
-                        </Button>
+                        {isAdmin && (
+                          <>
+                            <Button
+                              type="button"
+                              variant="light"
+                              color="gray"
+                              leftSection={<Download size={16} />}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                void exportProject(project);
+                              }}
+                            >
+                              Export
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="light"
+                              color="gray"
+                              leftSection={<Pencil size={16} />}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                openEditProject(project);
+                              }}
+                            >
+                              Edit
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="light"
+                              color="orange"
+                              leftSection={<Archive size={16} />}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                setArchiveProjectTarget(project);
+                              }}
+                            >
+                              Archive
+                            </Button>
+                          </>
+                        )}
                         <Button
                           type="button"
                           component="a"
@@ -2561,7 +2693,12 @@ const App = () => {
           </>
         )}
 
-        {activeView === "archivedProjects" && (
+        {activeView === "archivedProjects" && !isAdmin && (
+          <Alert color="blue" variant="light">
+            Only the admin sees archived projects.
+          </Alert>
+        )}
+        {activeView === "archivedProjects" && isAdmin && (
           <ArchivedProjectsView
             projects={archivedProjects}
             loaded={archivedProjectsLoaded}
@@ -4585,6 +4722,24 @@ const App = () => {
         )}
       </Modal>
 
+      {isAdmin && (
+        <UsersDialog
+          opened={isUsersOpen}
+          onClose={() => setIsUsersOpen(false)}
+          projects={[...state.projects, ...archivedProjects]}
+        />
+      )}
+
+      <Modal
+        opened={isPasswordDialogOpen}
+        onClose={() => setIsPasswordDialogOpen(false)}
+        title="Change Password"
+        centered
+        size="sm"
+      >
+        <PasswordChangeForm onChanged={finishPasswordChange} />
+      </Modal>
+
       <Modal
         opened={isTokenManagerOpen}
         onClose={() => setIsTokenManagerOpen(false)}
@@ -4967,14 +5122,6 @@ const normalizeProjectKeyInput = (value: string) =>
     .toUpperCase()
     .replace(/[^A-Z]/g, "")
     .slice(0, 3);
-
-const formatDateTime = (value: string) =>
-  value
-    ? new Intl.DateTimeFormat(undefined, {
-        dateStyle: "medium",
-        timeStyle: "short",
-      }).format(new Date(value))
-    : "";
 
 const TokenProjects = ({ projects }: { projects: ApiTokenProject[] }) => (
   <Stack gap={4}>
