@@ -12,7 +12,7 @@ from vibepod_board import passwords
 from vibepod_board.errors import BadRequest, Conflict, Forbidden, NotFound
 from vibepod_board.schemas import DeletedUser, UserCredentials, UserSummary, now
 from vibepod_board.services.common import new_id, normalize_list, require_projects, transactional
-from vibepod_board.tables import UserProjectRow, UserRow
+from vibepod_board.tables import ApiTokenProjectRow, ApiTokenRow, UserProjectRow, UserRow
 
 USERNAME_PATTERN = re.compile(r"[a-z0-9._-]{3,64}")
 
@@ -79,11 +79,19 @@ def _require_user(session: Session, user_id: str) -> UserRow:
 
 
 def _replace_projects(session: Session, user_id: str, project_ids: Sequence[str]) -> None:
+    """Assigns exactly these projects. A project that goes is also taken from the user's
+    tokens, so that their lists show what they still reach; `authenticate_token` refuses
+    the project either way."""
     require_projects(session, project_ids)
+    kept = normalize_list(project_ids)
     session.execute(delete(UserProjectRow).where(col(UserProjectRow.user_id) == user_id))
-    session.add_all(
-        UserProjectRow(user_id=user_id, project_id=project_id)
-        for project_id in normalize_list(project_ids)
+    session.add_all(UserProjectRow(user_id=user_id, project_id=project_id) for project_id in kept)
+    own_tokens = select(ApiTokenRow.id).where(ApiTokenRow.owner_user_id == user_id)
+    session.execute(
+        delete(ApiTokenProjectRow).where(
+            col(ApiTokenProjectRow.token_id).in_(own_tokens),
+            col(ApiTokenProjectRow.project_id).not_in(kept),
+        )
     )
     session.flush()
 

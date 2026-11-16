@@ -367,6 +367,8 @@ class ApiTokenRow(SQLModel, table=True):
     id: str = Field(sa_column=Column(Text, primary_key=True))
     name: str = Field(sa_column=Column(Text, nullable=False))
     token_hash: str = Field(sa_column=Column(Text, nullable=False, unique=True))
+    # The user the token belongs to; empty for the admin's tokens.
+    owner_user_id: str | None = _foreign_key("users.id", "CASCADE", nullable=True)
     created_at: datetime = _timestamp()
     last_used_at: datetime | None = _timestamp(nullable=True)
     revoked_at: datetime | None = _timestamp(nullable=True)
@@ -444,6 +446,8 @@ class OAuthRequestRow(SQLModel, table=True):
         default_factory=dict,
         sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")),
     )
+    # The user who approved the sign-in; empty when the admin did.
+    owner_user_id: str | None = _foreign_key("users.id", "CASCADE", nullable=True)
     created_at: datetime = _timestamp()
     expires_at: datetime = _timestamp()
 

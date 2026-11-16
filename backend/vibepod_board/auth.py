@@ -16,6 +16,7 @@ from vibepod_board.access import (
     AccessContext,
     AdminAccess,
     TokenAccess,
+    UserAccess,
     admin_access,
     for_operation,
     token_access,
@@ -102,9 +103,9 @@ class SessionManager:
 # rejects a request itself: `resolve_access` still reads the header, after the admin cookie.
 bearer_scheme = HTTPBearer(
     auto_error=False,
-    description="Project-scoped API token, created by an admin under API Tokens. A route "
-    "outside the token's permissions answers 403, and so do the admin-only routes, which "
-    "need the admin session cookie.",
+    description="Project-scoped API token, created under API Tokens. A route outside the "
+    "token's permissions answers 403, and so do the routes for the admin and for users, "
+    "which need a session cookie.",
 )
 
 
@@ -189,5 +190,21 @@ def require_admin_access(
     return access
 
 
+def require_member_access(
+    access: Annotated[AccessContext, Depends(require_access)],
+) -> AdminAccess | UserAccess:
+    """Somebody at the board in a browser: the admin or a user. A token is refused,
+    whatever its permissions; the routes behind this hand out access themselves."""
+    if isinstance(access, TokenAccess):
+        raise Forbidden("Sign in to the board for this")
+    return access
+
+
+def acting_user_id(member: AdminAccess | UserAccess) -> str | None:
+    """The user a member acts as, or None for the admin, who acts on everybody's records."""
+    return member.user_id if isinstance(member, UserAccess) else None
+
+
 AccessDep = Annotated[AccessContext, Depends(require_permitted_access)]
 AdminDep = Annotated[AdminAccess, Depends(require_admin_access)]
+MemberDep = Annotated[AdminAccess | UserAccess, Depends(require_member_access)]

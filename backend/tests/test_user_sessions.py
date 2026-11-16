@@ -92,7 +92,7 @@ def test_nothing_but_the_password_change_works_with_a_temporary_password(
         ("GET", "/api/projects"),
         ("GET", "/api/board"),
         ("POST", "/api/ideas"),
-        # An admin-only route: the password comes first there too.
+        # A route for the admin and for users: the password comes first there too.
         ("GET", "/api/tokens"),
     ):
         response = browser.request(method, path)

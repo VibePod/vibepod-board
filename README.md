@@ -194,7 +194,8 @@ Over MCP, `tools/list` returns the tools at least one project allows, and a call
 The admin is the one account from `ADMIN_USERNAME` and `ADMIN_PASSWORD`. Under **Users** the admin creates further accounts and assigns each the projects it may work in.
 
 - A user signs in on the same page as the admin and has full access in the assigned projects: tasks, the board, notes, GitHub sync, workers and automation.
-- Creating, importing, editing, archiving, exporting and deleting projects, API tokens, OAuth sign-ins and users stay with the admin.
+- A user connects their own agents: under **API Tokens** they create tokens for their projects, and they can approve an [OAuth sign-in](#oauth-sign-in) for them. Such a token belongs to the user. It never reaches a project the user does not have: taking a project from a user takes it from their tokens too, deactivating the user stops their tokens until the user is activated again, and deleting the user deletes them. A password reset leaves tokens alone. The admin sees every token with the user it belongs to.
+- Creating, importing, editing, archiving, exporting and deleting projects, and managing users, stay with the admin.
 - The board generates a temporary password when a user is created and shows it once. After signing in with it, the user must set a password of their own (12 to 128 characters) before anything else works. A user can change the password again at any time under **Change Password**.
 - **Reset Password** replaces a user's password with a new temporary one and signs them out. **Deactivate** signs them out and blocks sign-in until the user is activated again. **Delete** removes the account; tasks and comments the user wrote stay.
 - The user list shows each user's last sign-in and whether they still have the temporary password.
@@ -210,6 +211,7 @@ Sessions are kept in memory: a restart signs everybody out.
 | `PATCH /api/users/{id}` | admin | `projectIds` and/or `active` |
 | `POST /api/users/{id}/reset-password` | admin | Answers a new `temporaryPassword` |
 | `DELETE /api/users/{id}` | admin | Deletes the user |
+| `GET`, `POST /api/tokens`, `PATCH /api/tokens/{id}`, `POST /api/tokens/{id}/revoke` | admin, user | The admin's cover every token; a user's only their own (`404` for others, `403` for a project they lack) |
 
 ## Project Import and Export
 
@@ -248,11 +250,11 @@ An MCP client that supports OAuth needs only the URL, no token in its configurat
 { "mcpServers": { "board": { "url": "http://localhost:3000/mcp" } } }
 ```
 
-On the first connection the client opens the board in your browser. Sign in as the admin, tick the projects the client may use, choose its [permissions](#token-permissions), for all projects at once or for each one, and approve. The client receives a token for exactly those projects and permissions. It is listed under **API Tokens** as `<client name> (OAuth)` and stays valid until you revoke it there; no refresh tokens are issued. Tokens pasted into a client's configuration keep working as before.
+On the first connection the client opens the board in your browser. Sign in as the admin or as a [user](#users), tick the projects the client may use (a user is offered their own), choose its [permissions](#token-permissions), for all projects at once or for each one, and approve. The client receives a token for exactly those projects and permissions. It is listed under **API Tokens** as `<client name> (OAuth)` and stays valid until you revoke it there; no refresh tokens are issued. Tokens pasted into a client's configuration keep working as before.
 
 OAuth clients only send credentials to an authorization server over HTTPS or on a loopback address. `PUBLIC_URL` is the URL browsers and clients use for the board. It defaults to `http://localhost:<PORT>` and must be an `https://` URL, or `http://` on `localhost`, `127.0.0.1` or `[::1]`; the board refuses to start otherwise. A client that reaches the board under another name, such as `http://vibepod-board:3000` inside the VibePod network, cannot sign in this way and uses a pasted token.
 
-Clients register themselves. A client may only send the browser back to the local machine, or to an address listed in `OAUTH_REDIRECT_URIS` (see [Claude on the web](#claude-on-the-web)). The admin's decision goes through `GET /api/oauth/requests/:id` and `POST /api/oauth/requests/:id/approve` or `/deny`, which need the admin session.
+Clients register themselves. A client may only send the browser back to the local machine, or to an address listed in `OAUTH_REDIRECT_URIS` (see [Claude on the web](#claude-on-the-web)). The decision goes through `GET /api/oauth/requests/:id` and `POST /api/oauth/requests/:id/approve` or `/deny`, which need the session of the admin or of a user; a token approved by a user belongs to that user.
 
 #### Claude on the web
 

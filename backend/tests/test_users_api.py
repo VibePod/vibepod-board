@@ -193,7 +193,8 @@ def test_every_admin_route_refuses_a_user(client: TestClient, session: Session) 
 
     assert ("POST", "/api/users") in admin_routes
     assert ("POST", "/api/projects") in admin_routes
-    assert ("GET", "/api/tokens") in admin_routes
+    # A user manages their own tokens and sign-ins, so those are not the admin's alone.
+    assert ("GET", "/api/tokens") not in admin_routes
     for method, path in admin_routes:
         response = browser.request(method, path)
         assert response.status_code == 403, f"{method} {path}"

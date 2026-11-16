@@ -206,7 +206,7 @@
       <p id="status" role="status">Loading…</p>
 
       <form id="login" hidden>
-        <p>Sign in as the board admin to continue.</p>
+        <p>Sign in to the board to continue.</p>
         <label class="field">
           Username
           <input id="username" type="text" autocomplete="username" required />
@@ -267,6 +267,8 @@
         const requestPath = `/api/oauth/requests/${encodeURIComponent(requestId || "")}`;
         const EXPIRED =
           "This sign-in request has expired or was already decided. Start the sign-in again from your agent.";
+        // What the board answers to a user who has not replaced a temporary password yet.
+        const TEMPORARY_PASSWORD = "Set a new password first";
 
         // Answers with the JSON body, or throws an error carrying the HTTP status.
         const api = async (path, body) => {
@@ -312,7 +314,7 @@
           byId("projects").replaceChildren(...items);
           if (projects.length === 0) {
             byId("consent-error").textContent =
-              "The board has no projects yet. Create one first, then sign in again.";
+              "There is no project you could give access to. Create one, or ask the admin for a project, then sign in again.";
           }
           approve.disabled = selectedProjects().length === 0;
         };
@@ -440,6 +442,11 @@
               show(login);
             } else if (error.status === 404) {
               show(null, EXPIRED);
+            } else if (error.status === 403 && error.message === TEMPORARY_PASSWORD) {
+              show(
+                null,
+                "You still have a temporary password. Sign in to the board, set your own password, then start the sign-in from your agent again.",
+              );
             } else {
               show(null, `Could not load the sign-in request (${error.message}).`);
             }

@@ -13,7 +13,12 @@ from sqlmodel import Session
 from vibepod_board import permissions
 from vibepod_board.access import admin_access
 from vibepod_board.api.system import MCP_INFO_TOOLS
-from vibepod_board.auth import require_access, require_admin_access, require_permitted_access
+from vibepod_board.auth import (
+    require_access,
+    require_admin_access,
+    require_member_access,
+    require_permitted_access,
+)
 from vibepod_board.permissions import FULL_ACCESS, Area
 from vibepod_board.schemas import Project
 from vibepod_board.services import ideas, projects, tokens
@@ -164,15 +169,16 @@ def test_every_route_a_token_can_reach_names_its_permission(client: TestClient) 
 
 
 def test_no_route_lets_a_token_in_without_a_permission_check(client: TestClient) -> None:
-    """A route that authenticates the caller must go on to check a token's permissions or
-    ask for the admin. One that depended on `require_access` alone would be open to every
-    token and missing from the policy comparison above."""
+    """A route that authenticates the caller must go on to check a token's permissions, or
+    ask for the admin, or for somebody signed in. One that depended on `require_access`
+    alone would be open to every token and missing from the policy comparison above."""
     unchecked = sorted(
         f"{method} {route.path}"
         for route in api_routes(client.app.routes)  # type: ignore[attr-defined]
         if depends_on(route.dependant, require_access)
         and not depends_on(route.dependant, require_permitted_access)
         and not depends_on(route.dependant, require_admin_access)
+        and not depends_on(route.dependant, require_member_access)
         for method in route.methods
     )
 

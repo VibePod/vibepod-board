@@ -88,7 +88,8 @@ const stubBoardFetch = (
   {
     login,
     projects = [appProject],
-  }: { login?: AuthMeResponse; projects?: unknown[] } = {},
+    tokens = [],
+  }: { login?: AuthMeResponse; projects?: unknown[]; tokens?: unknown[] } = {},
 ) => {
   let current = me;
   const fetchMock = vi.fn(async (path: string, _init?: RequestInit) => {
@@ -105,6 +106,8 @@ const stubBoardFetch = (
     if (path === "/api/ideas") return json({ items: [] });
     if (path === "/api/documents") return json({ items: [] });
     if (path === "/api/board") return json({ columns: emptyColumns });
+    if (path === "/api/tokens") return json({ items: tokens });
+    if (path === "/api/permission-areas") return json({ items: [] });
     return json({}, 404);
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -124,7 +127,6 @@ describe("a user's session", () => {
     await screen.findByRole("link", { name: "Board" });
 
     for (const name of [
-      "API Tokens",
       "Users",
       "Add Project",
       "Import Project",
@@ -134,6 +136,8 @@ describe("a user's session", () => {
     ]) {
       expect(screen.queryByRole("button", { name })).toBeNull();
     }
+    // A user manages their own tokens.
+    expect(screen.getByRole("button", { name: "API Tokens" })).toBeTruthy();
     expect(
       screen.queryByRole("link", { name: "Archived projects" }),
     ).toBeNull();
@@ -205,7 +209,7 @@ describe("a user's session", () => {
     await waitFor(() =>
       expect(requested(fetchMock, "/api/projects")).toBe(true),
     );
-    expect(screen.queryByRole("button", { name: "API Tokens" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Users" })).toBeNull();
   });
 
   it("asks a user with a temporary password for a new one before loading the board", async () => {
@@ -306,5 +310,31 @@ describe("a user's session", () => {
       await screen.findByRole("button", { name: "Add User" }),
     ).toBeTruthy();
     expect(requested(fetchMock, "/api/users")).toBe(true);
+  });
+
+  it("lets a user manage their own tokens, without naming the owner", async () => {
+    stubBoardFetch(rebecca, {
+      tokens: [
+        {
+          id: "token-1",
+          name: "Claude",
+          owner: "rebecca",
+          projects: [
+            { id: "project-1", key: "APP", title: "App", permissions: {} },
+          ],
+          createdAt: "2026-11-16T10:00:00.000Z",
+        },
+      ],
+    });
+    const AppShell = await loadAppShell();
+    render(<AppShell />);
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "API Tokens" }),
+    );
+
+    expect(await screen.findByRole("heading", { name: "Claude" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Create Token" })).toBeTruthy();
+    expect(screen.queryByText("User rebecca")).toBeNull();
   });
 });

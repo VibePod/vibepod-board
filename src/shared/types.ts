@@ -498,6 +498,8 @@ export type PermissionArea = {
 export type ApiTokenSummary = {
   id: string;
   name: string;
+  /** The user the token belongs to; left out for the admin's tokens. */
+  owner?: string;
   projects: ApiTokenProject[];
   createdAt: string;
   lastUsedAt?: string;

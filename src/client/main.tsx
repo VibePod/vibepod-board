@@ -1354,7 +1354,8 @@ const App = () => {
     );
   }
 
-  // Creating, changing and removing projects, tokens and users is the admin's.
+  // Creating, changing and removing projects and users is the admin's. A user works in
+  // the assigned projects and manages their own API tokens.
   const isAdmin = auth.role === "admin";
 
   const navigateTo = (navigation: NavigationState) => {
@@ -2392,17 +2393,15 @@ const App = () => {
           >
             MCP Integration
           </Button>
-          {isAdmin && (
-            <Button
-              type="button"
-              variant="light"
-              color="gray"
-              leftSection={<KeyRound size={16} />}
-              onClick={() => void openTokenManager()}
-            >
-              API Tokens
-            </Button>
-          )}
+          <Button
+            type="button"
+            variant="light"
+            color="gray"
+            leftSection={<KeyRound size={16} />}
+            onClick={() => void openTokenManager()}
+          >
+            API Tokens
+          </Button>
           {isAdmin && (
             <Button
               type="button"
@@ -4856,6 +4855,12 @@ const App = () => {
                       {token.revokedAt && (
                         <Badge variant="light" color="red">
                           Revoked
+                        </Badge>
+                      )}
+                      {/* Only the admin lists other people's tokens. */}
+                      {isAdmin && token.owner && (
+                        <Badge variant="light" color="grape">
+                          User {token.owner}
                         </Badge>
                       )}
                     </Group>
