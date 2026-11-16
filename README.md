@@ -30,7 +30,7 @@ ADMIN_PASSWORD=change-me
 docker compose up --build
 ```
 
-Admins sign in through the browser UI and can create project-scoped API/MCP tokens from **API Tokens**.
+Admins sign in through the browser UI and can create project-scoped API/MCP tokens from **API Tokens**, each with its own [permissions](#token-permissions).
 
 The backend applies database migrations on startup. Set `ALEMBIC_AUTO_UPGRADE=false` to run them yourself with `uv run alembic upgrade head` from `backend/`. A database created by the earlier TypeScript server is adopted in place: it is brought up to the baseline revision and stamped, without recreating any data.
 
@@ -139,6 +139,7 @@ Opening and reading pull requests uses the same `GITHUB_TOKEN` as issue sync (se
 - `POST /api/tokens`
 - `PATCH /api/tokens/:id`
 - `POST /api/tokens/:id/revoke`
+- `GET /api/permission-areas`
 - `GET /api/oauth/requests/:id`
 - `POST /api/oauth/requests/:id/approve`
 - `POST /api/oauth/requests/:id/deny`
@@ -148,6 +149,45 @@ Opening and reading pull requests uses the same `GITHUB_TOKEN` as issue sync (se
 `GET /api/ideas`, `GET /api/board`, `GET /api/board/archived`, `GET /api/documents`, and `GET /api/work-order` accept `projectId` query params for project-scoped reads.
 
 Browser/full REST access uses the admin session cookie. Project-scoped API clients use `Authorization: Bearer <token>`.
+
+## Token Permissions
+
+A token is mapped to projects and has a permission level in each of six areas. A token that covers several projects can have the same levels in all of them, or levels of its own in each. A level is `none`, `read` or `write`; `write` includes `read`.
+
+| Area | `read` | `write` |
+| --- | --- | --- |
+| `tasks` | List and read tasks, their dependencies, readiness scores, history and the work order | Create, edit and delete tasks, set dependencies and readiness scores, mark a task ready |
+| `board` | List and read board cards, including archived ones | Move, edit, archive and unarchive cards, answer a worker's question, request rework, approve a review |
+| `documents` | List plans and notes | Create and edit them |
+| `github` | The sync status and a card's suggested pull request | Push and pull issues, open and link pull requests |
+| `automation` | Workers, run reports, reviews, and whether automation is paused | Register, stop and remove workers; claim, renew, hand over and release tasks; cancel a run; add run reports; submit and cancel reviews |
+| `project` | (not offered) | Change project settings, pause and resume automation, archive, restore and delete the project |
+
+Choose the levels when you create a token under **API Tokens** or approve an [OAuth sign-in](#oauth-sign-in). With two or more projects, **Set permissions for each project** gives every project its own table. **Edit access** on a token changes its projects and their permissions later.
+
+Over the API, `POST /api/tokens`, `PATCH /api/tokens/:id` and `POST /api/oauth/requests/:id/approve` take `permissions`, one set for every project, and `projectPermissions`, a set for single projects by project id, which wins there:
+
+```json
+{
+  "name": "Planner",
+  "projectIds": ["<app>", "<api>"],
+  "permissions": { "tasks": "read", "documents": "read" },
+  "projectPermissions": { "<api>": { "tasks": "write", "documents": "write", "board": "read" } }
+}
+```
+
+An area that is not named gets `none`. A project that neither field covers gets `write` in every area, and tokens created before permissions existed keep that full access. On `PATCH`, `projectIds` replaces the token's projects: a project that stays keeps its permissions unless new ones are given. A token lists its permissions per project, as `permissions` on each entry of `projects`. A worker run by `vp board work` needs `automation: write` and `tasks: read`.
+
+Every request runs with the projects whose permissions cover it:
+
+- A list such as `GET /api/ideas` leaves out the projects that do not allow it.
+- Naming such a project, or a task or card in it, is answered with `403` and a message such as `This token has no write access to Tasks in project: <id>`.
+- When no project allows the request at all, the answer is `403` with `This token has no write access to Tasks`.
+- New work without a `projectId` lands in the first project the token may write to.
+
+Over MCP, `tools/list` returns the tools at least one project allows, and a call is refused with the same messages. The `vibepod-board://state` resource shows the projects with `read` on tasks, board and documents. Listing the token's projects needs no permission.
+
+`GET /api/permission-areas` returns the areas with their levels and the MCP tools each level unlocks. The policy itself, with every tool and route, is `backend/vibepod_board/permissions.py`. The admin session is not restricted, and admin-only routes stay admin-only.
 
 ## Project Import and Export
 
@@ -174,7 +214,9 @@ MCP requires:
 Authorization: Bearer <project-token>
 ```
 
-Browse the tools with their parameters and schemas at `/mcp-docs` (as JSON: `GET /api/mcp-tools`).
+A client sees and can call only the tools its token's [permissions](#token-permissions) cover.
+
+Browse the tools with their parameters, schemas and the permission each one needs at `/mcp-docs` (as JSON: `GET /api/mcp-tools`).
 
 ### OAuth sign-in
 
@@ -184,7 +226,7 @@ An MCP client that supports OAuth needs only the URL, no token in its configurat
 { "mcpServers": { "board": { "url": "http://localhost:3000/mcp" } } }
 ```
 
-On the first connection the client opens the board in your browser. Sign in as the admin, tick the projects the client may use, and approve. The client receives a token for exactly those projects. It is listed under **API Tokens** as `<client name> (OAuth)` and stays valid until you revoke it there; no refresh tokens are issued. Tokens pasted into a client's configuration keep working as before.
+On the first connection the client opens the board in your browser. Sign in as the admin, tick the projects the client may use, choose its [permissions](#token-permissions), for all projects at once or for each one, and approve. The client receives a token for exactly those projects and permissions. It is listed under **API Tokens** as `<client name> (OAuth)` and stays valid until you revoke it there; no refresh tokens are issued. Tokens pasted into a client's configuration keep working as before.
 
 OAuth clients only send credentials to an authorization server over HTTPS or on a loopback address. `PUBLIC_URL` is the URL browsers and clients use for the board. It defaults to `http://localhost:<PORT>` and must be an `https://` URL, or `http://` on `localhost`, `127.0.0.1` or `[::1]`; the board refuses to start otherwise. A client that reaches the board under another name, such as `http://vibepod-board:3000` inside the VibePod network, cannot sign in this way and uses a pasted token.
 

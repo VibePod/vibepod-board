@@ -173,6 +173,9 @@
       .badge.idempotent {
         color: var(--info);
       }
+      .badge.permission {
+        color: var(--text);
+      }
       #detail h2 {
         margin: 0 0 4px;
         font-size: 22px;
@@ -356,6 +359,14 @@
             el("span", { class: `badge ${label}` }, label),
           );
 
+        // The token permission the tool needs, such as "needs Tasks · write".
+        const permissionBadge = (tool) => {
+          const needs = catalog.permissions?.[tool.name];
+          return needs
+            ? [el("span", { class: "badge permission" }, `needs ${needs.label} · ${needs.level}`)]
+            : [];
+        };
+
         const selectedTool = () => {
           const name = location.hash.slice(1);
           return catalog.tools.find((tool) => tool.name === name) || catalog.tools[0];
@@ -443,7 +454,13 @@
           const inputSchema = tool.inputSchema || {};
           byId("detail").replaceChildren(
             el("h2", {}, tool.title || tool.name),
-            el("p", { class: "tool-name" }, el("code", {}, tool.name), ...badges(tool)),
+            el(
+              "p",
+              { class: "tool-name" },
+              el("code", {}, tool.name),
+              ...badges(tool),
+              ...permissionBadge(tool),
+            ),
             el("p", { class: "description" }, tool.description || ""),
             el("h3", {}, "Parameters"),
             parameterTable(inputSchema),

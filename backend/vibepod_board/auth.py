@@ -10,7 +10,15 @@ from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlmodel import Session
 
-from vibepod_board.access import AccessContext, AdminAccess, admin_access, token_access
+from vibepod_board import permissions
+from vibepod_board.access import (
+    AccessContext,
+    AdminAccess,
+    TokenAccess,
+    admin_access,
+    for_operation,
+    token_access,
+)
 from vibepod_board.db import SessionDep
 from vibepod_board.errors import BoardError, Forbidden
 from vibepod_board.services import tokens
@@ -70,8 +78,9 @@ class AdminSessionManager:
 # rejects a request itself: `resolve_access` still reads the header, after the admin cookie.
 bearer_scheme = HTTPBearer(
     auto_error=False,
-    description="Project-scoped API token, created by an admin under API Tokens. "
-    "Admin-only routes answer a token with 403; they need the admin session cookie.",
+    description="Project-scoped API token, created by an admin under API Tokens. A route "
+    "outside the token's permissions answers 403, and so do the admin-only routes, which "
+    "need the admin session cookie.",
 )
 
 
@@ -103,7 +112,9 @@ def resolve_access(
     authenticated = tokens.authenticate_token(session, token)
     if not authenticated:
         return None
-    return token_access(authenticated.token_id, authenticated.project_ids)
+    return token_access(
+        authenticated.token_id, authenticated.project_ids, authenticated.permissions
+    )
 
 
 def require_access(
@@ -118,6 +129,20 @@ def require_access(
     return access
 
 
+def require_permitted_access(
+    request: Request,
+    access: Annotated[AccessContext, Depends(require_access)],
+) -> AccessContext:
+    """The caller, with a token narrowed to the projects whose permissions cover the
+    route. The policy names what each route needs; a route it does not list is refused for
+    every token, and so is one that none of the token's projects allows."""
+    if isinstance(access, TokenAccess):
+        route = request.scope.get("route")
+        needs = permissions.ROUTE_PERMISSIONS.get(f"{request.method} {getattr(route, 'path', '')}")
+        return for_operation(access, needs)
+    return access
+
+
 def require_admin_access(
     access: Annotated[AccessContext, Depends(require_access)],
 ) -> AdminAccess:
@@ -126,5 +151,5 @@ def require_admin_access(
     return access
 
 
-AccessDep = Annotated[AccessContext, Depends(require_access)]
+AccessDep = Annotated[AccessContext, Depends(require_permitted_access)]
 AdminDep = Annotated[AdminAccess, Depends(require_admin_access)]

@@ -473,7 +473,27 @@ export type UpdateDocumentInput = Partial<
   >
 >;
 
-export type ApiTokenProject = Pick<Project, "id" | "key" | "title">;
+/** A project a token is mapped to, with what the token may do in it. */
+export type ApiTokenProject = Pick<Project, "id" | "key" | "title"> & {
+  permissions: TokenPermissions;
+};
+
+export type PermissionLevel = "none" | "read" | "write";
+
+/** The level a token has in each area, keyed by the area's key. */
+export type TokenPermissions = Record<string, PermissionLevel>;
+
+/** One area of the board that a token's permissions cover. */
+export type PermissionArea = {
+  key: string;
+  label: string;
+  description: string;
+  /** The levels the area offers, lowest first. */
+  levels: PermissionLevel[];
+  /** The MCP tools each level unlocks; write includes the read tools. */
+  readTools: string[];
+  writeTools: string[];
+};
 
 export type ApiTokenSummary = {
   id: string;
@@ -487,11 +507,20 @@ export type ApiTokenSummary = {
 export type CreateApiTokenInput = {
   name: string;
   projectIds: string[];
+  /** One set for every project; full access when omitted. */
+  permissions?: TokenPermissions;
+  /** A set of its own for single projects, by project id. */
+  projectPermissions?: Record<string, TokenPermissions>;
 };
 
 export type UpdateApiTokenInput = {
   name?: string;
+  /** Replaces the token's projects; a project that stays keeps its permissions. */
   projectIds?: string[];
+  /** Replaces the permission set of every project. */
+  permissions?: TokenPermissions;
+  /** Replaces the permission set of single projects, by project id. */
+  projectPermissions?: Record<string, TokenPermissions>;
 };
 
 export type CreatedApiTokenResponse = {

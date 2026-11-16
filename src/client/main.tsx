@@ -90,7 +90,6 @@ import {
   type BoardColumn,
   type BoardColumns,
   boardColumns,
-  type CreateApiTokenInput,
   type CreatedApiTokenResponse,
   type DocumentKind,
   documentKinds,
@@ -98,6 +97,7 @@ import {
   type IdeaStatus,
   type ImportProjectResult,
   ideaStatuses,
+  type PermissionArea,
   type PlanDocument,
   type Project,
   type ProjectBundle,
@@ -187,6 +187,10 @@ import { TaskHistory } from "./TaskHistory.js";
 import { TaskReviews } from "./TaskReviews.js";
 import { TaskRuns } from "./TaskRuns.js";
 import {
+  TokenAccessFields,
+  TokenPermissionsSummary,
+} from "./TokenPermissions.js";
+import {
   isCardReadinessStale,
   isReadinessStale,
   plannedManyNotice,
@@ -209,6 +213,12 @@ import {
 } from "./taskListUtils.js";
 import { taskNavigationFor } from "./taskNavigation.js";
 import { taskOverviewForIdea } from "./taskOverviewUtils.js";
+import {
+  accessDraftFor,
+  accessPayload,
+  emptyAccessDraft,
+  type TokenAccessDraft,
+} from "./tokenPermissions.js";
 import { formatTokenProjectLabel } from "./tokenProjects.js";
 import { WorkerActivity, WorkersIndicator } from "./Workers.js";
 import {
@@ -297,6 +307,18 @@ type CreatedTokenState = {
   projects: ApiTokenProject[];
 } | null;
 
+/** A new token while its form is filled in. */
+type TokenDraft = {
+  name: string;
+  access: TokenAccessDraft;
+};
+
+/** The projects and permissions being edited for an existing token. */
+type TokenAccessEdit = {
+  tokenId: string;
+  access: TokenAccessDraft;
+} | null;
+
 const emptyColumns: BoardColumns = {
   ready: [],
   planned: [],
@@ -350,9 +372,9 @@ const emptyLoginDraft = (): LoginDraft => ({
   password: "",
 });
 
-const emptyTokenDraft = (): CreateApiTokenInput => ({
+const emptyTokenDraft = (): TokenDraft => ({
   name: "",
-  projectIds: [],
+  access: emptyAccessDraft(),
 });
 
 const initialNavigation = parseNavigationPath(window.location.pathname);
@@ -483,9 +505,9 @@ const App = () => {
   );
   const planningCardIdsRef = useRef(new Set<string>());
   const [createdToken, setCreatedToken] = useState<CreatedTokenState>(null);
-  const [tokenDraft, setTokenDraft] = useState<CreateApiTokenInput>(
-    emptyTokenDraft(),
-  );
+  const [tokenDraft, setTokenDraft] = useState<TokenDraft>(emptyTokenDraft());
+  const [permissionAreas, setPermissionAreas] = useState<PermissionArea[]>([]);
+  const [tokenAccessEdit, setTokenAccessEdit] = useState<TokenAccessEdit>(null);
   const [workers, setWorkers] = useState<Worker[]>([]);
   // The card whose question is being answered, and the reviewed card being sent back.
   const [answerTarget, setAnswerTarget] = useState<BoardCard | null>(null);
@@ -603,13 +625,21 @@ const App = () => {
     setTokens(response.items);
   };
 
+  const loadPermissionAreas = async () => {
+    const response = await api<{ items: PermissionArea[] }>(
+      "/api/permission-areas",
+    );
+    setPermissionAreas(response.items);
+  };
+
   const openTokenManager = async () => {
     setError("");
     setCreatedToken(null);
     setTokenDraft(emptyTokenDraft());
+    setTokenAccessEdit(null);
     setIsTokenManagerOpen(true);
     try {
-      await loadTokens();
+      await Promise.all([loadTokens(), loadPermissionAreas()]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load tokens");
     }
@@ -621,7 +651,10 @@ const App = () => {
     try {
       const created = await api<CreatedApiTokenResponse>("/api/tokens", {
         method: "POST",
-        body: JSON.stringify(tokenDraft),
+        body: JSON.stringify({
+          name: tokenDraft.name,
+          ...accessPayload(permissionAreas, tokenDraft.access),
+        }),
       });
       setCreatedToken({
         name: created.item.name,
@@ -639,6 +672,28 @@ const App = () => {
     setError("");
     await api(`/api/tokens/${tokenId}/revoke`, { method: "POST" });
     await loadTokens();
+  };
+
+  const saveTokenAccess = async () => {
+    const saved = tokenAccessEdit;
+    if (!saved) {
+      return;
+    }
+    setError("");
+    try {
+      await api(`/api/tokens/${saved.tokenId}`, {
+        method: "PATCH",
+        body: JSON.stringify(accessPayload(permissionAreas, saved.access)),
+      });
+      // Close the editor only if it still shows what was saved: the admin may have
+      // opened another token, or changed this one further, while the save was under way.
+      setTokenAccessEdit((current) => (current === saved ? null : current));
+      await loadTokens();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to change the token",
+      );
+    }
   };
 
   // The task modal handlers are recreated on every render and are declared far
@@ -4548,6 +4603,10 @@ const App = () => {
                   </Badge>
                 </Group>
                 <TokenProjects projects={createdToken.projects} />
+                <TokenPermissionsSummary
+                  areas={permissionAreas}
+                  projects={createdToken.projects}
+                />
                 <CopyableCode
                   value={createdToken.token}
                   label="token"
@@ -4605,15 +4664,13 @@ const App = () => {
                   }
                   required
                 />
-                <MultiSelect
-                  label="Projects"
-                  value={tokenDraft.projectIds}
-                  onChange={(projectIds) =>
-                    setTokenDraft((current) => ({ ...current, projectIds }))
+                <TokenAccessFields
+                  areas={permissionAreas}
+                  projectOptions={projectOptions}
+                  draft={tokenDraft.access}
+                  onChange={(access) =>
+                    setTokenDraft((current) => ({ ...current, access }))
                   }
-                  data={projectOptions}
-                  searchable
-                  required
                 />
                 <Group justify="flex-end">
                   <Button type="submit" leftSection={<KeyRound size={16} />}>
@@ -4650,6 +4707,12 @@ const App = () => {
                     <Box mt="xs">
                       <TokenProjects projects={token.projects} />
                     </Box>
+                    <Box mt="xs">
+                      <TokenPermissionsSummary
+                        areas={permissionAreas}
+                        projects={token.projects}
+                      />
+                    </Box>
                     <Text c="dimmed" size="sm" mt="xs">
                       Created {formatDateTime(token.createdAt)}
                       {token.lastUsedAt
@@ -4657,16 +4720,88 @@ const App = () => {
                         : ""}
                     </Text>
                   </Box>
-                  <Button
-                    type="button"
-                    variant="light"
-                    color="red"
-                    disabled={!!token.revokedAt}
-                    onClick={() => void revokeToken(token.id)}
-                  >
-                    Revoke
-                  </Button>
+                  <Group gap="xs" wrap="nowrap">
+                    {!token.revokedAt && (
+                      <Button
+                        type="button"
+                        variant="default"
+                        // A draft made before the areas are known would hold no
+                        // levels, and saving it would wipe the token's permissions.
+                        disabled={permissionAreas.length === 0}
+                        onClick={() =>
+                          setTokenAccessEdit({
+                            tokenId: token.id,
+                            access: accessDraftFor(
+                              permissionAreas,
+                              token.projects,
+                            ),
+                          })
+                        }
+                      >
+                        Edit access
+                      </Button>
+                    )}
+                    <Button
+                      type="button"
+                      variant="light"
+                      color="red"
+                      disabled={!!token.revokedAt}
+                      onClick={() => void revokeToken(token.id)}
+                    >
+                      Revoke
+                    </Button>
+                  </Group>
                 </Group>
+                {tokenAccessEdit?.tokenId === token.id && (
+                  <Stack
+                    role="group"
+                    aria-label={`Access of ${token.name}`}
+                    gap="md"
+                    mt="md"
+                  >
+                    <TokenAccessFields
+                      areas={permissionAreas}
+                      // An archived project is not offered for new tokens, but stays
+                      // listed on a token that has it.
+                      projectOptions={[
+                        ...projectOptions,
+                        ...token.projects
+                          .filter(
+                            (project) =>
+                              !projectOptions.some(
+                                (option) => option.value === project.id,
+                              ),
+                          )
+                          .map((project) => ({
+                            value: project.id,
+                            label: `${project.key} - ${project.title}`,
+                          })),
+                      ]}
+                      draft={tokenAccessEdit.access}
+                      onChange={(access) =>
+                        setTokenAccessEdit({ tokenId: token.id, access })
+                      }
+                    />
+                    <Group justify="flex-end" gap="xs">
+                      <Button
+                        type="button"
+                        variant="default"
+                        onClick={() => setTokenAccessEdit(null)}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        type="button"
+                        disabled={
+                          tokenAccessEdit.access.projectIds.length === 0
+                        }
+                        onClick={() => void saveTokenAccess()}
+                      >
+                        Save access
+                      </Button>
+                    </Group>
+                  </Stack>
+                )}
               </Paper>
             ))}
           </Stack>

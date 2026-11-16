@@ -1,6 +1,7 @@
 """SQLModel table models. They mirror the schema the TypeScript server created, column for
 column, so databases created by either backend are interchangeable."""
 
+import json
 from datetime import datetime
 from typing import Any
 
@@ -18,6 +19,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
+
+from vibepod_board.permissions import FULL_ACCESS
 
 
 def _timestamp(nullable: bool = False) -> Any:
@@ -41,6 +44,16 @@ def _json_list() -> Any:
     return Field(
         default_factory=list,
         sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    )
+
+
+def _permissions() -> Any:
+    """A level per area. Rows written without one get full access, like `normalize(None)`."""
+    return Field(
+        default_factory=lambda: dict(FULL_ACCESS),
+        sa_column=Column(
+            JSONB, nullable=False, server_default=text(f"'{json.dumps(FULL_ACCESS)}'::jsonb")
+        ),
     )
 
 
@@ -368,6 +381,8 @@ class ApiTokenProjectRow(SQLModel, table=True):
     project_id: str = Field(
         sa_column=Column(Text, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True)
     )
+    # What the token may do in this project.
+    permissions: dict[str, str] = _permissions()
 
 
 class TaskDependencyRow(SQLModel, table=True):
@@ -409,7 +424,8 @@ class OAuthClientRow(SQLModel, table=True):
 
 class OAuthRequestRow(SQLModel, table=True):
     """A sign-in in progress. `/authorize` creates it, approval gives it a one-time code and
-    the chosen projects, and exchanging the code, denying it or its expiry removes it."""
+    the chosen projects and permissions, and exchanging the code, denying it or its expiry
+    removes it."""
 
     __tablename__ = "oauth_requests"
 
@@ -423,5 +439,10 @@ class OAuthRequestRow(SQLModel, table=True):
     resource: str | None = _text()
     code_hash: str | None = Field(default=None, sa_column=Column(Text, nullable=True, unique=True))
     project_ids: list[str] = _json_list()
+    # The permission set chosen for each of `project_ids`, by project id.
+    permissions: dict[str, dict[str, str]] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")),
+    )
     created_at: datetime = _timestamp()
     expires_at: datetime = _timestamp()

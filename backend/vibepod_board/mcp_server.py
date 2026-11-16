@@ -2,22 +2,36 @@
 
 Clients authenticate with the same project-scoped `vbp_…` tokens as the REST API, pasted
 into their configuration or obtained by OAuth sign-in. `BoardOAuthProvider` resolves a
-token to its projects; every tool then runs with that token's access. Tool names and
-arguments match the TypeScript server, so existing agent configurations keep working.
+token to its projects and their permissions; `PermissionMiddleware` hides and refuses the
+tools outside those permissions, and every tool then runs with the projects that allow
+it. Tool names and arguments match the TypeScript server, so existing agent configurations
+keep working.
 """
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from contextvars import ContextVar
 from typing import Annotated, Any, Literal
 
 import httpx
+import mcp_types as mt
 from fastmcp import FastMCP
-from fastmcp.exceptions import ToolError
+from fastmcp.exceptions import ResourceError, ToolError
+from fastmcp.resources.base import Resource, ResourceResult
 from fastmcp.server.dependencies import get_access_token
+from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
+from fastmcp.tools.base import Tool, ToolResult
 from pydantic import AwareDatetime, BaseModel, Field
 from sqlmodel import Session
 
-from vibepod_board.access import AccessContext, require_admin, token_access
+from vibepod_board import permissions
+from vibepod_board.access import (
+    AccessContext,
+    TokenAccess,
+    for_operation,
+    require_admin,
+    token_access,
+)
 from vibepod_board.api.deps import worker_timing
 from vibepod_board.api.github import github_client
 from vibepod_board.api.models import BoardCardBatchItem, IdeaBatchItem, RunCommitInput
@@ -155,11 +169,110 @@ class ReadinessInput(BaseModel):
     reason: Annotated[str, Field(min_length=1)]
 
 
-def current_access() -> AccessContext:
+def token_from_request() -> TokenAccess:
+    """The calling token with every project it is mapped to, before any narrowing."""
     access_token = get_access_token()
     if access_token is None:
         raise ToolError("Authentication required")
-    return token_access(access_token.client_id, access_token.claims.get("project_ids", []))
+    claims = access_token.claims
+    # A token whose claims carry no permissions has none: only what needs no permission.
+    return token_access(
+        access_token.client_id, claims.get("project_ids", []), claims.get("permissions", {})
+    )
+
+
+# The caller's access to the tool or resource being served. `PermissionMiddleware` sets it
+# for the length of the call; the tool, which runs in a worker thread, reads it from there.
+_operation_access: ContextVar[TokenAccess | None] = ContextVar("operation_access", default=None)
+
+
+def current_access() -> TokenAccess:
+    """The caller, narrowed to the projects whose permissions cover the tool or resource
+    being served. Nothing is served that the middleware did not check first."""
+    access = _operation_access.get()
+    if access is None:
+        raise ToolError("This token cannot use this operation")
+    return access
+
+
+def _may_use(access: TokenAccess | None, needs: Any) -> bool:
+    """Whether a listing shows the tool or resource that needs `needs`: when at least one
+    of the token's projects allows it. `access` is `None` outside an MCP request, where the
+    reference at /api/mcp-tools reads the whole catalog from the server without a token;
+    over /mcp a request never gets here without one."""
+    if access is None:
+        return True
+    try:
+        for_operation(access, needs)
+    except BoardError:
+        return False
+    return True
+
+
+def _listing_access() -> TokenAccess | None:
+    return None if get_access_token() is None else token_from_request()
+
+
+class PermissionMiddleware(Middleware):
+    """Applies the token's permissions before a tool or resource is reached: the call runs
+    with the projects whose permissions cover it, and is refused when none does. Listings
+    leave out what no project allows, so an agent only sees the tools it can call."""
+
+    async def on_list_tools(
+        self,
+        context: MiddlewareContext[mt.ListToolsRequest],
+        call_next: CallNext[mt.ListToolsRequest, Sequence[Tool]],
+    ) -> Sequence[Tool]:
+        tools = await call_next(context)
+        access = _listing_access()
+        return [
+            tool for tool in tools if _may_use(access, permissions.TOOL_PERMISSIONS.get(tool.name))
+        ]
+
+    async def on_call_tool(
+        self,
+        context: MiddlewareContext[mt.CallToolRequestParams],
+        call_next: CallNext[mt.CallToolRequestParams, ToolResult],
+    ) -> ToolResult:
+        needs = permissions.TOOL_PERMISSIONS.get(context.message.name)
+        try:
+            access = for_operation(token_from_request(), needs)
+        except BoardError as error:
+            raise ToolError(error.message) from error
+        marker = _operation_access.set(access)
+        try:
+            return await call_next(context)
+        finally:
+            _operation_access.reset(marker)
+
+    async def on_list_resources(
+        self,
+        context: MiddlewareContext[mt.ListResourcesRequest],
+        call_next: CallNext[mt.ListResourcesRequest, Sequence[Resource]],
+    ) -> Sequence[Resource]:
+        resources = await call_next(context)
+        access = _listing_access()
+        return [
+            resource
+            for resource in resources
+            if _may_use(access, permissions.RESOURCE_PERMISSIONS.get(str(resource.uri)))
+        ]
+
+    async def on_read_resource(
+        self,
+        context: MiddlewareContext[mt.ReadResourceRequestParams],
+        call_next: CallNext[mt.ReadResourceRequestParams, ResourceResult],
+    ) -> ResourceResult:
+        needs = permissions.RESOURCE_PERMISSIONS.get(str(context.message.uri))
+        try:
+            access = for_operation(token_from_request(), needs)
+        except BoardError as error:
+            raise ResourceError(error.message) from error
+        marker = _operation_access.set(access)
+        try:
+            return await call_next(context)
+        finally:
+            _operation_access.reset(marker)
 
 
 def _json(value: Any) -> Any:
@@ -189,7 +302,12 @@ def run(operation: Callable[[Session, AccessContext], Any]) -> dict[str, Any]:
 def create_mcp_server(
     settings: Settings, github_transport: httpx.BaseTransport | None = None
 ) -> FastMCP:
-    mcp = FastMCP("vibepod-board", version="0.1.0", auth=BoardOAuthProvider(settings.public_url))
+    mcp = FastMCP(
+        "vibepod-board",
+        version="0.1.0",
+        auth=BoardOAuthProvider(settings.public_url),
+        middleware=[PermissionMiddleware()],
+    )
 
     def github() -> GitHubClient:
         try:

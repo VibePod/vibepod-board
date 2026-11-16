@@ -253,18 +253,39 @@ class DocumentUpdate(ApiModel):
     linked_card_ids: list[StrictStr] | None = None
 
 
+# Area to level, such as {"tasks": "read"}; GET /api/permission-areas lists both. An area
+# that is not named gets no access.
+Permissions = dict[StrictStr, StrictStr]
+# A permission set for single projects, by project id.
+ProjectPermissions = dict[StrictStr, Permissions]
+
+
 class TokenCreate(ApiModel):
     name: RequiredText
     project_ids: Annotated[Ids, Field(min_length=1)]
+    # One set for every project; full access when omitted.
+    permissions: Permissions | None = None
+    # A set of its own for single projects, which wins over `permissions` there.
+    project_permissions: ProjectPermissions | None = None
 
 
 class TokenUpdate(ApiModel):
     name: RequiredText | None = None
+    # Replaces the token's projects. A project that stays keeps its permissions; one that
+    # is added gets full access unless permissions are given for it.
     project_ids: Annotated[Ids, Field(min_length=1)] | None = None
+    # Replaces the permission set of every project.
+    permissions: Permissions | None = None
+    # Replaces the permission set of single projects.
+    project_permissions: ProjectPermissions | None = None
 
 
 class OAuthApproval(ApiModel):
     project_ids: Annotated[Ids, Field(min_length=1)]
+    # One set for every project; full access when omitted.
+    permissions: Permissions | None = None
+    # A set of its own for single projects, which wins over `permissions` there.
+    project_permissions: ProjectPermissions | None = None
 
 
 class WorkerRegistration(ApiModel):
