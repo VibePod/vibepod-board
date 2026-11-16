@@ -2,7 +2,8 @@
 
 A request lives from `/authorize` until its code is exchanged for a token, it is denied, or
 it expires. Only a SHA-256 hash of the code is stored. The token a sign-in issues is an
-ordinary API token, scoped to the projects and permissions the admin chose.
+ordinary API token, scoped to the projects and permissions that the admin or a user chose,
+and it belongs to whoever approved the sign-in.
 """
 
 import hashlib
@@ -116,21 +117,25 @@ def approve_request(
     project_ids: Sequence[str],
     permissions: Mapping[str, str] | None = None,
     project_permissions: Mapping[str, Mapping[str, str]] | None = None,
+    owner_user_id: str | None = None,
 ) -> str:
     """Gives the request a one-time code for the chosen projects and returns the URL that
     takes the browser back to the client. `permissions` is one set for every project and
     `project_permissions` a set for single ones; a project neither covers gets full
-    access."""
+    access. With `owner_user_id` a user approves: only for their own projects, and the
+    token will belong to them."""
     row = _waiting(session, request_id)
     chosen = normalize_list(project_ids)
     if not chosen:
         raise BadRequest("Select at least one project")
     require_projects(session, chosen)
+    tokens.assert_owner_reaches(session, owner_user_id, chosen, by_owner=True)
     granted = policy.assign(chosen, permissions, project_permissions)
     code = secrets.token_urlsafe(32)
     row.code_hash = _hash(code)
     row.project_ids = chosen
     row.permissions = granted
+    row.owner_user_id = owner_user_id
     row.expires_at = now() + CODE_TTL
     session.flush()
     return _redirect(row.redirect_uri, code=code, state=row.state)
@@ -164,12 +169,17 @@ def redeem_code(session: Session, code: str) -> CreatedApiToken | None:
             col(OAuthRequestRow.code_hash) == _hash(code), col(OAuthRequestRow.expires_at) > now()
         )
         .returning(
-            OAuthRequestRow.client_id, OAuthRequestRow.project_ids, OAuthRequestRow.permissions
+            OAuthRequestRow.client_id,
+            OAuthRequestRow.project_ids,
+            OAuthRequestRow.permissions,
+            OAuthRequestRow.owner_user_id,
         )
     ).first()
     if spent is None:
         return None
-    client_id, project_ids, granted = spent
+    client_id, project_ids, granted, owner_user_id = spent
     name = f"{_client_name(session, client_id)} (OAuth)"
     # `create_token` commits the session, and with it the delete above.
-    return tokens.create_token(session, name, project_ids, project_permissions=granted)
+    return tokens.create_token(
+        session, name, project_ids, project_permissions=granted, owner_user_id=owner_user_id
+    )

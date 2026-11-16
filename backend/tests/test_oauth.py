@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import pytest
-from conftest import login
+from conftest import add_user, as_user, login
 from fastapi.testclient import TestClient
 from httpx import Response
 from sqlalchemy import Engine
@@ -21,7 +21,7 @@ from vibepod_board import config
 from vibepod_board.config import Settings
 from vibepod_board.main import create_app
 from vibepod_board.schemas import now
-from vibepod_board.services import tokens
+from vibepod_board.services import tokens, users
 from vibepod_board.services.projects import create_project
 from vibepod_board.tables import OAuthRequestRow
 
@@ -600,3 +600,100 @@ def test_a_configured_address_without_a_path_signs_in_with_or_without_the_slash(
 
     assert issued.status_code == 200, issued.text
     assert issued.json()["access_token"].startswith("vbp_")
+
+
+# A user decides on a sign-in
+
+
+def test_a_user_approves_a_sign_in_for_their_own_projects(
+    client: TestClient, session: Session, projects: dict[str, str]
+) -> None:
+    add_user(session, "rebecca", projects["app"])
+    client_id, verifier, request_id = begin(client)
+    browser = as_user(client, "rebecca")
+    approve = f"/api/oauth/requests/{request_id}/approve"
+
+    assert browser.get(f"/api/oauth/requests/{request_id}").status_code == 200
+
+    too_wide = browser.post(approve, json={"projectIds": [projects["app"], projects["ops"]]})
+
+    assert too_wide.status_code == 403
+    assert too_wide.json() == {"error": f"You have no access to project: {projects['ops']}"}
+    # Refused, not decided: the request still waits.
+    assert browser.get(f"/api/oauth/requests/{request_id}").status_code == 200
+
+    approved = redirect_query(browser.post(approve, json={"projectIds": [projects["app"]]}))
+    issued = exchange(client, client_id, approved["code"], verifier)
+
+    assert issued.status_code == 200, issued.text
+    [listed] = browser.get("/api/tokens").json()["items"]
+    assert (listed["name"], listed["owner"], [p["key"] for p in listed["projects"]]) == (
+        "pi (OAuth)",
+        "rebecca",
+        ["APP"],
+    )
+    headers = bearer(issued.json()["access_token"])
+    fresh = TestClient(client.app)
+    assert (
+        fresh.get("/api/board", params={"projectId": projects["app"]}, headers=headers).status_code
+        == 200
+    )
+    assert (
+        fresh.get("/api/board", params={"projectId": projects["ops"]}, headers=headers).status_code
+        == 403
+    )
+
+
+def test_a_user_with_a_temporary_password_cannot_decide_on_a_sign_in(
+    client: TestClient, session: Session, projects: dict[str, str]
+) -> None:
+    temporary = users.create_user(session, "jonas", [projects["app"]], "admin").temporary_password
+    _client_id, _verifier, request_id = begin(client)
+    browser = as_user(client, "jonas", temporary)
+
+    for method, path in (
+        ("get", f"/api/oauth/requests/{request_id}"),
+        ("post", f"/api/oauth/requests/{request_id}/approve"),
+        ("post", f"/api/oauth/requests/{request_id}/deny"),
+    ):
+        response = browser.request(method, path, json={"projectIds": [projects["app"]]})
+        assert response.status_code == 403, path
+        assert response.json() == {"error": "Set a new password first"}
+
+
+def test_a_sign_in_approved_by_a_user_issues_nothing_once_the_user_is_deleted(
+    client: TestClient, session: Session, projects: dict[str, str]
+) -> None:
+    user_id = add_user(session, "rebecca", projects["app"])
+    client_id, verifier, request_id = begin(client)
+    browser = as_user(client, "rebecca")
+    code = redirect_query(
+        browser.post(
+            f"/api/oauth/requests/{request_id}/approve", json={"projectIds": [projects["app"]]}
+        )
+    )["code"]
+
+    users.delete_user(session, user_id)
+    refused = exchange(client, client_id, code, verifier)
+
+    assert refused.status_code in (400, 401)
+    assert tokens.list_tokens(session) == []
+
+
+def test_a_sign_in_approved_by_a_user_who_lost_the_project_issues_nothing(
+    client: TestClient, session: Session, projects: dict[str, str]
+) -> None:
+    user_id = add_user(session, "rebecca", projects["app"])
+    client_id, verifier, request_id = begin(client)
+    browser = as_user(client, "rebecca")
+    code = redirect_query(
+        browser.post(
+            f"/api/oauth/requests/{request_id}/approve", json={"projectIds": [projects["app"]]}
+        )
+    )["code"]
+
+    users.update_user(session, user_id, project_ids=[])
+    refused = exchange(client, client_id, code, verifier)
+
+    assert refused.status_code in (400, 401)
+    assert tokens.list_tokens(session) == []

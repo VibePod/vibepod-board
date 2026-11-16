@@ -350,6 +350,8 @@ class TokenProject(ProjectRef):
 class ApiTokenSummary(ApiModel):
     id: str
     name: str
+    # The username of the user the token belongs to; left out for the admin's tokens.
+    owner: str | None = None
     projects: list[TokenProject]
     created_at: Timestamp
     last_used_at: Timestamp | None = None
