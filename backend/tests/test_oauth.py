@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import secrets
+from collections.abc import Iterator
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
@@ -13,6 +14,7 @@ import pytest
 from conftest import login
 from fastapi.testclient import TestClient
 from httpx import Response
+from sqlalchemy import Engine
 from sqlmodel import Session
 
 from vibepod_board import config
@@ -25,6 +27,8 @@ from vibepod_board.tables import OAuthRequestRow
 
 PUBLIC_URL = "http://localhost:3000"
 REDIRECT = "http://127.0.0.1:4567/callback"
+# Where Claude's hosted apps send the browser back to after a sign-in.
+CLAUDE_CALLBACK = "https://claude.ai/api/mcp/auth_callback"
 TOOLS_LIST = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
 MCP_HEADERS = {"Accept": "application/json, text/event-stream"}
 
@@ -50,14 +54,20 @@ def register(client: TestClient, redirect: str = REDIRECT) -> Response:
     )
 
 
-def authorize(client: TestClient, client_id: str, challenge: str, state: str = "st4te") -> str:
+def authorize(
+    client: TestClient,
+    client_id: str,
+    challenge: str,
+    state: str = "st4te",
+    redirect: str = REDIRECT,
+) -> str:
     """Opens the authorization URL like a browser and returns the id of the stored request."""
     params = {
         "response_type": "code",
         "client_id": client_id,
         "code_challenge": challenge,
         "code_challenge_method": "S256",
-        "redirect_uri": REDIRECT,
+        "redirect_uri": redirect,
         "state": state,
         "resource": f"{PUBLIC_URL}/mcp",
     }
@@ -68,20 +78,22 @@ def authorize(client: TestClient, client_id: str, challenge: str, state: str = "
     return parse_qs(urlparse(location).query)["request"][0]
 
 
-def redirect_query(response: Response) -> dict[str, str]:
+def redirect_query(response: Response, redirect: str = REDIRECT) -> dict[str, str]:
     assert response.status_code == 200, response.text
     url = response.json()["redirectTo"]
-    assert url.startswith(REDIRECT + "?")
+    assert url.startswith(redirect + "?")
     return {key: values[0] for key, values in parse_qs(urlparse(url).query).items()}
 
 
-def exchange(client: TestClient, client_id: str, code: str, verifier: str) -> Response:
+def exchange(
+    client: TestClient, client_id: str, code: str, verifier: str, redirect: str = REDIRECT
+) -> Response:
     return client.post(
         "/token",
         data={
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": REDIRECT,
+            "redirect_uri": redirect,
             "client_id": client_id,
             "code_verifier": verifier,
         },
@@ -431,3 +443,123 @@ def test_approval_refuses_unknown_permissions_and_keeps_the_request_pending(
     assert refused.status_code == 400
     assert refused.json() == {"error": "Unknown permission area: billing"}
     assert client.get(f"/api/oauth/requests/{request_id}").status_code == 200
+
+
+# Redirects outside the machine, for hosted clients such as Claude on the web
+
+
+@pytest.fixture
+def hosted(db: Engine, settings: Settings) -> Iterator[TestClient]:
+    """A board configured to accept Claude's hosted callback next to loopback redirects."""
+    configured = replace(settings, oauth_redirect_uris=(CLAUDE_CALLBACK,))
+    with TestClient(create_app(configured, run_migrations=False)) as test_client:
+        yield test_client
+
+
+def register_hosted(client: TestClient, redirect: str = CLAUDE_CALLBACK) -> Response:
+    """Registers the way a hosted client does: a public web client with an https redirect."""
+    return client.post(
+        "/register",
+        json={
+            "client_name": "Claude",
+            "redirect_uris": [redirect],
+            "token_endpoint_auth_method": "none",
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+        },
+    )
+
+
+def test_a_redirect_outside_the_machine_is_refused_unless_the_board_is_configured_for_it(
+    client: TestClient,
+) -> None:
+    refused = register_hosted(client)
+
+    assert refused.status_code == 400
+    assert refused.json()["error"] == "invalid_redirect_uri"
+    assert "OAUTH_REDIRECT_URIS" in refused.json()["error_description"]
+
+
+def test_a_configured_redirect_outside_the_machine_signs_in_like_a_local_one(
+    hosted: TestClient, projects: dict[str, str]
+) -> None:
+    registered = register_hosted(hosted)
+    assert registered.status_code == 201, registered.text
+    client_id = registered.json()["client_id"]
+    verifier, challenge = pkce()
+    request_id = authorize(hosted, client_id, challenge, redirect=CLAUDE_CALLBACK)
+
+    login(hosted)
+    waiting = hosted.get(f"/api/oauth/requests/{request_id}").json()["item"]
+    assert waiting["clientName"] == "Claude"
+    assert waiting["redirectUri"] == CLAUDE_CALLBACK
+
+    approved = redirect_query(
+        hosted.post(
+            f"/api/oauth/requests/{request_id}/approve", json={"projectIds": [projects["app"]]}
+        ),
+        CLAUDE_CALLBACK,
+    )
+    assert approved["state"] == "st4te"
+
+    issued = exchange(hosted, client_id, approved["code"], verifier, CLAUDE_CALLBACK)
+    assert issued.status_code == 200, issued.text
+    assert issued.json()["access_token"].startswith("vbp_")
+
+    token = TestClient(hosted.app)
+    listed = token.get("/api/projects", headers=bearer(issued.json()["access_token"]))
+    assert [project["key"] for project in listed.json()["items"]] == ["APP"]
+
+
+def test_a_configured_board_accepts_only_the_listed_addresses_and_loopback(
+    hosted: TestClient,
+) -> None:
+    assert register(hosted).status_code == 201
+
+    for redirect in (
+        "https://evil.example/callback",
+        "https://claude.ai/api/mcp/other",
+        "https://claude.ai.evil.example/api/mcp/auth_callback",
+        "http://claude.ai/api/mcp/auth_callback",
+        CLAUDE_CALLBACK + "?next=https://evil.example",
+    ):
+        refused = register_hosted(hosted, redirect)
+        assert refused.status_code == 400, redirect
+        assert refused.json()["error"] == "invalid_redirect_uri"
+
+
+def test_a_client_cannot_add_an_unlisted_redirect_next_to_a_listed_one(hosted: TestClient) -> None:
+    refused = hosted.post(
+        "/register",
+        json={
+            "client_name": "Claude",
+            "redirect_uris": [CLAUDE_CALLBACK, "https://evil.example/callback"],
+            "token_endpoint_auth_method": "none",
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+        },
+    )
+
+    assert refused.status_code == 400
+    assert refused.json()["error"] == "invalid_redirect_uri"
+
+
+def test_extra_redirect_addresses_come_from_the_environment_and_must_be_complete_https_urls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OAUTH_REDIRECT_URIS", raising=False)
+    assert config.oauth_redirect_uris_from_env() == ()
+
+    monkeypatch.setenv("OAUTH_REDIRECT_URIS", f" {CLAUDE_CALLBACK} , https://b.example/cb ,")
+    assert config.oauth_redirect_uris_from_env() == (CLAUDE_CALLBACK, "https://b.example/cb")
+
+    for refused in (
+        "http://claude.ai/api/mcp/auth_callback",
+        "claude.ai/api/mcp/auth_callback",
+        "https://*.example.com/callback",
+        "https://b.example/cb#fragment",
+        "https:///callback",
+    ):
+        monkeypatch.setenv("OAUTH_REDIRECT_URIS", refused)
+        with pytest.raises(RuntimeError, match="OAUTH_REDIRECT_URIS"):
+            config.oauth_redirect_uris_from_env()

@@ -305,7 +305,7 @@ def create_mcp_server(
     mcp = FastMCP(
         "vibepod-board",
         version="0.1.0",
-        auth=BoardOAuthProvider(settings.public_url),
+        auth=BoardOAuthProvider(settings.public_url, settings.oauth_redirect_uris),
         middleware=[PermissionMiddleware()],
     )
 

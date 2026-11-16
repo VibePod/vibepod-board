@@ -11,7 +11,7 @@ only store and load. No refresh tokens are issued: a token is valid until it is 
 under API Tokens.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from urllib.parse import urlparse
 
 import anyio
@@ -53,11 +53,15 @@ async def _db[T](operation: Callable[[Session], T]) -> T:
 
 
 class BoardOAuthProvider(OAuthProvider):
-    def __init__(self, public_url: str) -> None:
+    def __init__(self, public_url: str, redirect_uris: Sequence[str] = ()) -> None:
+        """`redirect_uris` are the addresses outside the machine that a client may
+        register, for hosted clients; loopback redirects need no entry."""
         super().__init__(
             base_url=public_url,
             client_registration_options=ClientRegistrationOptions(enabled=True),
         )
+        # In the form a registration arrives in, so the two compare as whole strings.
+        self._redirect_uris = frozenset(str(AnyUrl(uri)) for uri in redirect_uris)
 
     @property
     def consent_url(self) -> str:
@@ -69,13 +73,15 @@ class BoardOAuthProvider(OAuthProvider):
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         # Anyone who reaches the board may register, so a client can only ever send the
-        # browser back to the machine it runs on, never to another site.
+        # browser back to the machine it runs on, or to an address the operator listed in
+        # OAUTH_REDIRECT_URIS, never to a site of its own choosing.
         for uri in client_info.redirect_uris or []:
-            if not is_loopback_redirect(str(uri)):
+            if not (is_loopback_redirect(str(uri)) or str(uri) in self._redirect_uris):
                 raise RegistrationError(
                     error="invalid_redirect_uri",
                     error_description="Only http redirect URIs on localhost, 127.0.0.1 or "
-                    f"[::1] are accepted: {uri}",
+                    "[::1] and the addresses listed in the board's OAUTH_REDIRECT_URIS "
+                    f"are accepted: {uri}",
                 )
         info = client_info.model_dump(mode="json", exclude_none=True)
         await _db(lambda session: oauth.save_client(session, client_info.client_id, info))

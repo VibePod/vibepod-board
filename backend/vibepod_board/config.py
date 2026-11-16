@@ -27,6 +27,9 @@ class Settings:
     pool_size: int
     # Where browsers and OAuth clients reach the board; see `public_url_from_env`.
     public_url: str = "http://localhost:3000"
+    # Redirect addresses outside the machine that OAuth clients may register, next to the
+    # loopback ones that are always accepted; see `oauth_redirect_uris_from_env`.
+    oauth_redirect_uris: tuple[str, ...] = ()
     # Automated claims: the default lease, the failed attempts before a task is blocked, and
     # how often lapsed claims are swept (0 turns the sweep off).
     claim_lease_seconds: int = 15 * 60
@@ -78,6 +81,7 @@ def get_settings() -> Settings:
         github_repository=os.environ.get("GITHUB_REPOSITORY") or None,
         pool_size=int(os.environ.get("DATABASE_POOL_MAX", "10")),
         public_url=public_url_from_env(),
+        oauth_redirect_uris=oauth_redirect_uris_from_env(),
         claim_lease_seconds=lease_seconds,
         claim_max_attempts=_positive_int("CLAIM_MAX_ATTEMPTS", 3),
         claim_sweep_seconds=_positive_int("CLAIM_SWEEP_SECONDS", 15, allow_zero=True),
@@ -102,6 +106,27 @@ def public_url_from_env() -> str:
             f"[::1], without a path: {url}"
         )
     return url
+
+
+def oauth_redirect_uris_from_env() -> tuple[str, ...]:
+    """`OAUTH_REDIRECT_URIS`: comma-separated redirect addresses a hosted MCP client, such
+    as Claude on the web, sends the browser back to after a sign-in. Without it only
+    clients on the machine of the browser can sign in. An address is matched as a whole,
+    so each must be a complete https URL without wildcard or fragment; a value that is not
+    fails at startup rather than at the first sign-in."""
+    uris: list[str] = []
+    for raw in os.environ.get("OAUTH_REDIRECT_URIS", "").split(","):
+        uri = raw.strip()
+        if not uri:
+            continue
+        parsed = urlparse(uri)
+        if parsed.scheme != "https" or not parsed.hostname or "*" in uri or parsed.fragment:
+            raise RuntimeError(
+                "OAUTH_REDIRECT_URIS takes complete https URLs without wildcards or "
+                f"fragments: {uri}"
+            )
+        uris.append(uri)
+    return tuple(uris)
 
 
 def _lease_seconds(name: str, default: int) -> int:
