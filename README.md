@@ -230,7 +230,26 @@ On the first connection the client opens the board in your browser. Sign in as t
 
 OAuth clients only send credentials to an authorization server over HTTPS or on a loopback address. `PUBLIC_URL` is the URL browsers and clients use for the board. It defaults to `http://localhost:<PORT>` and must be an `https://` URL, or `http://` on `localhost`, `127.0.0.1` or `[::1]`; the board refuses to start otherwise. A client that reaches the board under another name, such as `http://vibepod-board:3000` inside the VibePod network, cannot sign in this way and uses a pasted token.
 
-Clients register themselves, and only redirect addresses on the local machine are accepted. The admin's decision goes through `GET /api/oauth/requests/:id` and `POST /api/oauth/requests/:id/approve` or `/deny`, which need the admin session.
+Clients register themselves. A client may only send the browser back to the local machine, or to an address listed in `OAUTH_REDIRECT_URIS` (see [Claude on the web](#claude-on-the-web)). The admin's decision goes through `GET /api/oauth/requests/:id` and `POST /api/oauth/requests/:id/approve` or `/deny`, which need the admin session.
+
+#### Claude on the web
+
+Claude's hosted apps (claude.ai, Desktop, mobile) connect from Anthropic's servers and send the browser back to `https://claude.ai/api/mcp/auth_callback`. The board has to be reachable from the internet over HTTPS, with `PUBLIC_URL` set to that address, and has to be told to accept the callback:
+
+```bash
+PUBLIC_URL=https://board.example.com
+OAUTH_REDIRECT_URIS=https://claude.ai/api/mcp/auth_callback
+```
+
+`OAUTH_REDIRECT_URIS` takes a comma-separated list of complete `https://` addresses. Each is matched as a whole; anything else a client asks for is still refused. It is empty by default, because anyone who can reach the board can register a client: with an address listed, a sign-in can end there once the admin has signed in and approved it on the consent page, which shows the client's name and the address.
+
+In Claude, add a custom connector with the board's MCP URL, `https://board.example.com/mcp`, and choose:
+
+- **Authentication**: Sign in now
+- **OAuth client**: Register automatically. The board has no pre-registered clients, so leave the client ID and secret empty
+- **Request headers**: none
+
+Without OAuth, a pasted token works as well: choose **No sign-in** and add the request header `Authorization` with the value `Bearer <token>`.
 
 #### Pi
 
