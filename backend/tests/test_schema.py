@@ -10,7 +10,7 @@ from sqlmodel import SQLModel
 
 from vibepod_board.db import migrate
 
-HEAD = "0021"
+HEAD = "0022"
 LEGACY_SCHEMA = (Path(__file__).parent / "legacy_schema.sql").read_text()
 # The first TS schema, before repository, readiness and dependency support.
 ORIGINAL_SCHEMA = LEGACY_SCHEMA.split("alter table board_cards add column", 1)[0]
@@ -591,4 +591,50 @@ def test_0021_adds_users_and_removes_their_projects_with_either_side(empty_db: E
 
     assert tuple(defaults) == (True, True, None)
     assert [tuple(row) for row in left] == [("u1", "p1")]
+    assert revision(empty_db) == HEAD
+
+
+def test_0022_leaves_existing_tokens_with_the_admin_and_removes_a_users_tokens_with_the_user(
+    empty_db: Engine,
+) -> None:
+    from alembic import command
+
+    from vibepod_board.db import alembic_config
+
+    config = alembic_config()
+    with empty_db.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "0021")
+        connection.execute(
+            text(
+                "insert into api_tokens (id, name, token_hash, created_at) "
+                "values ('t1', 'Old agent', 'h1', now())"
+            )
+        )
+
+    migrate(empty_db)
+
+    with empty_db.begin() as connection:
+        connection.execute(
+            text(
+                "insert into users (id, username, password_hash, created_at) "
+                "values ('u1', 'rebecca', 'x', now())"
+            )
+        )
+        connection.execute(
+            text(
+                "insert into api_tokens (id, name, token_hash, owner_user_id, created_at) "
+                "values ('t2', 'Her agent', 'h2', 'u1', now())"
+            )
+        )
+        before = connection.execute(
+            text("select id, owner_user_id from api_tokens order by id")
+        ).all()
+        connection.execute(text("delete from users where id = 'u1'"))
+        after = connection.execute(text("select id from api_tokens order by id")).all()
+
+    assert [tuple(row) for row in before] == [("t1", None), ("t2", "u1")]
+    assert [tuple(row) for row in after] == [("t1",)]
+    assert "owner_user_id" in column_names(empty_db, "oauth_requests")
+    assert schema_diff(empty_db) == []
     assert revision(empty_db) == HEAD
