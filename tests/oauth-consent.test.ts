@@ -423,6 +423,31 @@ describe("OAuth consent page", () => {
     expect(missing.calls).toEqual([]);
   });
 
+  it("sends a user with a temporary password to the board first", async () => {
+    const refused = {
+      status: 403,
+      body: { error: "Set a new password first" },
+    };
+    const { status, byId } = await openPage({
+      "GET /api/auth/me": {
+        status: 200,
+        body: {
+          authenticated: true,
+          username: "rebecca",
+          role: "user",
+          mustChangePassword: true,
+        },
+      },
+      "GET /api/oauth/requests/req-1": refused,
+      "GET /api/projects": refused,
+    });
+
+    expect(status.textContent).toContain("temporary password");
+    expect(status.textContent).toContain("set your own password");
+    expect(byId("consent").hidden).toBe(true);
+    expect(byId("login").hidden).toBe(true);
+  });
+
   it("shows the client's name as text, never as markup", async () => {
     const { byId } = await openPage({
       "GET /api/auth/me": signedIn,
