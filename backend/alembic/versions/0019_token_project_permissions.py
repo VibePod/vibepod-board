@@ -54,17 +54,29 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """A token gets one set again: the set of one of its projects, the first by project id.
-    A token without projects, and every waiting sign-in, falls back to full access."""
+    """A token gets one set again. It must not reach more than before in any project, so
+    each area gets the lowest level the token had in any of its projects. Sign-ins that
+    wait for a decision or for their code are dropped for the same reason: one set could
+    not say what was approved per project, and the client simply signs in again. A token
+    without projects reaches nothing and keeps the column default."""
     op.add_column(
         "api_tokens",
         sa.Column("permissions", JSONB(), nullable=False, server_default=FULL_ACCESS),
     )
     op.execute(
-        "update api_tokens as token set permissions = mapped.permissions "
-        "from (select distinct on (token_id) token_id, permissions from api_token_projects "
-        "order by token_id, project_id) as mapped where mapped.token_id = token.id"
+        "update api_tokens as token set permissions = lowest.permissions from ("
+        "  select token_id, jsonb_object_agg(area, level) as permissions from ("
+        "    select mapped.token_id, area, (array['none', 'read', 'write'])[min(coalesce("
+        "      array_position(array['none', 'read', 'write'], mapped.permissions ->> area), 1"
+        "    ))] as level"
+        "    from api_token_projects as mapped"
+        "    cross join unnest(array["
+        "      'tasks', 'board', 'documents', 'github', 'automation', 'project'"
+        "    ]) as area"
+        "    group by mapped.token_id, area"
+        "  ) as per_area group by token_id"
+        ") as lowest where lowest.token_id = token.id"
     )
     op.drop_column("api_token_projects", "permissions")
+    op.execute("delete from oauth_requests")
     op.alter_column("oauth_requests", "permissions", server_default=FULL_ACCESS)
-    op.execute(sa.text("update oauth_requests set permissions = ").text + FULL_ACCESS.text)

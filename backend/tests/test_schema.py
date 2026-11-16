@@ -464,3 +464,63 @@ def test_0019_moves_a_tokens_permissions_onto_each_of_its_projects(empty_db: Eng
     assert request == {"app": reader, "api": reader}
     assert "permissions" not in column_names(empty_db, "api_tokens")
     assert revision(empty_db) == HEAD
+
+
+def test_0019_downgrade_never_widens_what_a_token_or_sign_in_may_do(empty_db: Engine) -> None:
+    from alembic import command
+
+    from vibepod_board.db import alembic_config
+    from vibepod_board.permissions import FULL_ACCESS
+
+    none = dict.fromkeys(FULL_ACCESS, "none")
+    in_app = {**none, "tasks": "write", "board": "read", "documents": "write"}
+    in_api = {**none, "tasks": "read", "board": "write", "documents": "write"}
+    migrate(empty_db)
+    with empty_db.begin() as connection:
+        for key in ("APP", "API"):
+            connection.execute(
+                text(
+                    "insert into projects (id, key, title, created_at, updated_at) "
+                    f"values ('{key.lower()}', '{key}', '{key}', now(), now())"
+                )
+            )
+        connection.execute(
+            text(
+                "insert into api_tokens (id, name, token_hash, created_at) values "
+                "('mixed', 'Mixed', 'hash-1', now()), ('orphan', 'Orphan', 'hash-2', now())"
+            )
+        )
+        connection.execute(
+            text(
+                "insert into api_token_projects (token_id, project_id, permissions) values "
+                "('mixed', 'app', cast(:app as jsonb)), ('mixed', 'api', cast(:api as jsonb))"
+            ),
+            {"app": json.dumps(in_app), "api": json.dumps(in_api)},
+        )
+        connection.execute(text(CLIENT))
+        connection.execute(
+            text(
+                REQUEST.format(
+                    extra_columns=", project_ids, permissions",
+                    extra_values=", '[\"app\"]'::jsonb, cast(:approved as jsonb)",
+                )
+            ),
+            {"approved": json.dumps({"app": in_app})},
+        )
+
+    config = alembic_config()
+    with empty_db.begin() as connection:
+        config.attributes["connection"] = connection
+        command.downgrade(config, "0018")
+
+    with empty_db.connect() as connection:
+        tokens = dict(
+            connection.execute(text("select id, permissions from api_tokens")).all()  # type: ignore[arg-type]
+        )
+        requests = connection.execute(text("select count(*) from oauth_requests")).scalar_one()
+    # The one set a token gets is the lowest level any of its projects had in each area.
+    assert tokens["mixed"] == {**none, "tasks": "read", "board": "read", "documents": "write"}
+    # A token without projects reaches nothing, whatever its set says.
+    assert tokens["orphan"] == FULL_ACCESS
+    # A sign-in that was approved per project cannot be redeemed for a broader token.
+    assert requests == 0
