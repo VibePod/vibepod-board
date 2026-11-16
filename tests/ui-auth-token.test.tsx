@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -131,12 +137,24 @@ const sentBody = (
   return JSON.parse((calls[0][1] as RequestInit).body as string);
 };
 
+/** A promise a test settles when it wants a held-back response to arrive. */
+const gate = () => {
+  let open = () => {};
+  const closed = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { closed, open };
+};
+
 const stubAdminFetch = (
   tokens: ApiTokenSummary[] = [],
   projects = [boardProject("project-1", "APP", "App")],
+  // Hold back the permission areas, or the answer to a save, until the test lets go.
+  held: { areas?: Promise<void>; save?: Promise<void> } = {},
 ) => {
   const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
     if (path === "/api/permission-areas") {
+      await held.areas;
       return json({ items: permissionAreas });
     }
     if (path === "/api/tokens" && init?.method === "POST") {
@@ -150,6 +168,7 @@ const stubAdminFetch = (
       );
     }
     if (path.startsWith("/api/tokens/") && init?.method === "PATCH") {
+      await held.save;
       return json({ item: token() });
     }
     if (path === "/api/auth/me") {
@@ -539,6 +558,74 @@ describe("admin auth UI", () => {
         editor.getByRole("radiogroup", { name: "Tasks in API - Api" }),
       ).getByRole<HTMLInputElement>("radio", { name: "Write" }).checked,
     ).toBe(true);
+  });
+
+  it("lets a token be edited only once the permission areas are loaded", async () => {
+    const areas = gate();
+    stubAdminFetch([token({ projects: [app(reader)] })], undefined, {
+      areas: areas.closed,
+    });
+
+    await openTokenManager();
+    const edit = await screen.findByRole<HTMLButtonElement>("button", {
+      name: "Edit access",
+    });
+    // The token is listed, but what its levels stand for is not known yet. An editor
+    // opened now would show no access everywhere and save that over the real grants.
+    expect(edit.disabled).toBe(true);
+
+    areas.open();
+    await waitFor(() => expect(edit.disabled).toBe(false));
+    await userEvent.click(edit);
+    const editor = within(
+      await screen.findByRole("group", { name: "Access of Codex" }),
+    );
+    expect(
+      within(
+        editor.getByRole("radiogroup", { name: "Tasks" }),
+      ).getByRole<HTMLInputElement>("radio", { name: "Read" }).checked,
+    ).toBe(true);
+  });
+
+  it("keeps the editor of another token open when an earlier save completes", async () => {
+    const save = gate();
+    const fetchMock = stubAdminFetch(
+      [token(), token({ id: "token-2", name: "Pi" })],
+      undefined,
+      { save: save.closed },
+    );
+    const listLoads = () =>
+      fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          url === "/api/tokens" && !(init as RequestInit)?.method,
+      ).length;
+    const tasksOfPi = () =>
+      within(
+        within(screen.getByRole("group", { name: "Access of Pi" })).getByRole(
+          "radiogroup",
+          { name: "Tasks" },
+        ),
+      ).getByRole<HTMLInputElement>("radio", { name: "Read" });
+
+    await openTokenManager();
+    const [editCodex, editPi] = await screen.findAllByRole("button", {
+      name: "Edit access",
+    });
+    await userEvent.click(editCodex);
+    await userEvent.click(
+      within(
+        await screen.findByRole("group", { name: "Access of Codex" }),
+      ).getByRole("button", { name: "Save access" }),
+    );
+    // The save is still under way when the admin turns to the next token.
+    await userEvent.click(editPi);
+    await screen.findByRole("group", { name: "Access of Pi" });
+    await userEvent.click(tasksOfPi());
+
+    save.open();
+    await waitFor(() => expect(listLoads()).toBe(2));
+
+    expect(tasksOfPi().checked).toBe(true);
   });
 
   it("does not offer to edit a revoked token", async () => {

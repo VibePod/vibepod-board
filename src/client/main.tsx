@@ -675,18 +675,19 @@ const App = () => {
   };
 
   const saveTokenAccess = async () => {
-    if (!tokenAccessEdit) {
+    const saved = tokenAccessEdit;
+    if (!saved) {
       return;
     }
     setError("");
     try {
-      await api(`/api/tokens/${tokenAccessEdit.tokenId}`, {
+      await api(`/api/tokens/${saved.tokenId}`, {
         method: "PATCH",
-        body: JSON.stringify(
-          accessPayload(permissionAreas, tokenAccessEdit.access),
-        ),
+        body: JSON.stringify(accessPayload(permissionAreas, saved.access)),
       });
-      setTokenAccessEdit(null);
+      // Close the editor only if it still shows what was saved: the admin may have
+      // opened another token, or changed this one further, while the save was under way.
+      setTokenAccessEdit((current) => (current === saved ? null : current));
       await loadTokens();
     } catch (err) {
       setError(
@@ -4724,6 +4725,9 @@ const App = () => {
                       <Button
                         type="button"
                         variant="default"
+                        // A draft made before the areas are known would hold no
+                        // levels, and saving it would wipe the token's permissions.
+                        disabled={permissionAreas.length === 0}
                         onClick={() =>
                           setTokenAccessEdit({
                             tokenId: token.id,
