@@ -10,7 +10,7 @@ from sqlmodel import SQLModel
 
 from vibepod_board.db import migrate
 
-HEAD = "0019"
+HEAD = "0020"
 LEGACY_SCHEMA = (Path(__file__).parent / "legacy_schema.sql").read_text()
 # The first TS schema, before repository, readiness and dependency support.
 ORIGINAL_SCHEMA = LEGACY_SCHEMA.split("alter table board_cards add column", 1)[0]
@@ -524,3 +524,28 @@ def test_0019_downgrade_never_widens_what_a_token_or_sign_in_may_do(empty_db: En
     assert tokens["orphan"] == FULL_ACCESS
     # A sign-in that was approved per project cannot be redeemed for a broader token.
     assert requests == 0
+
+
+def test_0020_adds_the_review_identity_column_that_a_renumbered_migration_left_out(
+    empty_db: Engine,
+) -> None:
+    """A database that an unmerged branch build migrated counts revision 0014 as applied,
+    although that branch numbered another migration 0014: `task_reviews.actor_identity`
+    was never added, and moving a card by hand failed on the missing column."""
+    from alembic import command
+
+    from vibepod_board.db import alembic_config
+
+    config = alembic_config()
+    with empty_db.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "0019")
+        # What such a database looks like once it reached 0019.
+        connection.execute(text("alter table task_reviews drop column actor_identity"))
+    assert "actor_identity" not in column_names(empty_db, "task_reviews")
+
+    migrate(empty_db)
+
+    assert "actor_identity" in column_names(empty_db, "task_reviews")
+    assert schema_diff(empty_db) == []
+    assert revision(empty_db) == HEAD
