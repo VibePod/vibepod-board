@@ -101,9 +101,7 @@ def create_user(
     name cannot be taken."""
     name = normalize_username(username)
     if not USERNAME_PATTERN.fullmatch(name):
-        raise BadRequest(
-            "Username must be 3 to 64 characters: a-z, 0-9, dot, underscore or hyphen"
-        )
+        raise BadRequest("Username must be 3 to 64 characters: a-z, 0-9, dot, underscore or hyphen")
     if name == normalize_username(admin_username) or _find(session, UserRow.username == name):
         raise Conflict(f"Username is taken: {name}")
     password = passwords.generate_temporary_password()

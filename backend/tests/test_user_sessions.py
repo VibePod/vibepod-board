@@ -73,9 +73,7 @@ def test_every_failed_sign_in_gets_the_same_answer(client: TestClient, session: 
     wrong = client.post("/api/auth/login", json={"username": "rebecca", "password": "wrong"})
     unknown = client.post("/api/auth/login", json={"username": "nobody", "password": password})
     users.update_user(session, user_id, active=False)
-    deactivated = client.post(
-        "/api/auth/login", json={"username": "rebecca", "password": password}
-    )
+    deactivated = client.post("/api/auth/login", json={"username": "rebecca", "password": password})
 
     for response in (wrong, unknown, deactivated):
         assert response.status_code == 401

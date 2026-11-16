@@ -75,6 +75,7 @@ MCP_INFO_TOOLS = (
     "worker_heartbeat",
 )
 
+
 @router.get("/health")
 def health() -> dict[str, object]:
     return {"ok": True, "service": "vibepod-board", "mcp": "/mcp"}
