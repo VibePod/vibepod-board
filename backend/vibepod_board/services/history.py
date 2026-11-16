@@ -8,7 +8,12 @@ from datetime import datetime, timedelta
 
 from sqlmodel import Session, col, func, select
 
-from vibepod_board.access import AccessContext, AdminAccess, assert_can_access_project
+from vibepod_board.access import (
+    AccessContext,
+    AdminAccess,
+    UserAccess,
+    assert_can_access_project,
+)
 from vibepod_board.enums import TaskEventKind
 from vibepod_board.schemas import TaskEvent
 from vibepod_board.services.common import new_id
@@ -17,8 +22,9 @@ from vibepod_board.tables import ApiTokenRow, TaskEventRow
 
 
 def actor_for(session: Session, access: AccessContext) -> str:
-    """Names the caller in the history: the admin's username or the token's name."""
-    if isinstance(access, AdminAccess):
+    """Names the caller in the history: the admin's or the user's username, or the token's
+    name."""
+    if isinstance(access, AdminAccess | UserAccess):
         return access.username
     token = session.get(ApiTokenRow, access.token_id)
     return token.name if token else "API token"

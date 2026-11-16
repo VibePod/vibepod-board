@@ -14,7 +14,7 @@ from datetime import datetime
 
 from sqlmodel import Session
 
-from vibepod_board.access import AccessContext, AdminAccess, assert_can_access_project
+from vibepod_board.access import AccessContext, assert_can_access_project, caller_identity
 from vibepod_board.enums import BoardColumn, IdeaStatus, ReviewVerdict, TaskEventKind
 from vibepod_board.errors import BadRequest, Conflict
 from vibepod_board.schemas import BoardCard, now
@@ -174,11 +174,7 @@ def record_manual_review(
             idea_id=idea.id,
             project_id=idea.project_id,
             reviewer=actor,
-            actor_identity=(
-                f"admin:{access.username}"
-                if isinstance(access, AdminAccess)
-                else f"token:{access.token_id}"
-            ),
+            actor_identity=caller_identity(access),
             head_sha=card.head_sha,
             verdict=verdict,
             feedback=note or None,
