@@ -65,6 +65,7 @@ import {
   Trash2,
   Upload,
   UserRound,
+  Users as UsersIcon,
 } from "lucide-react";
 import {
   type FormEvent,
@@ -223,6 +224,7 @@ import {
   type TokenAccessDraft,
 } from "./tokenPermissions.js";
 import { formatTokenProjectLabel } from "./tokenProjects.js";
+import { UsersDialog } from "./Users.js";
 import { WorkerActivity, WorkersIndicator } from "./Workers.js";
 import {
   workerActivitySignature,
@@ -508,6 +510,7 @@ const App = () => {
   const [isMcpGuideOpen, setIsMcpGuideOpen] = useState(false);
   const [isTokenManagerOpen, setIsTokenManagerOpen] = useState(false);
   const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
+  const [isUsersOpen, setIsUsersOpen] = useState(false);
   const [tokens, setTokens] = useState<ApiTokenSummary[]>([]);
   const [githubStatus, setGitHubStatus] = useState<GitHubStatus | null>(null);
   // The dialog replaces the modal it was opened from; `restore` brings that back on cancel.
@@ -2396,6 +2399,17 @@ const App = () => {
               onClick={() => void openTokenManager()}
             >
               API Tokens
+            </Button>
+          )}
+          {isAdmin && (
+            <Button
+              type="button"
+              variant="light"
+              color="gray"
+              leftSection={<UsersIcon size={16} />}
+              onClick={() => setIsUsersOpen(true)}
+            >
+              Users
             </Button>
           )}
           {!isAdmin && (
@@ -4705,6 +4719,14 @@ const App = () => {
           </form>
         )}
       </Modal>
+
+      {isAdmin && (
+        <UsersDialog
+          opened={isUsersOpen}
+          onClose={() => setIsUsersOpen(false)}
+          projects={[...state.projects, ...archivedProjects]}
+        />
+      )}
 
       <Modal
         opened={isPasswordDialogOpen}

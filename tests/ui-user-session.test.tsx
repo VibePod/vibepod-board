@@ -149,6 +149,7 @@ describe("a user's session", () => {
 
     for (const name of [
       "API Tokens",
+      "Users",
       "Add Project",
       "Import Project",
       "Export",
@@ -292,5 +293,18 @@ describe("a user's session", () => {
     expect(
       screen.queryByRole("button", { name: "Change Password" }),
     ).toBeNull();
+  });
+
+  it("opens the user list for the admin", async () => {
+    const fetchMock = stubBoardFetch(admin);
+    const AppShell = await loadAppShell();
+    render(<AppShell />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Users" }));
+
+    expect(
+      await screen.findByRole("button", { name: "Add User" }),
+    ).toBeTruthy();
+    expect(requested(fetchMock, "/api/users")).toBe(true);
   });
 });
