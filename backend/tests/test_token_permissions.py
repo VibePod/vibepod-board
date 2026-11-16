@@ -4,9 +4,7 @@ import json
 from typing import Any
 
 import pytest
-from conftest import call, login
-from fastapi.dependencies.models import Dependant
-from fastapi.routing import APIRoute
+from conftest import api_routes, call, depends_on, login
 from fastapi.testclient import TestClient
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
@@ -154,28 +152,11 @@ def test_the_admin_is_not_restricted(client: TestClient, project: Project) -> No
     assert admin.post("/api/ideas", json={"title": "New"}).status_code == 201
 
 
-def _depends_on(dependant: Dependant, call: Any) -> bool:
-    return dependant.call is call or any(
-        _depends_on(child, call) for child in dependant.dependencies
-    )
-
-
-def _api_routes(routes: Any) -> list[APIRoute]:
-    """Every API route, including those of the routers the app includes."""
-    found: list[APIRoute] = []
-    for route in routes:
-        if isinstance(route, APIRoute):
-            found.append(route)
-        elif hasattr(route, "original_router"):
-            found.extend(_api_routes(route.original_router.routes))
-    return found
-
-
 def test_every_route_a_token_can_reach_names_its_permission(client: TestClient) -> None:
     reachable = {
         f"{method} {route.path}"
-        for route in _api_routes(client.app.routes)  # type: ignore[attr-defined]
-        if _depends_on(route.dependant, require_permitted_access)
+        for route in api_routes(client.app.routes)  # type: ignore[attr-defined]
+        if depends_on(route.dependant, require_permitted_access)
         for method in route.methods
     }
 
@@ -188,10 +169,10 @@ def test_no_route_lets_a_token_in_without_a_permission_check(client: TestClient)
     token and missing from the policy comparison above."""
     unchecked = sorted(
         f"{method} {route.path}"
-        for route in _api_routes(client.app.routes)  # type: ignore[attr-defined]
-        if _depends_on(route.dependant, require_access)
-        and not _depends_on(route.dependant, require_permitted_access)
-        and not _depends_on(route.dependant, require_admin_access)
+        for route in api_routes(client.app.routes)  # type: ignore[attr-defined]
+        if depends_on(route.dependant, require_access)
+        and not depends_on(route.dependant, require_permitted_access)
+        and not depends_on(route.dependant, require_admin_access)
         for method in route.methods
     )
 

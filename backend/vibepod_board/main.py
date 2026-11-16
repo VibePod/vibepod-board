@@ -29,7 +29,7 @@ from vibepod_board.api import (
     tokens,
     workers,
 )
-from vibepod_board.auth import AdminSessionManager
+from vibepod_board.auth import SessionManager
 from vibepod_board.config import Settings, get_settings
 from vibepod_board.db import create_db_engine, get_engine, migrate, set_engine
 from vibepod_board.errors import BoardError, NotFound
@@ -157,7 +157,7 @@ def _mount_client(app: FastAPI, public_dir: Path) -> None:
 
 def create_app(
     settings: Settings | None = None,
-    sessions: AdminSessionManager | None = None,
+    sessions: SessionManager | None = None,
     run_migrations: bool | None = None,
     github_transport: httpx.BaseTransport | None = None,
 ) -> FastAPI:
@@ -199,7 +199,7 @@ def create_app(
     app.state.mcp_server = mcp_server
     # Tests swap in an httpx.MockTransport; None talks to api.github.com.
     app.state.github_transport = github_transport
-    app.state.sessions = sessions or AdminSessionManager(
+    app.state.sessions = sessions or SessionManager(
         settings.admin_username, settings.admin_password
     )
     app.add_middleware(BodyLimitMiddleware)

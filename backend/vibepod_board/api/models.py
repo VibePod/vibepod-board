@@ -67,6 +67,12 @@ class LoginRequest(ApiModel):
     password: StrictStr
 
 
+class PasswordChange(ApiModel):
+    current_password: StrictStr
+    # 12 to 128 characters, and not the current password.
+    new_password: StrictStr
+
+
 RequiredApprovals = Annotated[
     StrictInt, Field(ge=MIN_REQUIRED_APPROVALS, le=MAX_REQUIRED_APPROVALS)
 ]
