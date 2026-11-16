@@ -206,4 +206,91 @@ describe("a user's session", () => {
     );
     expect(screen.queryByRole("button", { name: "API Tokens" })).toBeNull();
   });
+
+  it("asks a user with a temporary password for a new one before loading the board", async () => {
+    const fetchMock = stubBoardFetch({ ...rebecca, mustChangePassword: true });
+    const AppShell = await loadAppShell();
+    render(<AppShell />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Set a new password" }),
+    ).toBeTruthy();
+    expect(requested(fetchMock, "/api/projects")).toBe(false);
+    expect(screen.queryByRole("link", { name: "Board" })).toBeNull();
+
+    await userEvent.type(
+      screen.getByLabelText("Current password"),
+      "temporary-pass-1",
+    );
+    await userEvent.type(
+      screen.getByLabelText("New password"),
+      "a long password",
+    );
+    await userEvent.type(
+      screen.getByLabelText("Repeat new password"),
+      "a long password",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Set Password" }));
+
+    await screen.findByRole("link", { name: "Board" });
+    expect(requested(fetchMock, "/api/auth/password")).toBe(true);
+    expect(
+      screen.queryByRole("heading", { name: "Set a new password" }),
+    ).toBeNull();
+  });
+
+  it("lets a user with a temporary password sign out instead", async () => {
+    stubBoardFetch({ ...rebecca, mustChangePassword: true });
+    const AppShell = await loadAppShell();
+    render(<AppShell />);
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Sign Out" }),
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "Sign in" }),
+    ).toBeTruthy();
+  });
+
+  it("offers a user to change the password later", async () => {
+    const fetchMock = stubBoardFetch(rebecca);
+    const AppShell = await loadAppShell();
+    render(<AppShell />);
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Change Password" }),
+    );
+    await userEvent.type(
+      await screen.findByLabelText("Current password"),
+      "her password 1",
+    );
+    await userEvent.type(
+      screen.getByLabelText("New password"),
+      "a long password",
+    );
+    await userEvent.type(
+      screen.getByLabelText("Repeat new password"),
+      "a long password",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Set Password" }));
+
+    expect(await screen.findByText("Password changed.")).toBeTruthy();
+    expect(requested(fetchMock, "/api/auth/password")).toBe(true);
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Current password")).toBeNull(),
+    );
+  });
+
+  it("does not offer the admin a password change", async () => {
+    stubBoardFetch(admin);
+    const AppShell = await loadAppShell();
+    render(<AppShell />);
+
+    await screen.findByRole("button", { name: "API Tokens" });
+
+    expect(
+      screen.queryByRole("button", { name: "Change Password" }),
+    ).toBeNull();
+  });
 });

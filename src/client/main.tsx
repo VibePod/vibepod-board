@@ -166,6 +166,7 @@ import {
   parseBoardSearch,
   parseNavigationPath,
 } from "./navigation.js";
+import { PasswordChangeForm } from "./PasswordChange.js";
 import {
   PlanReadyDialog,
   type PlanReadyTarget,
@@ -506,6 +507,7 @@ const App = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isMcpGuideOpen, setIsMcpGuideOpen] = useState(false);
   const [isTokenManagerOpen, setIsTokenManagerOpen] = useState(false);
+  const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
   const [tokens, setTokens] = useState<ApiTokenSummary[]>([]);
   const [githubStatus, setGitHubStatus] = useState<GitHubStatus | null>(null);
   // The dialog replaces the modal it was opened from; `restore` brings that back on cancel.
@@ -611,6 +613,33 @@ const App = () => {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to sign in");
     }
+  };
+
+  const markPasswordSet = () => {
+    setAuth((current) =>
+      current.status === "authenticated"
+        ? { ...current, mustChangePassword: false }
+        : current,
+    );
+  };
+
+  // The temporary password is replaced: the board can be loaded now.
+  const finishFirstPassword = async () => {
+    markPasswordSet();
+    setIsLoading(true);
+    try {
+      await loadState();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load board");
+      setIsLoading(false);
+    }
+  };
+
+  const finishPasswordChange = () => {
+    markPasswordSet();
+    setIsPasswordDialogOpen(false);
+    setError("");
+    setNotice("Password changed.");
   };
 
   const logoutAdmin = async () => {
@@ -1282,6 +1311,39 @@ const App = () => {
               </Button>
             </Stack>
           </form>
+        </Paper>
+      </main>
+    );
+  }
+
+  if (auth.mustChangePassword) {
+    return (
+      <main className="login-shell">
+        <Paper className="login-panel" withBorder radius="md" p="xl">
+          <Stack gap="md">
+            <Group gap="sm">
+              <ThemeIcon variant="light" color="teal" size={42} radius="md">
+                <KeyRound size={22} />
+              </ThemeIcon>
+              <Box>
+                <Title order={2}>Set a new password</Title>
+                <Text c="dimmed">Signed in as {auth.username}</Text>
+              </Box>
+            </Group>
+            <Text size="sm">
+              Your password is temporary. Choose your own to continue.
+            </Text>
+            <PasswordChangeForm onChanged={() => void finishFirstPassword()} />
+            <Button
+              type="button"
+              variant="subtle"
+              color="gray"
+              leftSection={<LogOut size={16} />}
+              onClick={() => void logoutAdmin()}
+            >
+              Sign Out
+            </Button>
+          </Stack>
         </Paper>
       </main>
     );
@@ -2334,6 +2396,17 @@ const App = () => {
               onClick={() => void openTokenManager()}
             >
               API Tokens
+            </Button>
+          )}
+          {!isAdmin && (
+            <Button
+              type="button"
+              variant="light"
+              color="gray"
+              leftSection={<KeyRound size={16} />}
+              onClick={() => setIsPasswordDialogOpen(true)}
+            >
+              Change Password
             </Button>
           )}
           <Button
@@ -4631,6 +4704,16 @@ const App = () => {
             </Stack>
           </form>
         )}
+      </Modal>
+
+      <Modal
+        opened={isPasswordDialogOpen}
+        onClose={() => setIsPasswordDialogOpen(false)}
+        title="Change Password"
+        centered
+        size="sm"
+      >
+        <PasswordChangeForm onChanged={finishPasswordChange} />
       </Modal>
 
       <Modal
