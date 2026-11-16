@@ -563,3 +563,40 @@ def test_extra_redirect_addresses_come_from_the_environment_and_must_be_complete
         monkeypatch.setenv("OAUTH_REDIRECT_URIS", refused)
         with pytest.raises(RuntimeError, match="OAUTH_REDIRECT_URIS"):
             config.oauth_redirect_uris_from_env()
+
+
+@pytest.mark.parametrize(
+    ("configured", "registered"),
+    [
+        ("https://client.example", "https://client.example"),
+        ("https://client.example", "https://client.example/"),
+        ("https://client.example/", "https://client.example"),
+    ],
+)
+def test_a_configured_address_without_a_path_signs_in_with_or_without_the_slash(
+    db: Engine, settings: Settings, projects: dict[str, str], configured: str, registered: str
+) -> None:
+    """`https://client.example` and `https://client.example/` are one address, however
+    the operator lists it and however the client writes it."""
+    board = replace(settings, oauth_redirect_uris=(configured,))
+    with TestClient(create_app(board, run_migrations=False)) as hosted:
+        accepted = register_hosted(hosted, registered)
+        assert accepted.status_code == 201, accepted.text
+        client_id = accepted.json()["client_id"]
+        verifier, challenge = pkce()
+        request_id = authorize(hosted, client_id, challenge, redirect=registered)
+
+        login(hosted)
+        approved = redirect_query(
+            hosted.post(
+                f"/api/oauth/requests/{request_id}/approve",
+                json={"projectIds": [projects["app"]]},
+            ),
+            # The browser is sent to the root path, which is where a request for an
+            # address without a path goes anyway.
+            "https://client.example/",
+        )
+        issued = exchange(hosted, client_id, approved["code"], verifier, registered)
+
+    assert issued.status_code == 200, issued.text
+    assert issued.json()["access_token"].startswith("vbp_")

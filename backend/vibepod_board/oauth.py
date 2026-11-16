@@ -12,7 +12,7 @@ under API Tokens.
 """
 
 from collections.abc import Callable, Sequence
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import anyio
 from fastmcp.server.auth import AccessToken, OAuthProvider
@@ -42,6 +42,14 @@ def is_loopback_redirect(uri: str) -> bool:
     return parsed.scheme == "http" and parsed.hostname in LOOPBACK_HOSTS
 
 
+def _address(uri: str) -> str:
+    """`uri` spelled the one way that is compared: `https://client.example` and
+    `https://client.example/` are the same address, but a registration keeps the empty
+    path while a configured address gains the slash."""
+    parsed = urlparse(uri)
+    return urlunparse(parsed._replace(path=parsed.path or "/"))
+
+
 async def _db[T](operation: Callable[[Session], T]) -> T:
     """Runs a blocking service call in a worker thread with its own session."""
 
@@ -60,8 +68,8 @@ class BoardOAuthProvider(OAuthProvider):
             base_url=public_url,
             client_registration_options=ClientRegistrationOptions(enabled=True),
         )
-        # In the form a registration arrives in, so the two compare as whole strings.
-        self._redirect_uris = frozenset(str(AnyUrl(uri)) for uri in redirect_uris)
+        # Parsed like a registration is, so the two compare as whole strings.
+        self._redirect_uris = frozenset(_address(str(AnyUrl(uri))) for uri in redirect_uris)
 
     @property
     def consent_url(self) -> str:
@@ -76,7 +84,7 @@ class BoardOAuthProvider(OAuthProvider):
         # browser back to the machine it runs on, or to an address the operator listed in
         # OAUTH_REDIRECT_URIS, never to a site of its own choosing.
         for uri in client_info.redirect_uris or []:
-            if not (is_loopback_redirect(str(uri)) or str(uri) in self._redirect_uris):
+            if not (is_loopback_redirect(str(uri)) or _address(str(uri)) in self._redirect_uris):
                 raise RegistrationError(
                     error="invalid_redirect_uri",
                     error_description="Only http redirect URIs on localhost, 127.0.0.1 or "
