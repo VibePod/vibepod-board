@@ -1,11 +1,14 @@
 """Port of tests/token-store.test.ts."""
 
+import threading
+
 import pytest
-from sqlalchemy import text
+from sqlalchemy import Engine, text
 from sqlmodel import Session
 
 from vibepod_board.errors import BadRequest
 from vibepod_board.permissions import FULL_ACCESS
+from vibepod_board.services import tokens
 from vibepod_board.services.projects import create_project
 from vibepod_board.services.tokens import (
     AuthenticatedToken,
@@ -181,3 +184,55 @@ def test_refuses_permissions_for_a_project_the_token_is_not_mapped_to(session: S
             project_ids=[app.id],
             project_permissions={api.id: {"tasks": "read"}},
         )
+
+
+def test_two_updates_of_one_token_do_not_undo_each_other(
+    db: Engine, session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An update reads the token's grants and then replaces them. Without a lock on the
+    token, a second update that commits in between is undone: the first writes back the
+    grants it read."""
+    app = create_project(session, key="APP", title="App")
+    api = create_project(session, key="API", title="API")
+    created = create_token(session, name="Agent", project_ids=[app.id, api.id])
+    reader = {**NO_ACCESS, "tasks": "read"}
+    has_read, may_write = threading.Event(), threading.Event()
+    replace_projects = tokens._replace_projects
+
+    def pause_the_slow_update(*args: object) -> None:
+        if threading.current_thread().name == "slow":
+            has_read.set()
+            may_write.wait(10)
+        replace_projects(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(tokens, "_replace_projects", pause_the_slow_update)
+
+    def update(**changes: object) -> None:
+        with Session(db, expire_on_commit=False) as own:
+            update_token(own, created.item.id, **changes)  # type: ignore[arg-type]
+
+    slow = threading.Thread(
+        target=update,
+        name="slow",
+        kwargs={"project_permissions": {api.id: {"board": "read"}}},
+        daemon=True,
+    )
+    narrowing = threading.Thread(
+        target=update, kwargs={"project_permissions": {app.id: {"tasks": "read"}}}, daemon=True
+    )
+    slow.start()
+    assert has_read.wait(10)
+    # The slow update has read the grants. The other one narrows APP meanwhile.
+    narrowing.start()
+    narrowing.join(timeout=0.5)
+    may_write.set()
+    slow.join(timeout=10)
+    narrowing.join(timeout=10)
+    assert not slow.is_alive() and not narrowing.is_alive()
+
+    authenticated = authenticate_token(session, created.token)
+    assert authenticated is not None
+    assert authenticated.permissions == {
+        app.id: reader,
+        api.id: {**NO_ACCESS, "board": "read"},
+    }

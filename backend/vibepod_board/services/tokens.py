@@ -56,8 +56,13 @@ def _summary(session: Session, row: ApiTokenRow) -> ApiTokenSummary:
     )
 
 
-def _require_token(session: Session, token_id: str) -> ApiTokenRow:
-    row = session.get(ApiTokenRow, token_id)
+def _require_token(session: Session, token_id: str, lock: bool = False) -> ApiTokenRow:
+    """`lock` holds the token until the transaction ends, so that changes to its projects
+    and permissions happen one after the other."""
+    query = select(ApiTokenRow).where(ApiTokenRow.id == token_id)
+    if lock:
+        query = query.with_for_update().execution_options(populate_existing=True)
+    row = session.exec(query).first()
     if row is None:
         raise NotFound(f"API token not found: {token_id}")
     return row
@@ -127,7 +132,9 @@ def update_token(
     stays keeps its permissions unless new ones are given, and a project that is added
     without any gets full access. `permissions` sets every project, `project_permissions`
     single ones."""
-    row = _require_token(session, token_id)
+    # The grants are read below and replaced as a whole. Without the lock, an update that
+    # commits in between would be undone by the stale grants written back here.
+    row = _require_token(session, token_id, lock=True)
     next_name = name.strip() if name is not None else row.name
     if not next_name:
         raise BadRequest("Token name is required")
