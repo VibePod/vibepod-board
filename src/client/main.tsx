@@ -577,7 +577,9 @@ const App = () => {
     if (!loadOrder.apply(ticket)) return ideas.items;
     setGitHubStatus(github);
     if (retired) {
-      setArchivedProjects(retired.items);
+      // The users dialog lists these on every render: an answer without a list
+      // must not become the state.
+      setArchivedProjects(retired.items ?? []);
       setArchivedProjectsLoaded(true);
     }
     setArchivedProjectsFailed(!retired);
