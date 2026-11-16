@@ -271,6 +271,18 @@ describe("admin auth UI", () => {
     ).toBeTruthy();
   });
 
+  it("shows the admin which user a token belongs to", async () => {
+    stubAdminFetch([
+      token({ owner: "rebecca" }),
+      token({ id: "token-2", name: "Admin agent" }),
+    ]);
+
+    await openTokenManager();
+
+    expect(await screen.findByText("User rebecca")).toBeTruthy();
+    expect(screen.getAllByText(/^User /)).toHaveLength(1);
+  });
+
   it("links to the REST and MCP references from the integration guide", async () => {
     stubAdminFetch();
 
